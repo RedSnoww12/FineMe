@@ -1,0 +1,13 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: fineme
+      POSTGRES_PASSWORD: fineme
+      POSTGRES_DB: fineme
+    ports:
+      - "5433:5432"
+    volumes:
+      - fineme-db:/var/lib/postgresql/data
+volumes:
+  fineme-db:

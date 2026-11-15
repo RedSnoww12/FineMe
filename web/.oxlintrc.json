@@ -1,0 +1,401 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "react",
+    "typescript",
+    "oxc"
+  ],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "warn",
+    "typescript/no-explicit-any": "error"
+  },
+  "ignorePatterns": [
+    "dist",
+    "playwright-report",
+    "test-results"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "src/features/auth/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/overview/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/overview/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/accounts/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/real-estate/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/accounts/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/goals/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/projection/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/fees/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/connections/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/connections/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/settings/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/settings/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/shared/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/**",
+                  "@/app/**"
+                ],
+                "message": "shared/ ne dépend ni des features ni de app/."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

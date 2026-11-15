@@ -1,0 +1,139 @@
+import { waitFor } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+import { buildOverview, user } from '@/test/fixtures'
+import { mockOverviewScreen, mockShell } from '@/test/handlers'
+import { pageText, renderApp, screen } from '@/test/render'
+import { API, http, HttpResponse, mockApiError, mockJson, mockUnreachable, server, spyOn } from '@/test/server'
+
+const PASSWORD = 'tournesol-violet-42'
+
+describe('première configuration', () => {
+  it('propose la création du compte quand aucun utilisateur n’existe', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: true })
+    renderApp('/connexion', { authenticated: false })
+    expect(await screen.findByRole('heading', { name: 'Première configuration' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Connexion' })).not.toBeInTheDocument()
+  })
+
+  it('valide le formulaire avant tout envoi', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: true })
+    const setupCalls = spyOn('post', '/api/auth/setup')
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await screen.findByRole('heading', { name: 'Première configuration' })
+
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+    expect(screen.getByText('Indiquez votre prénom ou votre nom.')).toBeInTheDocument()
+    expect(screen.getByText('Saisissez une adresse e-mail valide.')).toBeInTheDocument()
+    expect(screen.getByText('Le mot de passe doit contenir au moins 10 caractères.')).toBeInTheDocument()
+
+    await actor.type(screen.getByLabelText('Mot de passe'), PASSWORD)
+    await actor.type(screen.getByLabelText('Confirmez le mot de passe'), 'autre-chose-123')
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+    expect(screen.getByText('Les deux mots de passe ne correspondent pas.')).toBeInTheDocument()
+    expect(setupCalls.count).toBe(0)
+  })
+
+  it('crée le compte, mémorise le jeton et ouvre la vue d’ensemble', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: true })
+    let received: unknown
+    server.use(
+      http.post(`${API}/api/auth/setup`, async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ token: 'jeton-setup', user })
+      }),
+    )
+    mockShell()
+    mockOverviewScreen(buildOverview())
+
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await actor.type(await screen.findByLabelText('Votre nom'), user.name)
+    await actor.type(screen.getByLabelText('Adresse e-mail'), user.email)
+    await actor.type(screen.getByLabelText('Mot de passe'), PASSWORD)
+    await actor.type(screen.getByLabelText('Confirmez le mot de passe'), PASSWORD)
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+
+    expect(await screen.findByRole('heading', { name: 'Vue d’ensemble' })).toBeInTheDocument()
+    expect(received).toEqual({ name: user.name, email: user.email, password: PASSWORD })
+    expect(localStorage.getItem('fineme.token')).toBe('jeton-setup')
+    await waitFor(() => expect(pageText()).toContain('120 000 €'))
+  })
+
+  it('affiche le message de l’API quand la création est refusée', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: true })
+    mockApiError('post', '/api/auth/setup', 409, 'Un utilisateur existe déjà.')
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await actor.type(await screen.findByLabelText('Votre nom'), user.name)
+    await actor.type(screen.getByLabelText('Adresse e-mail'), user.email)
+    await actor.type(screen.getByLabelText('Mot de passe'), PASSWORD)
+    await actor.type(screen.getByLabelText('Confirmez le mot de passe'), PASSWORD)
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+    expect(await screen.findByText('Un utilisateur existe déjà.')).toBeInTheDocument()
+  })
+})
+
+describe('connexion', () => {
+  it('affiche le formulaire de connexion quand un utilisateur existe', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false })
+    renderApp('/connexion', { authenticated: false })
+    expect(await screen.findByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Confirmez le mot de passe')).not.toBeInTheDocument()
+  })
+
+  it('redirige vers la connexion quand on ouvre un écran sans session', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false })
+    renderApp('/objectifs', { authenticated: false })
+    expect(await screen.findByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
+  })
+
+  it('montre l’erreur de l’API pour des identifiants refusés', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false })
+    mockApiError('post', '/api/auth/login', 401, 'E-mail ou mot de passe incorrect.')
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await actor.type(await screen.findByLabelText('Adresse e-mail'), user.email)
+    await actor.type(screen.getByLabelText('Mot de passe'), 'mauvais-mot-de-passe')
+    await actor.click(screen.getByRole('button', { name: 'Se connecter' }))
+    expect(await screen.findByText('E-mail ou mot de passe incorrect.')).toBeInTheDocument()
+    expect(localStorage.getItem('fineme.token')).toBeNull()
+  })
+
+  it('connecte l’utilisateur et envoie le jeton sur les requêtes suivantes', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false })
+    mockJson('post', '/api/auth/login', { token: 'jeton-login', user })
+    mockShell()
+    mockJson('get', '/api/history', { points: [] })
+    let authorization: string | null = null
+    server.use(
+      http.get(`${API}/api/overview`, ({ request }) => {
+        authorization = request.headers.get('authorization')
+        return HttpResponse.json(buildOverview())
+      }),
+    )
+
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await actor.type(await screen.findByLabelText('Adresse e-mail'), user.email)
+    await actor.type(screen.getByLabelText('Mot de passe'), PASSWORD)
+    await actor.click(screen.getByRole('button', { name: 'Se connecter' }))
+
+    expect(await screen.findByRole('heading', { name: 'Vue d’ensemble' })).toBeInTheDocument()
+    await waitFor(() => expect(authorization).toBe('Bearer jeton-login'))
+  })
+})
+
+describe('API injoignable', () => {
+  it('l’annonce clairement et permet de réessayer', async () => {
+    mockUnreachable('get', '/api/auth/status')
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('API injoignable')
+
+    mockJson('get', '/api/auth/status', { setup_required: false })
+    await actor.click(screen.getByRole('button', { name: 'Réessayer' }))
+    expect(await screen.findByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
+  })
+
+  it('traite une erreur 502 sans corps JSON comme une API injoignable', async () => {
+    server.use(http.get(`${API}/api/auth/status`, () => new HttpResponse('Bad Gateway', { status: 502 })))
+    renderApp('/connexion', { authenticated: false })
+    expect(await screen.findByRole('alert')).toHaveTextContent('API injoignable')
+  })
+})

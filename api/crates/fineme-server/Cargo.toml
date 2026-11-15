@@ -1,0 +1,27 @@
+[package]
+name = "fineme-server"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Binaire : configuration, composition root, migrations.
+[dependencies]
+fineme-application = { workspace = true }
+fineme-infra = { workspace = true }
+fineme-http = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+dotenvy = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+serde_json = { workspace = true }
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+tower = { version = "0.5.3", features = ["util"] }

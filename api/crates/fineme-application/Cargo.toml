@@ -1,0 +1,20 @@
+[package]
+name = "fineme-application"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Cas d'usage et ports : dépend du domaine uniquement (pas de sqlx, axum, reqwest).
+[dependencies]
+fineme-domain = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
