@@ -93,13 +93,21 @@ async fn health() -> axum::Json<Value> {
 }
 
 async fn auth_status(State(app): State<AppState>) -> JsonResponse {
-    ok(json!({ "setup_required": app.auth.setup_required().await? }))
+    ok(json!({
+        "setup_required": app.auth.setup_required().await?,
+        "setup_token_required": app.auth.setup_token_required(),
+    }))
 }
 
 async fn auth_setup(State(app): State<AppState>, Json(body): Json<SetupBody>) -> Created {
     let session = app
         .auth
-        .setup(&body.email, &body.password, &body.name)
+        .setup(
+            &body.email,
+            &body.password,
+            &body.name,
+            body.setup_token.as_deref(),
+        )
         .await?;
     created(json!({ "token": session.token, "user": output::user(&session.user) }))
 }

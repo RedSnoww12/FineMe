@@ -53,6 +53,7 @@ impl From<AppError> for ApiError {
             AppError::NotFound(message) => Self::new(StatusCode::NOT_FOUND, *message),
             AppError::Conflict(message) => Self::new(StatusCode::CONFLICT, *message),
             AppError::Unauthorized(message) => Self::new(StatusCode::UNAUTHORIZED, *message),
+            AppError::Forbidden(message) => Self::new(StatusCode::FORBIDDEN, *message),
             AppError::NotConfigured(message) => Self::new(StatusCode::NOT_IMPLEMENTED, *message),
             AppError::Repository(RepoError::Conflict) => {
                 Self::new(StatusCode::CONFLICT, "Cet élément existe déjà")
@@ -131,6 +132,12 @@ mod tests {
         assert_eq!(
             map(AppError::Unauthorized("Session invalide ou expirée")).0,
             401
+        );
+        assert_eq!(
+            map(AppError::Forbidden(
+                "Code de configuration invalide ou manquant"
+            )),
+            (403, "Code de configuration invalide ou manquant".into())
         );
         assert_eq!(
             map(AppError::NotConfigured(

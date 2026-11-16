@@ -13,7 +13,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 
 ## Variables d'environnement (api)
 
-`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080).
+`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte).
 Les migrations sqlx s'exécutent au démarrage.
 
 ## Auth
@@ -21,8 +21,8 @@ Les migrations sqlx s'exécutent au démarrage.
 | Méthode | Route | Corps | Réponse |
 |---|---|---|---|
 | GET | `/api/health` | – | `{ "status": "ok" }` |
-| GET | `/api/auth/status` | – | `{ "setup_required": bool }` (true tant qu'aucun utilisateur n'existe) |
-| POST | `/api/auth/setup` | `{ email, password, name }` | `{ token, user }` — refusé (409) si un utilisateur existe déjà. Crée aussi le membre principal `name`. |
+| GET | `/api/auth/status` | – | `{ "setup_required": bool, "setup_token_required": bool }` (`setup_required` true tant qu'aucun utilisateur n'existe ; `setup_token_required` true si `SETUP_TOKEN` est défini côté serveur) |
+| POST | `/api/auth/setup` | `{ email, password, name, setup_token? }` | `{ token, user }` — refusé (409) si un utilisateur existe déjà ; refusé (403) si `SETUP_TOKEN` est défini et que `setup_token` est absent ou différent (comparaison en temps constant). Crée aussi le membre principal `name`. |
 | POST | `/api/auth/login` | `{ email, password }` | `{ token, user }` |
 | GET | `/api/auth/me` | – | `user` = `{ id, email, name }` |
 

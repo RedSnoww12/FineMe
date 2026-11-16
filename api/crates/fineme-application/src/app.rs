@@ -40,6 +40,13 @@ pub struct Ports {
     pub bank_providers: Vec<Arc<dyn BankProvider>>,
 }
 
+/// Réglages applicatifs issus de la configuration (lue par la composition root, jamais ici).
+#[derive(Debug, Clone, Default)]
+pub struct Settings {
+    /// Code exigé pour la première configuration ; `None` ou vide = non exigé.
+    pub setup_token: Option<String>,
+}
+
 /// Les cas d'usage, regroupés par domaine fonctionnel.
 pub struct App {
     pub auth: AuthService,
@@ -56,7 +63,7 @@ pub struct App {
 }
 
 impl App {
-    pub async fn build(ports: Ports) -> AppResult<Self> {
+    pub async fn build(ports: Ports, settings: Settings) -> AppResult<Self> {
         let reader = PortfolioReader {
             repo: ports.portfolio.clone(),
             fx: ports.fx_rates.clone(),
@@ -71,6 +78,10 @@ impl App {
                 tokens: ports.tokens,
                 clock: ports.clock.clone(),
                 dummy_hash,
+                setup_token: settings
+                    .setup_token
+                    .map(|token| token.trim().to_string())
+                    .filter(|token| !token.is_empty()),
             },
             members: MemberService {
                 repo: ports.portfolio.clone(),

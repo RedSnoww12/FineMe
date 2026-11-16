@@ -4,6 +4,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use fineme_application::Settings;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use testcontainers_modules::postgres::Postgres;
@@ -25,6 +26,10 @@ struct Api {
 impl Api {
     /// Base vide et migrée, sans utilisateur.
     async fn fresh() -> Self {
+        Self::fresh_with(Settings::default()).await
+    }
+
+    async fn fresh_with(settings: Settings) -> Self {
         let container = Postgres::default()
             .with_tag("17")
             .start()
@@ -38,10 +43,14 @@ impl Api {
         let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
         let pool = fineme_infra::postgres::connect(&url).await.unwrap();
         fineme_infra::postgres::migrate(&pool).await.unwrap();
-        let router =
-            fineme_server::build_router(pool, "secret-de-test-0123456789abcdef0123", ORIGIN)
-                .await
-                .unwrap();
+        let router = fineme_server::build_router(
+            pool,
+            "secret-de-test-0123456789abcdef0123",
+            ORIGIN,
+            settings,
+        )
+        .await
+        .unwrap();
         Self {
             router,
             token: String::new(),
@@ -168,7 +177,7 @@ async fn auth_flow_from_first_setup_to_protected_routes() {
     assert_eq!(api.get("/api/health").await, json!({ "status": "ok" }));
     assert_eq!(
         api.get("/api/auth/status").await,
-        json!({ "setup_required": true })
+        json!({ "setup_required": true, "setup_token_required": false })
     );
 
     // Sans jeton, toute route protégée répond 401, y compris l'import.
@@ -202,7 +211,7 @@ async fn auth_flow_from_first_setup_to_protected_routes() {
     );
     assert_eq!(
         api.get("/api/auth/status").await,
-        json!({ "setup_required": false })
+        json!({ "setup_required": false, "setup_token_required": false })
     );
 
     // Même réponse pour un mauvais mot de passe et un e-mail inconnu.
@@ -243,6 +252,58 @@ async fn auth_flow_from_first_setup_to_protected_routes() {
     assert_eq!(
         error_of(&api.call("GET", "/api/auth/me", None).await),
         (401, "Session invalide ou expirée")
+    );
+}
+
+#[tokio::test]
+async fn first_setup_requires_the_configured_setup_token() {
+    const CODE: &str = "code-de-configuration-fictif";
+    let api = Api::fresh_with(Settings {
+        setup_token: Some(CODE.into()),
+    })
+    .await;
+    assert_eq!(
+        api.get("/api/auth/status").await,
+        json!({ "setup_required": true, "setup_token_required": true })
+    );
+
+    let body = |token: Option<&str>| {
+        let mut body =
+            json!({ "email": "alice@exemple.test", "password": PASSWORD, "name": "Alice" });
+        if let Some(token) = token {
+            body["setup_token"] = json!(token);
+        }
+        body
+    };
+    for token in [None, Some("mauvais-code"), Some("")] {
+        let response = api.call("POST", "/api/auth/setup", Some(body(token))).await;
+        assert_eq!(
+            error_of(&response),
+            (403, "Code de configuration invalide ou manquant")
+        );
+    }
+    // Rien n'a été créé par les tentatives refusées.
+    assert_eq!(api.get("/api/auth/status").await["setup_required"], true);
+
+    let (status, session) = api
+        .call("POST", "/api/auth/setup", Some(body(Some(CODE))))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(session["token"].is_string());
+    assert_eq!(
+        api.get("/api/auth/status").await,
+        json!({ "setup_required": false, "setup_token_required": true })
+    );
+    // Une fois l'utilisateur créé : 409 avec le bon code, 403 sans.
+    let again = api
+        .call("POST", "/api/auth/setup", Some(body(Some(CODE))))
+        .await;
+    assert_eq!(error_of(&again), (409, "Un utilisateur existe déjà"));
+    assert_eq!(
+        api.call("POST", "/api/auth/setup", Some(body(None)))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
     );
 }
 

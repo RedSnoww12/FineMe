@@ -17,6 +17,9 @@ pub enum AppError {
     Conflict(&'static str),
     #[error("{0}")]
     Unauthorized(&'static str),
+    /// Action refusée faute de preuve suffisante (ex. code de première configuration).
+    #[error("{0}")]
+    Forbidden(&'static str),
     /// Fonction disponible seulement avec un fournisseur externe non configuré.
     #[error("{0}")]
     NotConfigured(&'static str),

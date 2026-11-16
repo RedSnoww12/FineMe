@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use axum::Router;
-use fineme_application::{App, Ports};
+use fineme_application::{App, Ports, Settings};
 use fineme_infra::clock::SystemClock;
 use fineme_infra::market::{self, CoinGecko, Frankfurter, YahooFinance};
 use fineme_infra::postgres::{self, PgStore};
@@ -14,13 +14,15 @@ use sqlx::PgPool;
 
 pub const DEFAULT_PORT: u16 = 8080;
 
-/// Configuration lue dans l'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT`).
+/// Configuration lue dans l'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT`, `SETUP_TOKEN`).
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
     pub cors_origins: String,
     pub port: u16,
+    /// Code exigé pour la première configuration (`SETUP_TOKEN`) ; `None` si absent ou vide.
+    pub setup_token: Option<String>,
 }
 
 impl Config {
@@ -38,13 +40,20 @@ impl Config {
             port: lookup("PORT")
                 .and_then(|port| port.parse().ok())
                 .unwrap_or(DEFAULT_PORT),
+            setup_token: lookup("SETUP_TOKEN")
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty()),
         })
     }
 }
 
 /// Câble les adaptateurs réels (Postgres, fournisseurs de cours, argon2, JWT) sur les cas d'usage.
 /// Aucun agrégateur bancaire n'est branché : il suffira d'ajouter son adaptateur à `bank_providers`.
-pub async fn build_app(pool: PgPool, jwt_secret: &str) -> anyhow::Result<Arc<App>> {
+pub async fn build_app(
+    pool: PgPool,
+    jwt_secret: &str,
+    settings: Settings,
+) -> anyhow::Result<Arc<App>> {
     let store = Arc::new(PgStore::new(pool));
     let http = market::http_client().context("client HTTP")?;
     let ports = Ports {
@@ -67,7 +76,7 @@ pub async fn build_app(pool: PgPool, jwt_secret: &str) -> anyhow::Result<Arc<App
         bank_providers: Vec::new(),
     };
     Ok(Arc::new(
-        App::build(ports)
+        App::build(ports, settings)
             .await
             .context("initialisation de l'application")?,
     ))
@@ -78,9 +87,10 @@ pub async fn build_router(
     pool: PgPool,
     jwt_secret: &str,
     cors_origins: &str,
+    settings: Settings,
 ) -> anyhow::Result<Router> {
     Ok(fineme_http::router(
-        build_app(pool, jwt_secret).await?,
+        build_app(pool, jwt_secret, settings).await?,
         cors_origins,
     ))
 }
@@ -92,11 +102,19 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             "JWT_SECRET est court : utilisez au moins 32 caractères aléatoires en production"
         );
     }
+    if config.setup_token.is_none() {
+        tracing::warn!(
+            "SETUP_TOKEN non défini : la première configuration n'est pas protégée (à définir en production)"
+        );
+    }
     let pool = postgres::connect(&config.database_url).await?;
     postgres::migrate(&pool).await?;
     tracing::info!("migrations appliquées");
 
-    let router = build_router(pool, &config.jwt_secret, &config.cors_origins).await?;
+    let settings = Settings {
+        setup_token: config.setup_token.clone(),
+    };
+    let router = build_router(pool, &config.jwt_secret, &config.cors_origins, settings).await?;
     let address = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -132,6 +150,28 @@ mod tests {
                 ("JWT_SECRET", "")
             ]))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn setup_token_is_optional_and_blank_means_unset() {
+        let base = [("DATABASE_URL", "postgres://x"), ("JWT_SECRET", "secret")];
+        assert_eq!(
+            Config::from_lookup(lookup(&base)).unwrap().setup_token,
+            None
+        );
+        let blank = [base[0], base[1], ("SETUP_TOKEN", "  ")];
+        assert_eq!(
+            Config::from_lookup(lookup(&blank)).unwrap().setup_token,
+            None
+        );
+        let set = [base[0], base[1], ("SETUP_TOKEN", " code-fictif ")];
+        assert_eq!(
+            Config::from_lookup(lookup(&set))
+                .unwrap()
+                .setup_token
+                .as_deref(),
+            Some("code-fictif")
         );
     }
 

@@ -19,7 +19,7 @@ use fineme_domain::portfolio::Totals;
 use fineme_domain::transaction::Transaction;
 use uuid::Uuid;
 
-use crate::app::{App, Ports};
+use crate::app::{App, Ports, Settings};
 use crate::commands::{AccountInput, HoldingInput, LoanInput, OwnerInput, PropertyInput};
 use crate::ports::*;
 
@@ -668,7 +668,11 @@ pub struct TestApp {
 }
 
 impl TestApp {
-    async fn build(with_household: bool, bank: Option<FakeBank>) -> Self {
+    async fn build(
+        with_household: bool,
+        bank: Option<FakeBank>,
+        setup_token: Option<&str>,
+    ) -> Self {
         let store = Arc::new(InMemoryStore::default());
         let clock = Arc::new(FixedClock::new());
         let hasher = Arc::new(FakeHasher::default());
@@ -710,7 +714,14 @@ impl TestApp {
                 .map(|b| Arc::new(b) as Arc<dyn BankProvider>)
                 .collect(),
         };
-        let app = App::build(ports).await.unwrap();
+        let app = App::build(
+            ports,
+            Settings {
+                setup_token: setup_token.map(str::to_string),
+            },
+        )
+        .await
+        .unwrap();
         Self {
             app,
             store,
@@ -726,16 +737,21 @@ impl TestApp {
 
     /// Application sans aucune donnée (avant la première configuration).
     pub async fn empty() -> Self {
-        Self::build(false, None).await
+        Self::build(false, None, None).await
+    }
+
+    /// Application vide dont la première configuration exige un code.
+    pub async fn with_setup_token(token: &str) -> Self {
+        Self::build(false, None, Some(token)).await
     }
 
     /// Foyer fictif : Alice (membre principal) et Bob.
     pub async fn household() -> Self {
-        Self::build(true, None).await
+        Self::build(true, None, None).await
     }
 
     pub async fn with_bank(bank: FakeBank) -> Self {
-        Self::build(true, Some(bank)).await
+        Self::build(true, Some(bank), None).await
     }
 
     pub fn set_rate(&self, code: &str, rate: f64) {

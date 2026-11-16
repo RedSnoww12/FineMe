@@ -11,5 +11,7 @@ services:
         sync: false # chaîne de connexion Supabase (session pooler), à saisir dans Render
       - key: JWT_SECRET
         generateValue: true
+      - key: SETUP_TOKEN
+        generateValue: true # code demandé à la première configuration, à lire dans Render
       - key: CORS_ORIGINS
         sync: false # URL Vercel du front, ex. https://fineme.vercel.app

@@ -41,6 +41,8 @@ pub struct SetupBody {
     pub email: String,
     pub password: String,
     pub name: String,
+    /// Code de première configuration, exigé si `SETUP_TOKEN` est défini côté serveur.
+    pub setup_token: Option<String>,
 }
 
 #[derive(Deserialize)]

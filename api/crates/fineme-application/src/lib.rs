@@ -21,5 +21,5 @@ pub mod transactions;
 #[cfg(test)]
 pub(crate) mod testing;
 
-pub use app::{App, Ports};
+pub use app::{App, Ports, Settings};
 pub use error::{AppError, AppResult};

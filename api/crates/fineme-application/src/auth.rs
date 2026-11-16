@@ -9,6 +9,20 @@ use crate::ports::{Clock, Credentials, PasswordHasher, TokenService, UserReposit
 pub const MIN_PASSWORD_LEN: usize = 10;
 const INVALID_CREDENTIALS: &str = "E-mail ou mot de passe incorrect";
 const INVALID_SESSION: &str = "Session invalide ou expirée";
+const INVALID_SETUP_TOKEN: &str = "Code de configuration invalide ou manquant";
+
+/// Comparaison en temps constant : la durée ne dépend pas de la position du premier octet différent.
+fn constant_time_eq(expected: &[u8], provided: &[u8]) -> bool {
+    let mut difference = expected.len() ^ provided.len();
+    for index in 0..expected.len().max(provided.len()) {
+        let (a, b) = (
+            expected.get(index).copied().unwrap_or(0),
+            provided.get(index).copied().unwrap_or(0),
+        );
+        difference |= usize::from(a ^ b);
+    }
+    difference == 0
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
@@ -23,6 +37,8 @@ pub struct AuthService {
     pub(crate) clock: Arc<dyn Clock>,
     /// Hash vérifié quand l'e-mail est inconnu, pour un temps de réponse identique.
     pub(crate) dummy_hash: String,
+    /// Code exigé pour la première configuration (`None` = aucune protection, usage local).
+    pub(crate) setup_token: Option<String>,
 }
 
 impl AuthService {
@@ -31,8 +47,37 @@ impl AuthService {
         Ok(!self.users.exists_any().await?)
     }
 
+    /// Vrai si la première configuration exige un code (`SETUP_TOKEN` défini côté serveur).
+    pub fn setup_token_required(&self) -> bool {
+        self.setup_token.is_some()
+    }
+
+    /// Refuse la configuration si un code est exigé et que celui fourni est absent ou différent.
+    fn check_setup_token(&self, provided: Option<&str>) -> AppResult<()> {
+        match &self.setup_token {
+            None => Ok(()),
+            Some(expected)
+                if constant_time_eq(
+                    expected.as_bytes(),
+                    provided.unwrap_or("").trim().as_bytes(),
+                ) =>
+            {
+                Ok(())
+            }
+            Some(_) => Err(AppError::Forbidden(INVALID_SETUP_TOKEN)),
+        }
+    }
+
     /// Première configuration : crée l'utilisateur unique et le membre principal du foyer.
-    pub async fn setup(&self, email: &str, password: &str, name: &str) -> AppResult<Session> {
+    /// Le code de configuration est vérifié avant toute autre chose : rien n'est créé sans lui.
+    pub async fn setup(
+        &self,
+        email: &str,
+        password: &str,
+        name: &str,
+        setup_token: Option<&str>,
+    ) -> AppResult<Session> {
+        self.check_setup_token(setup_token)?;
         let email = email.trim().to_lowercase();
         let name = name.trim().to_string();
         if !email.contains('@') || email.len() < 3 {
@@ -122,7 +167,7 @@ mod tests {
         let session = t
             .app
             .auth
-            .setup(" Camille@Exemple.test ", PASSWORD, " Camille ")
+            .setup(" Camille@Exemple.test ", PASSWORD, " Camille ", None)
             .await
             .unwrap();
         assert_eq!(session.user.email, "camille@exemple.test");
@@ -142,15 +187,15 @@ mod tests {
     async fn setup_validates_inputs() {
         let t = TestApp::empty().await;
         assert!(matches!(
-            t.app.auth.setup("pas-un-email", PASSWORD, "A").await,
+            t.app.auth.setup("pas-un-email", PASSWORD, "A", None).await,
             Err(AppError::Invalid(_))
         ));
         assert!(matches!(
-            t.app.auth.setup("a@b.test", PASSWORD, "  ").await,
+            t.app.auth.setup("a@b.test", PASSWORD, "  ", None).await,
             Err(AppError::Invalid(_))
         ));
         assert!(matches!(
-            t.app.auth.setup("a@b.test", "court", "A").await,
+            t.app.auth.setup("a@b.test", "court", "A", None).await,
             Err(AppError::Invalid(_))
         ));
         assert!(t.app.auth.setup_required().await.unwrap());
@@ -159,9 +204,13 @@ mod tests {
     #[tokio::test]
     async fn setup_is_refused_once_a_user_exists() {
         let t = TestApp::empty().await;
-        t.app.auth.setup("a@b.test", PASSWORD, "A").await.unwrap();
+        t.app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", None)
+            .await
+            .unwrap();
         assert!(matches!(
-            t.app.auth.setup("c@d.test", PASSWORD, "C").await,
+            t.app.auth.setup("c@d.test", PASSWORD, "C", None).await,
             Err(AppError::Conflict(_))
         ));
     }
@@ -169,7 +218,11 @@ mod tests {
     #[tokio::test]
     async fn password_is_stored_hashed() {
         let t = TestApp::empty().await;
-        t.app.auth.setup("a@b.test", PASSWORD, "A").await.unwrap();
+        t.app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", None)
+            .await
+            .unwrap();
         let hash = t.store.state().users[0].password_hash.clone();
         assert_ne!(hash, PASSWORD);
         assert!(hash.contains("hash"));
@@ -178,7 +231,11 @@ mod tests {
     #[tokio::test]
     async fn login_succeeds_with_right_password_whatever_the_email_case() {
         let t = TestApp::empty().await;
-        t.app.auth.setup("a@b.test", PASSWORD, "A").await.unwrap();
+        t.app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", None)
+            .await
+            .unwrap();
         let session = t.app.auth.login("A@B.test", PASSWORD).await.unwrap();
         assert_eq!(
             t.app.auth.me(session.user.id).await.unwrap().email,
@@ -189,7 +246,11 @@ mod tests {
     #[tokio::test]
     async fn login_failures_are_indistinguishable() {
         let t = TestApp::empty().await;
-        t.app.auth.setup("a@b.test", PASSWORD, "A").await.unwrap();
+        t.app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", None)
+            .await
+            .unwrap();
         let wrong_password = t
             .app
             .auth
@@ -211,7 +272,12 @@ mod tests {
     #[tokio::test]
     async fn invalid_or_expired_tokens_are_rejected() {
         let t = TestApp::empty().await;
-        let session = t.app.auth.setup("a@b.test", PASSWORD, "A").await.unwrap();
+        let session = t
+            .app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", None)
+            .await
+            .unwrap();
         assert!(matches!(
             t.app.auth.authenticate("n'importe-quoi"),
             Err(AppError::Unauthorized(_))
@@ -230,5 +296,95 @@ mod tests {
             t.app.auth.me(UserId::generate()).await,
             Err(AppError::Unauthorized(_))
         ));
+    }
+
+    const CODE: &str = "code-de-configuration-fictif";
+
+    #[tokio::test]
+    async fn without_configured_setup_token_any_or_no_token_is_accepted() {
+        let t = TestApp::empty().await;
+        assert!(!t.app.auth.setup_token_required());
+        t.app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", Some("peu importe"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn correct_setup_token_allows_setup() {
+        let t = TestApp::with_setup_token(CODE).await;
+        assert!(t.app.auth.setup_token_required());
+        let session = t
+            .app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", Some(&format!(" {CODE}\n")))
+            .await
+            .unwrap();
+        assert_eq!(session.user.email, "a@b.test");
+        assert!(!t.app.auth.setup_required().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn wrong_or_missing_setup_token_is_forbidden_and_creates_nothing() {
+        let t = TestApp::with_setup_token(CODE).await;
+        for provided in [
+            None,
+            Some(""),
+            Some("mauvais-code"),
+            Some("code-de-configuration-fictiF"),
+            Some("code"),
+        ] {
+            let error = t
+                .app
+                .auth
+                .setup("a@b.test", PASSWORD, "A", provided)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, AppError::Forbidden(_)), "{provided:?}");
+            assert_eq!(
+                error.to_string(),
+                "Code de configuration invalide ou manquant"
+            );
+        }
+        // Le code est vérifié avant la validation des champs : aucune information sans lui.
+        assert!(matches!(
+            t.app.auth.setup("pas-un-email", "court", "", None).await,
+            Err(AppError::Forbidden(_))
+        ));
+        let state = t.store.state();
+        assert!(state.users.is_empty() && state.members.is_empty());
+        assert!(t.app.auth.setup_required().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn existing_user_still_conflicts_with_a_valid_token_and_stays_forbidden_without() {
+        let t = TestApp::with_setup_token(CODE).await;
+        t.app
+            .auth
+            .setup("a@b.test", PASSWORD, "A", Some(CODE))
+            .await
+            .unwrap();
+        assert!(matches!(
+            t.app
+                .auth
+                .setup("c@d.test", PASSWORD, "C", Some(CODE))
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            t.app.auth.setup("c@d.test", PASSWORD, "C", None).await,
+            Err(AppError::Forbidden(_))
+        ));
+        assert_eq!(t.store.state().users.len(), 1);
+    }
+
+    #[test]
+    fn constant_time_comparison_is_exact() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(constant_time_eq(b"", b""));
+        for other in [&b"abd"[..], b"ab", b"abcd", b"", b"ABC"] {
+            assert!(!constant_time_eq(b"abc", other));
+        }
     }
 }
