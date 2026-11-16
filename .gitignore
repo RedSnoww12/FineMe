@@ -16,3 +16,6 @@ playwright-report/
 # IDE
 .idea/
 *.iml
+# Skills d'agent installés en local
+.claude/skills/
+skills-lock.json
