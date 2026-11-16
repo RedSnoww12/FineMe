@@ -7,9 +7,9 @@ import { useAuth } from '@/shared/state/auth'
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function SetupForm() {
+function SetupForm({ tokenRequired }: { tokenRequired: boolean }) {
   const { signIn } = useAuth()
-  const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' })
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '', setupToken: '' })
   const [errors, setErrors] = useState<Partial<Record<keyof typeof form, string>>>({})
   const mutation = useSetup(signIn)
   const set = (key: keyof typeof form) => (value: string) => setForm((f) => ({ ...f, [key]: value }))
@@ -21,9 +21,16 @@ function SetupForm() {
     if (!EMAIL.test(form.email.trim())) next.email = 'Saisissez une adresse e-mail valide.'
     if (form.password.length < 10) next.password = 'Le mot de passe doit contenir au moins 10 caractères.'
     if (form.confirm !== form.password) next.confirm = 'Les deux mots de passe ne correspondent pas.'
+    if (tokenRequired && !form.setupToken.trim()) next.setupToken = 'Saisissez le code de configuration.'
     setErrors(next)
     if (Object.keys(next).length > 0) return
-    mutation.mutate({ name: form.name.trim(), email: form.email.trim(), password: form.password })
+    mutation.mutate({
+      name: form.name.trim(),
+      email: form.email.trim(),
+      password: form.password,
+      // Envoyé seulement quand le serveur l'exige.
+      ...(tokenRequired ? { setup_token: form.setupToken.trim() } : {}),
+    })
   }
 
   return (
@@ -61,6 +68,17 @@ function SetupForm() {
         error={errors.confirm}
         autoComplete="new-password"
       />
+      {tokenRequired ? (
+        <TextField
+          label="Code de configuration"
+          type="password"
+          value={form.setupToken}
+          onChange={set('setupToken')}
+          error={errors.setupToken}
+          hint="La valeur de SETUP_TOKEN définie sur le serveur, visible dans le tableau de bord de l’hébergeur."
+          autoComplete="off"
+        />
+      ) : null}
       <FormError error={mutation.error} />
       <Button type="submit" variant="primary" busy={mutation.isPending}>
         Créer mon compte
@@ -166,7 +184,7 @@ export default function AuthPage() {
         ) : status.isError ? (
           <ErrorState error={status.error} onRetry={() => void status.refetch()} />
         ) : status.data.setup_required ? (
-          <SetupForm />
+          <SetupForm tokenRequired={status.data.setup_token_required === true} />
         ) : (
           <LoginForm />
         )}

@@ -23,6 +23,7 @@ import type {
   PricesRefresh,
   Provider,
   RealEstate,
+  SetupInput,
   SyncResult,
   TransactionPage,
   TransactionsBulkInput,
@@ -36,7 +37,7 @@ type View = { member_id: string | null }
 export const api = {
   // Auth
   authStatus: () => request<AuthStatus>('/api/auth/status'),
-  setup: (body: { email: string; password: string; name: string }) =>
+  setup: (body: SetupInput) =>
     request<AuthResult>('/api/auth/setup', { method: 'POST', body }),
   login: (body: { email: string; password: string }) =>
     request<AuthResult>('/api/auth/login', { method: 'POST', body }),

@@ -59,6 +59,12 @@ test('première configuration, déconnexion puis connexion', async ({ page }) =>
   await page.getByLabel('Adresse e-mail').fill(account.email)
   await page.getByLabel('Mot de passe', { exact: true }).fill(account.password)
   await page.getByLabel('Confirmez le mot de passe').fill(account.password)
+  // Pile protégée par SETUP_TOKEN : fournir la même valeur dans E2E_SETUP_TOKEN.
+  const setupCode = page.getByLabel('Code de configuration')
+  if (await setupCode.isVisible()) {
+    expect(process.env.E2E_SETUP_TOKEN, 'Cette pile exige un code : définissez E2E_SETUP_TOKEN.').toBeTruthy()
+    await setupCode.fill(process.env.E2E_SETUP_TOKEN ?? '')
+  }
   await page.getByRole('button', { name: 'Créer mon compte' }).click()
 
   await expect(page.getByRole('heading', { name: 'Vue d’ensemble' })).toBeVisible()

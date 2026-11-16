@@ -137,3 +137,79 @@ describe('API injoignable', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('API injoignable')
   })
 })
+
+describe('code de configuration', () => {
+  async function fillSetupForm(actor: ReturnType<typeof renderApp>['user']) {
+    await actor.type(await screen.findByLabelText('Votre nom'), user.name)
+    await actor.type(screen.getByLabelText('Adresse e-mail'), user.email)
+    await actor.type(screen.getByLabelText('Mot de passe'), PASSWORD)
+    await actor.type(screen.getByLabelText('Confirmez le mot de passe'), PASSWORD)
+  }
+
+  /** Capture le corps du POST /api/auth/setup et répond par une session valide. */
+  function captureSetup() {
+    const captured: { body?: unknown } = {}
+    server.use(
+      http.post(`${API}/api/auth/setup`, async ({ request }) => {
+        captured.body = await request.json()
+        return HttpResponse.json({ token: 'jeton-setup', user })
+      }),
+    )
+    mockShell()
+    mockOverviewScreen(buildOverview())
+    return captured
+  }
+
+  it.each([
+    ['false', { setup_required: true, setup_token_required: false }],
+    ['absent de la réponse', { setup_required: true }],
+  ])('masque le champ et n’envoie pas setup_token quand setup_token_required est %s', async (_case, status) => {
+    mockJson('get', '/api/auth/status', status)
+    const captured = captureSetup()
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await fillSetupForm(actor)
+    expect(screen.queryByLabelText('Code de configuration')).not.toBeInTheDocument()
+
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+    expect(await screen.findByRole('heading', { name: 'Vue d’ensemble' })).toBeInTheDocument()
+    expect(captured.body).toEqual({ name: user.name, email: user.email, password: PASSWORD })
+    expect(captured.body).not.toHaveProperty('setup_token')
+  })
+
+  it('affiche le champ, l’exige et envoie sa valeur quand le serveur le demande', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: true, setup_token_required: true })
+    const captured = captureSetup()
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await fillSetupForm(actor)
+
+    const field = screen.getByLabelText('Code de configuration')
+    expect(field).toHaveAccessibleDescription(/SETUP_TOKEN/)
+
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+    expect(screen.getByText('Saisissez le code de configuration.')).toBeInTheDocument()
+    expect(captured.body).toBeUndefined()
+
+    await actor.type(field, 'code-fictif-123')
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+    expect(await screen.findByRole('heading', { name: 'Vue d’ensemble' })).toBeInTheDocument()
+    expect(captured.body).toEqual({
+      name: user.name,
+      email: user.email,
+      password: PASSWORD,
+      setup_token: 'code-fictif-123',
+    })
+  })
+
+  it('affiche le message 403 de l’API quand le code est refusé', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: true, setup_token_required: true })
+    mockApiError('post', '/api/auth/setup', 403, 'Code de configuration invalide.')
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await fillSetupForm(actor)
+    await actor.type(screen.getByLabelText('Code de configuration'), 'mauvais-code')
+    await actor.click(screen.getByRole('button', { name: 'Créer mon compte' }))
+
+    expect(await screen.findByText('Code de configuration invalide.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Première configuration' })).toBeInTheDocument()
+    expect(localStorage.getItem('fineme.token')).toBeNull()
+  })
+})
