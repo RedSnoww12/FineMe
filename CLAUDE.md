@@ -109,3 +109,15 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
 - Données financières réelles : rien de personnel dans Git (ni fichiers de seed, ni captures, ni fixtures). Les fixtures de test sont fictives.
 - Secrets uniquement via variables d'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`) ; `.env.example` sans valeur réelle.
 - Mots de passe hashés en argon2id ; toute route hors `/api/health` et `/api/auth/{status,setup,login}` exige le JWT.
+
+## Git
+
+Messages de commit au format [Conventional Commits](https://www.conventionalcommits.org/fr/) : `type(portée): description`
+à l'impératif, en minuscules, sans point final.
+
+- Types : `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`.
+- Portées : `api`, `web`, `e2e`, `docs`, `deploy` (omise si le changement est transversal).
+- Un commit = un changement cohérent ; un changement incompatible porte `!` et un pied `BREAKING CHANGE:`.
+- Exemples : `feat(api): exiger un code à la première configuration`, `fix(web): corriger le total des parts`.
+
+`make check` doit passer avant tout push.

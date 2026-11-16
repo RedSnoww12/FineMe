@@ -1,3 +1,5 @@
+.idea
+.vscode
 node_modules/
 dist/
 target/
@@ -11,3 +13,6 @@ seed/private/
 *.private.json
 test-results/
 playwright-report/
+# IDE
+.idea/
+*.iml
