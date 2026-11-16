@@ -28,7 +28,8 @@ Tests : `cargo test --workspace` (Docker requis), `npm test`, `npm run e2e` (pil
    s'exécutent au démarrage.
 3. **Vercel** — importer ce dépôt avec `web` comme *Root Directory* (preset Vite) et la variable
    `VITE_API_URL` = URL Render de l'API (sans `/api`). Reporter ensuite l'URL Vercel dans `CORS_ORIGINS` sur Render.
-4. Ouvrir l'URL Vercel : l'écran de première configuration crée l'unique compte. Les données peuvent ensuite
+4. Ouvrir l'URL Vercel : l'écran de première configuration crée l'unique compte. Il demande le
+   **code de configuration** : la valeur de `SETUP_TOKEN` générée par Render (onglet *Environment* du service). Les données peuvent ensuite
    être chargées depuis *Paramètres > Importer* (fichier d'export FineMe).
 
 L'offre gratuite de Render met l'API en veille après inactivité : la première requête peut prendre près d'une minute.

@@ -56,6 +56,8 @@ jobs:
       JWT_SECRET: ci-only-secret-not-used-anywhere-else-0123456789
       CORS_ORIGINS: http://localhost:5173
       PORT: "8080"
+      SETUP_TOKEN: ci-code-configuration
+      E2E_SETUP_TOKEN: ci-code-configuration
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
