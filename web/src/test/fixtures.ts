@@ -1,5 +1,5 @@
 // Données de test entièrement fictives, construites à partir du contrat docs/API.md.
-import type { Account, AccountDetail, Goal, Member, Overview, User } from '@/shared/api/types'
+import type { Account, AccountDetail, Goal, Holding, Member, Overview, User } from '@/shared/api/types'
 
 export const user: User = { id: 'u-1', email: 'camille@exemple.test', name: 'Camille Martin' }
 
@@ -31,6 +31,31 @@ export function buildAccount(overrides: Partial<Account> = {}): Account {
     invested: null,
     gain: null,
     updated_at: '2025-03-01T09:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildHolding(overrides: Partial<Holding> = {}): Holding {
+  return {
+    id: 'h-1',
+    account_id: 'a-1',
+    kind: 'security',
+    name: 'Fonds Indice Monde',
+    isin: 'FR0000000001',
+    symbol: 'FIM.PA',
+    security_type: 'etf',
+    quantity: 100,
+    buy_price: 300,
+    current_price: 330,
+    currency: 'EUR',
+    expense_ratio: 0.002,
+    price_source: 'auto',
+    price_updated_at: '2025-03-03T06:20:00Z',
+    price_stale: false,
+    value: 33_000,
+    invested: 30_000,
+    gain: 3_000,
+    gain_pct: 10,
     ...overrides,
   }
 }
