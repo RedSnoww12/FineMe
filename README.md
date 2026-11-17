@@ -50,6 +50,10 @@ le **secret** `CRON_SECRET` (valeur de `CRON_SECRET` générée par Render, ongl
 à la main depuis l'onglet *Actions* (*Run workflow*). Tout autre planificateur capable d'envoyer cette requête
 convient (ex. cron-job.org).
 
+Si un jour manque malgré tout (API injoignable, tâche en échec), la courbe d'évolution l'estime par interpolation
+entre les deux instantanés qui l'encadrent et le trace en pointillés ; l'infobulle et une mention sous le graphique
+le signalent.
+
 Cours des titres : Yahoo Finance, puis **EODHD** en repli si `EODHD_API_KEY` est renseignée sur Render (clé
 gratuite sur eodhd.com, nombre d'appels par jour limité ; le repli n'est appelé que pour les titres que Yahoo n'a
 pas cotés). Un cours automatique qui n'a pas été mis à jour depuis plus de 4 jours est signalé « ancien » dans
