@@ -6,7 +6,7 @@ use argon2::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use fineme_application::ports::{PasswordHasher, ProviderError, TokenService};
+use fineme_application::ports::{PasswordHasher, ProviderError, TokenService, TokenSubject};
 use fineme_domain::ids::UserId;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,9 @@ struct Claims {
     sub: Uuid,
     exp: i64,
     iat: i64,
+    /// Version de session ; absente des jetons émis avant son introduction, elle vaut alors 0.
+    #[serde(default)]
+    ver: i64,
 }
 
 /// Jetons JWT signés HS256. L'expiration est comparée à l'instant fourni par l'appelant (port `Clock`).
@@ -75,25 +78,29 @@ impl JwtTokens {
 }
 
 impl TokenService for JwtTokens {
-    fn issue(&self, user: UserId, now: DateTime<Utc>) -> Result<String, ProviderError> {
+    fn issue(&self, subject: TokenSubject, now: DateTime<Utc>) -> Result<String, ProviderError> {
         let claims = Claims {
-            sub: user.as_uuid(),
+            sub: subject.user.as_uuid(),
             iat: now.timestamp(),
             exp: (now + Duration::days(TOKEN_DAYS)).timestamp(),
+            ver: subject.session_version,
         };
         EncodingKey::from_secret(self.secret.as_bytes())
             .and_then(|key| jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &key))
             .map_err(|e| ProviderError(format!("création du jeton impossible : {e}")))
     }
 
-    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<UserId> {
+    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject> {
         let key = DecodingKey::from_secret(self.secret.as_bytes()).ok()?;
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
         let claims = jsonwebtoken::decode::<Claims>(token, &key, &validation)
             .ok()?
             .claims;
-        (claims.exp > now.timestamp()).then(|| UserId::from_uuid(claims.sub))
+        (claims.exp > now.timestamp()).then(|| TokenSubject {
+            user: UserId::from_uuid(claims.sub),
+            session_version: claims.ver,
+        })
     }
 }
 
@@ -120,12 +127,19 @@ mod tests {
         );
     }
 
+    fn subject(session_version: i64) -> TokenSubject {
+        TokenSubject {
+            user: UserId::generate(),
+            session_version,
+        }
+    }
+
     #[test]
     fn token_roundtrip_and_tampering() {
         let tokens = JwtTokens::new("secret-de-test");
-        let (user, now) = (UserId::generate(), Utc::now());
-        let token = tokens.issue(user, now).unwrap();
-        assert_eq!(tokens.verify(&token, now), Some(user));
+        let (subject, now) = (subject(3), Utc::now());
+        let token = tokens.issue(subject, now).unwrap();
+        assert_eq!(tokens.verify(&token, now), Some(subject));
         assert_eq!(JwtTokens::new("autre-secret").verify(&token, now), None);
         assert_eq!(tokens.verify("n'importe quoi", now), None);
         assert_eq!(tokens.verify(&format!("{token}x"), now), None);
@@ -134,9 +148,41 @@ mod tests {
     #[test]
     fn token_expires_after_thirty_days() {
         let tokens = JwtTokens::new("secret-de-test");
-        let (user, now) = (UserId::generate(), Utc::now());
-        let token = tokens.issue(user, now).unwrap();
-        assert_eq!(tokens.verify(&token, now + Duration::days(29)), Some(user));
+        let (subject, now) = (subject(0), Utc::now());
+        let token = tokens.issue(subject, now).unwrap();
+        assert_eq!(
+            tokens.verify(&token, now + Duration::days(29)),
+            Some(subject)
+        );
         assert_eq!(tokens.verify(&token, now + Duration::days(30)), None);
+    }
+
+    #[test]
+    fn tokens_issued_before_session_versions_read_as_version_zero() {
+        #[derive(Serialize)]
+        struct LegacyClaims {
+            sub: Uuid,
+            exp: i64,
+            iat: i64,
+        }
+        let (user, now) = (UserId::generate(), Utc::now());
+        let legacy = LegacyClaims {
+            sub: user.as_uuid(),
+            iat: now.timestamp(),
+            exp: (now + Duration::days(1)).timestamp(),
+        };
+        let token = jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &legacy,
+            &EncodingKey::from_secret(b"secret-de-test").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            JwtTokens::new("secret-de-test").verify(&token, now),
+            Some(TokenSubject {
+                user,
+                session_version: 0
+            })
+        );
     }
 }

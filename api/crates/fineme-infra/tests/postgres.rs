@@ -171,6 +171,7 @@ async fn first_user_is_created_once_with_its_primary_member() {
             name: "Camille".into(),
         },
         password_hash: "$argon2id$fictif".into(),
+        session_version: 0,
     };
     assert!(
         db.store
@@ -187,6 +188,7 @@ async fn first_user_is_created_once_with_its_primary_member() {
             name: "Autre".into(),
         },
         password_hash: "x".into(),
+        session_version: 0,
     };
     assert!(
         !db.store
@@ -209,12 +211,55 @@ async fn first_user_is_created_once_with_its_primary_member() {
     );
     assert_eq!(
         db.store.find_by_id(credentials.user.id).await.unwrap(),
-        Some(credentials.user)
+        Some(credentials.clone())
     );
     assert_eq!(db.store.find_by_id(UserId::generate()).await.unwrap(), None);
     let members = db.store.members().await.unwrap();
     assert_eq!(members.len(), 1);
     assert!(members[0].is_primary && members[0].name == "Camille");
+}
+
+#[tokio::test]
+async fn password_update_replaces_hash_and_bumps_session_version() {
+    let db = test_db().await;
+    let credentials = Credentials {
+        user: User {
+            id: UserId::generate(),
+            email: "camille@exemple.test".into(),
+            name: "Camille".into(),
+        },
+        password_hash: "$argon2id$ancien".into(),
+        session_version: 0,
+    };
+    db.store
+        .create_first(&credentials, &member("Camille", true))
+        .await
+        .unwrap();
+
+    for (expected_version, hash) in [(1, "$argon2id$nouveau"), (2, "$argon2id$encore")] {
+        assert_eq!(
+            db.store
+                .update_password(credentials.user.id, hash)
+                .await
+                .unwrap(),
+            Some(expected_version)
+        );
+        let stored = db
+            .store
+            .find_by_email("camille@exemple.test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.password_hash, hash);
+        assert_eq!(stored.session_version, expected_version);
+    }
+    assert_eq!(
+        db.store
+            .update_password(UserId::generate(), "$argon2id$x")
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]

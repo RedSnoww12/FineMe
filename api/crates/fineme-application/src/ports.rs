@@ -53,10 +53,18 @@ pub trait PasswordHasher: Send + Sync {
     async fn verify(&self, password: &str, hash: &str) -> bool;
 }
 
+/// Ce que porte un jeton de session : l'utilisateur et la version de session en vigueur à l'émission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenSubject {
+    pub user: UserId,
+    /// Incrémentée à chaque changement de mot de passe : un jeton d'une version antérieure est refusé.
+    pub session_version: i64,
+}
+
 pub trait TokenService: Send + Sync {
-    fn issue(&self, user: UserId, now: DateTime<Utc>) -> Result<String, ProviderError>;
-    /// Identifiant de l'utilisateur si le jeton est authentique et non expiré à `now`.
-    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<UserId>;
+    fn issue(&self, subject: TokenSubject, now: DateTime<Utc>) -> Result<String, ProviderError>;
+    /// Contenu du jeton s'il est authentique et non expiré à `now`.
+    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject>;
 }
 
 // ---------------------------------------------------------------- persistance
@@ -65,13 +73,18 @@ pub trait TokenService: Send + Sync {
 pub struct Credentials {
     pub user: User,
     pub password_hash: String,
+    /// Version de session courante (0 à la création).
+    pub session_version: i64,
 }
 
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn exists_any(&self) -> RepoResult<bool>;
     async fn find_by_email(&self, email: &str) -> RepoResult<Option<Credentials>>;
-    async fn find_by_id(&self, id: UserId) -> RepoResult<Option<User>>;
+    async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>>;
+    /// Remplace le hash du mot de passe et incrémente la version de session, en une seule écriture.
+    /// Renvoie la nouvelle version, ou `None` si l'utilisateur n'existe pas.
+    async fn update_password(&self, id: UserId, password_hash: &str) -> RepoResult<Option<i64>>;
     /// Crée le premier utilisateur et son membre principal, de façon atomique.
     /// Renvoie `false` sans rien créer si un utilisateur existe déjà.
     async fn create_first(

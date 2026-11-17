@@ -108,7 +108,9 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
 
 - Données financières réelles : rien de personnel dans Git (ni fichiers de seed, ni captures, ni fixtures). Les fixtures de test sont fictives.
 - Secrets uniquement via variables d'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`) ; `.env.example` sans valeur réelle.
-- Mots de passe hashés en argon2id ; toute route hors `/api/health` et `/api/auth/{status,setup,login}` exige le JWT.
+- Mots de passe hashés en argon2id ; toute route hors `/api/health` et `/api/auth/{status,setup,login,reset}` exige le JWT.
+- Le JWT porte la version de session de l'utilisateur : changer ou réinitialiser le mot de passe l'incrémente et
+  invalide tous les jetons antérieurs. La réinitialisation exige `RECOVERY_TOKEN` (code de secours côté serveur).
 
 ## Git
 

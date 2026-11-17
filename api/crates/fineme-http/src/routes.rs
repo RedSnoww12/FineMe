@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post, put};
 use axum::{Extension, Router, middleware};
+use fineme_application::auth::Session;
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{HoldingInput, TransactionInput};
 use serde_json::{Value, json};
@@ -14,7 +15,8 @@ use crate::auth::{AuthUser, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
     AccountBody, BundleBody, ConnectionBody, GoalBody, HistoryQuery, HoldingBody, HoldingsBulkBody,
-    LoginBody, MemberBody, PageQuery, SetupBody, TransactionsBulkBody, ViewQuery,
+    LoginBody, MemberBody, PageQuery, PasswordChangeBody, PasswordResetBody, SetupBody,
+    TransactionsBulkBody, ViewQuery,
 };
 use crate::output;
 
@@ -34,10 +36,12 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/health", get(health))
         .route("/auth/status", get(auth_status))
         .route("/auth/setup", post(auth_setup))
-        .route("/auth/login", post(auth_login));
+        .route("/auth/login", post(auth_login))
+        .route("/auth/reset", post(auth_reset));
 
     let protected = Router::new()
         .route("/auth/me", get(auth_me))
+        .route("/auth/password", put(auth_password))
         .route("/members", get(members_list).post(members_create))
         .route("/members/{id}", put(members_update).delete(members_delete))
         .route("/accounts", get(accounts_list).post(accounts_create))
@@ -96,6 +100,7 @@ async fn auth_status(State(app): State<AppState>) -> JsonResponse {
     ok(json!({
         "setup_required": app.auth.setup_required().await?,
         "setup_token_required": app.auth.setup_token_required(),
+        "recovery_enabled": app.auth.recovery_enabled(),
     }))
 }
 
@@ -109,12 +114,43 @@ async fn auth_setup(State(app): State<AppState>, Json(body): Json<SetupBody>) ->
             body.setup_token.as_deref(),
         )
         .await?;
-    created(json!({ "token": session.token, "user": output::user(&session.user) }))
+    created(self::session(&session))
 }
 
 async fn auth_login(State(app): State<AppState>, Json(body): Json<LoginBody>) -> JsonResponse {
     let session = app.auth.login(&body.email, &body.password).await?;
-    ok(json!({ "token": session.token, "user": output::user(&session.user) }))
+    ok(self::session(&session))
+}
+
+fn session(session: &Session) -> Value {
+    json!({ "token": session.token, "user": output::user(&session.user) })
+}
+
+async fn auth_reset(
+    State(app): State<AppState>,
+    Json(body): Json<PasswordResetBody>,
+) -> JsonResponse {
+    let session = app
+        .auth
+        .reset_password(
+            &body.email,
+            body.recovery_token.as_deref(),
+            &body.new_password,
+        )
+        .await?;
+    ok(self::session(&session))
+}
+
+async fn auth_password(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+    Json(body): Json<PasswordChangeBody>,
+) -> JsonResponse {
+    let session = app
+        .auth
+        .change_password(id, &body.current_password, &body.new_password)
+        .await?;
+    ok(self::session(&session))
 }
 
 async fn auth_me(

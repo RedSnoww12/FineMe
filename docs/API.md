@@ -5,7 +5,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 - `api/` : Rust (Axum + sqlx + Postgres), hébergé sur Render, base Postgres Supabase.
 - `web/` : React + Vite + TypeScript, hébergé sur Vercel.
 - Toutes les routes sont préfixées par `/api`. JSON partout, `snake_case`.
-- Auth : `Authorization: Bearer <JWT>` sur toutes les routes sauf `/api/health`, `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`.
+- Auth : `Authorization: Bearer <JWT>` sur toutes les routes sauf `/api/health`, `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`, `/api/auth/reset`.
 - Montants : nombres JSON (f64). Devise de référence : EUR. Dates : `YYYY-MM-DD`. Identifiants : UUID.
 - Parts de détention : fraction `0..1` (0.5 = 50 %).
 - Erreurs : statut HTTP + `{ "error": "message lisible en français" }`.
@@ -13,7 +13,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 
 ## Variables d'environnement (api)
 
-`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte).
+`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte), `RECOVERY_TOKEN` (optionnel : code de secours qui permet de réinitialiser un mot de passe perdu ; absent = récupération désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer).
 Les migrations sqlx s'exécutent au démarrage.
 
 ## Auth
@@ -21,12 +21,21 @@ Les migrations sqlx s'exécutent au démarrage.
 | Méthode | Route | Corps | Réponse |
 |---|---|---|---|
 | GET | `/api/health` | – | `{ "status": "ok" }` |
-| GET | `/api/auth/status` | – | `{ "setup_required": bool, "setup_token_required": bool }` (`setup_required` true tant qu'aucun utilisateur n'existe ; `setup_token_required` true si `SETUP_TOKEN` est défini côté serveur) |
+| GET | `/api/auth/status` | – | `{ "setup_required": bool, "setup_token_required": bool, "recovery_enabled": bool }` (`setup_required` true tant qu'aucun utilisateur n'existe ; `setup_token_required` true si `SETUP_TOKEN` est défini côté serveur) |
 | POST | `/api/auth/setup` | `{ email, password, name, setup_token? }` | `{ token, user }` — refusé (409) si un utilisateur existe déjà ; refusé (403) si `SETUP_TOKEN` est défini et que `setup_token` est absent ou différent (comparaison en temps constant). Crée aussi le membre principal `name`. |
 | POST | `/api/auth/login` | `{ email, password }` | `{ token, user }` |
 | GET | `/api/auth/me` | – | `user` = `{ id, email, name }` |
+| PUT | `/api/auth/password` | `{ current_password, new_password }` | `{ token, user }` — refusé (403) si `current_password` est faux ; (400) si `new_password` est trop court ou identique à l'actuel. Le jeton renvoyé remplace celui de l'appareil courant. |
+| POST | `/api/auth/reset` | `{ email, recovery_token, new_password }` | `{ token, user }` — (501) si `RECOVERY_TOKEN` n'est pas défini ; (403) si `recovery_token` est absent ou différent (comparaison en temps constant, vérifiée avant tout le reste) ; (400) mot de passe trop court ; (404) aucun compte pour cet e-mail. |
 
 Mot de passe ≥ 10 caractères, hashé en argon2id. JWT valable 30 jours.
+
+`GET /api/auth/status` renvoie aussi `recovery_enabled: bool` (true si `RECOVERY_TOKEN` est défini), pour
+afficher ou non le lien « Mot de passe oublié ».
+
+Sessions : chaque utilisateur porte un numéro de version de session, recopié dans le JWT. Changer ou
+réinitialiser le mot de passe l'incrémente : tous les jetons émis auparavant sont refusés (401), sur tous les
+appareils. Seul le jeton renvoyé par la route reste valable.
 
 ## Membres du foyer
 

@@ -14,7 +14,7 @@ use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
     AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
 };
-use fineme_domain::member::{Member, User};
+use fineme_domain::member::Member;
 use fineme_domain::portfolio::Totals;
 use fineme_domain::transaction::Transaction;
 use uuid::Uuid;
@@ -80,6 +80,11 @@ impl InMemoryStore {
         self.lock().clone()
     }
 
+    /// Simule la disparition de l'utilisateur (base restaurée, ligne supprimée à la main).
+    pub fn remove_users(&self) {
+        self.lock().users.clear();
+    }
+
     pub fn fail_price_updates(&self) {
         self.lock().fail_price_updates = true;
     }
@@ -109,13 +114,20 @@ impl UserRepository for InMemoryStore {
             .find(|c| c.user.email == email)
             .cloned())
     }
-    async fn find_by_id(&self, id: UserId) -> RepoResult<Option<User>> {
+    async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>> {
+        Ok(self.lock().users.iter().find(|c| c.user.id == id).cloned())
+    }
+    async fn update_password(&self, id: UserId, password_hash: &str) -> RepoResult<Option<i64>> {
         Ok(self
             .lock()
             .users
-            .iter()
+            .iter_mut()
             .find(|c| c.user.id == id)
-            .map(|c| c.user.clone()))
+            .map(|credentials| {
+                credentials.password_hash = password_hash.to_string();
+                credentials.session_version += 1;
+                credentials.session_version
+            }))
     }
     async fn create_first(
         &self,
@@ -514,21 +526,27 @@ impl PasswordHasher for FakeHasher {
     }
 }
 
-/// Jetons lisibles « jeton|<utilisateur>|<expiration> », valables 30 jours.
+/// Jetons lisibles « jeton|<utilisateur>|<version de session>|<expiration> », valables 30 jours.
 pub struct FakeTokens;
 
 impl TokenService for FakeTokens {
-    fn issue(&self, user: UserId, now: DateTime<Utc>) -> Result<String, ProviderError> {
+    fn issue(&self, subject: TokenSubject, now: DateTime<Utc>) -> Result<String, ProviderError> {
         Ok(format!(
-            "jeton|{user}|{}",
+            "jeton|{}|{}|{}",
+            subject.user,
+            subject.session_version,
             (now + Duration::days(30)).timestamp()
         ))
     }
-    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<UserId> {
+    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject> {
         let mut parts = token.split('|').skip(1);
         let user = Uuid::parse_str(parts.next()?).ok()?;
+        let session_version = parts.next()?.parse().ok()?;
         let expires: i64 = parts.next()?.parse().ok()?;
-        (expires > now.timestamp()).then(|| UserId::from_uuid(user))
+        (expires > now.timestamp()).then(|| TokenSubject {
+            user: UserId::from_uuid(user),
+            session_version,
+        })
     }
 }
 
@@ -668,11 +686,7 @@ pub struct TestApp {
 }
 
 impl TestApp {
-    async fn build(
-        with_household: bool,
-        bank: Option<FakeBank>,
-        setup_token: Option<&str>,
-    ) -> Self {
+    async fn build(with_household: bool, bank: Option<FakeBank>, tokens: Settings) -> Self {
         let store = Arc::new(InMemoryStore::default());
         let clock = Arc::new(FixedClock::new());
         let hasher = Arc::new(FakeHasher::default());
@@ -714,14 +728,7 @@ impl TestApp {
                 .map(|b| Arc::new(b) as Arc<dyn BankProvider>)
                 .collect(),
         };
-        let app = App::build(
-            ports,
-            Settings {
-                setup_token: setup_token.map(str::to_string),
-            },
-        )
-        .await
-        .unwrap();
+        let app = App::build(ports, tokens).await.unwrap();
         Self {
             app,
             store,
@@ -737,21 +744,34 @@ impl TestApp {
 
     /// Application sans aucune donnée (avant la première configuration).
     pub async fn empty() -> Self {
-        Self::build(false, None, None).await
+        Self::build(false, None, Settings::default()).await
     }
 
     /// Application vide dont la première configuration exige un code.
     pub async fn with_setup_token(token: &str) -> Self {
-        Self::build(false, None, Some(token)).await
+        let settings = Settings {
+            setup_token: Some(token.to_string()),
+            ..Settings::default()
+        };
+        Self::build(false, None, settings).await
+    }
+
+    /// Application vide où un mot de passe perdu se réinitialise avec ce code de secours.
+    pub async fn with_recovery_token(token: &str) -> Self {
+        let settings = Settings {
+            recovery_token: Some(token.to_string()),
+            ..Settings::default()
+        };
+        Self::build(false, None, settings).await
     }
 
     /// Foyer fictif : Alice (membre principal) et Bob.
     pub async fn household() -> Self {
-        Self::build(true, None, None).await
+        Self::build(true, None, Settings::default()).await
     }
 
     pub async fn with_bank(bank: FakeBank) -> Self {
-        Self::build(true, Some(bank), None).await
+        Self::build(true, Some(bank), Settings::default()).await
     }
 
     pub fn set_rate(&self, code: &str, rate: f64) {

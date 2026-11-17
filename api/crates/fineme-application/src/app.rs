@@ -45,6 +45,14 @@ pub struct Ports {
 pub struct Settings {
     /// Code exigé pour la première configuration ; `None` ou vide = non exigé.
     pub setup_token: Option<String>,
+    /// Code de secours pour réinitialiser un mot de passe perdu ; `None` ou vide = récupération désactivée.
+    pub recovery_token: Option<String>,
+}
+
+/// Code facultatif : espaces retirés, vide = absent.
+fn non_blank(code: Option<String>) -> Option<String> {
+    code.map(|code| code.trim().to_string())
+        .filter(|code| !code.is_empty())
 }
 
 /// Les cas d'usage, regroupés par domaine fonctionnel.
@@ -78,10 +86,8 @@ impl App {
                 tokens: ports.tokens,
                 clock: ports.clock.clone(),
                 dummy_hash,
-                setup_token: settings
-                    .setup_token
-                    .map(|token| token.trim().to_string())
-                    .filter(|token| !token.is_empty()),
+                setup_token: non_blank(settings.setup_token),
+                recovery_token: non_blank(settings.recovery_token),
             },
             members: MemberService {
                 repo: ports.portfolio.clone(),

@@ -177,7 +177,7 @@ async fn auth_flow_from_first_setup_to_protected_routes() {
     assert_eq!(api.get("/api/health").await, json!({ "status": "ok" }));
     assert_eq!(
         api.get("/api/auth/status").await,
-        json!({ "setup_required": true, "setup_token_required": false })
+        json!({ "setup_required": true, "setup_token_required": false, "recovery_enabled": false })
     );
 
     // Sans jeton, toute route protégée répond 401, y compris l'import.
@@ -211,7 +211,7 @@ async fn auth_flow_from_first_setup_to_protected_routes() {
     );
     assert_eq!(
         api.get("/api/auth/status").await,
-        json!({ "setup_required": false, "setup_token_required": false })
+        json!({ "setup_required": false, "setup_token_required": false, "recovery_enabled": false })
     );
 
     // Même réponse pour un mauvais mot de passe et un e-mail inconnu.
@@ -260,11 +260,12 @@ async fn first_setup_requires_the_configured_setup_token() {
     const CODE: &str = "code-de-configuration-fictif";
     let api = Api::fresh_with(Settings {
         setup_token: Some(CODE.into()),
+        ..Settings::default()
     })
     .await;
     assert_eq!(
         api.get("/api/auth/status").await,
-        json!({ "setup_required": true, "setup_token_required": true })
+        json!({ "setup_required": true, "setup_token_required": true, "recovery_enabled": false })
     );
 
     let body = |token: Option<&str>| {
@@ -292,7 +293,7 @@ async fn first_setup_requires_the_configured_setup_token() {
     assert!(session["token"].is_string());
     assert_eq!(
         api.get("/api/auth/status").await,
-        json!({ "setup_required": false, "setup_token_required": true })
+        json!({ "setup_required": false, "setup_token_required": true, "recovery_enabled": false })
     );
     // Une fois l'utilisateur créé : 409 avec le bon code, 403 sans.
     let again = api
@@ -305,6 +306,192 @@ async fn first_setup_requires_the_configured_setup_token() {
             .0,
         StatusCode::FORBIDDEN
     );
+}
+
+#[tokio::test]
+async fn changing_password_signs_out_every_other_device() {
+    const NEW_PASSWORD: &str = "nouveau-mot-de-passe";
+    let (mut api, _, _) = Api::household().await;
+    let first_device = api.token.clone();
+    let login = json!({ "email": "alice@exemple.test", "password": PASSWORD });
+    let second_device = api.post("/api/auth/login", login.clone()).await["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let change =
+        |current: &str, new: &str| json!({ "current_password": current, "new_password": new });
+    // Mauvais mot de passe actuel : 403 (pas 401, la session reste ouverte).
+    assert_eq!(
+        error_of(
+            &api.call(
+                "PUT",
+                "/api/auth/password",
+                Some(change("mauvais-mot-de-passe", NEW_PASSWORD))
+            )
+            .await
+        ),
+        (403, "Mot de passe actuel incorrect")
+    );
+    assert_eq!(
+        error_of(
+            &api.call("PUT", "/api/auth/password", Some(change(PASSWORD, "court")))
+                .await
+        ),
+        (400, "Le mot de passe doit contenir au moins 10 caractères")
+    );
+    assert_eq!(
+        error_of(
+            &api.call(
+                "PUT",
+                "/api/auth/password",
+                Some(change(PASSWORD, PASSWORD))
+            )
+            .await
+        ),
+        (
+            400,
+            "Le nouveau mot de passe doit être différent de l'actuel"
+        )
+    );
+    api.get("/api/auth/me").await;
+
+    let (status, session) = api
+        .call(
+            "PUT",
+            "/api/auth/password",
+            Some(change(PASSWORD, NEW_PASSWORD)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{session}");
+    assert_eq!(session["user"]["email"], "alice@exemple.test");
+    let renewed = session["token"].as_str().unwrap().to_string();
+
+    for stale in [first_device, second_device] {
+        api.token = stale;
+        assert_eq!(
+            error_of(&api.call("GET", "/api/members", None).await),
+            (401, "Session invalide ou expirée")
+        );
+    }
+    api.token = renewed;
+    api.get("/api/members").await;
+
+    api.token.clear();
+    assert_eq!(
+        api.call("POST", "/api/auth/login", Some(login)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    api.post(
+        "/api/auth/login",
+        json!({ "email": "alice@exemple.test", "password": NEW_PASSWORD }),
+    )
+    .await;
+    assert_eq!(
+        error_of(
+            &api.call(
+                "PUT",
+                "/api/auth/password",
+                Some(change(NEW_PASSWORD, PASSWORD))
+            )
+            .await
+        ),
+        (401, "Authentification requise")
+    );
+}
+
+#[tokio::test]
+async fn lost_password_is_reset_with_the_recovery_token_only() {
+    const RECOVERY: &str = "code-de-secours-fictif-0123";
+    const NEW_PASSWORD: &str = "nouveau-mot-de-passe";
+    let reset = |token: Option<&str>, email: &str| {
+        let mut body = json!({ "email": email, "new_password": NEW_PASSWORD });
+        if let Some(token) = token {
+            body["recovery_token"] = json!(token);
+        }
+        body
+    };
+
+    // Sans RECOVERY_TOKEN, la route existe mais la fonction est désactivée.
+    let (api, _, _) = Api::household().await;
+    assert_eq!(api.get("/api/auth/status").await["recovery_enabled"], false);
+    assert_eq!(
+        api.call(
+            "POST",
+            "/api/auth/reset",
+            Some(reset(Some(RECOVERY), "alice@exemple.test"))
+        )
+        .await
+        .0,
+        StatusCode::NOT_IMPLEMENTED
+    );
+
+    let mut api = Api::fresh_with(Settings {
+        recovery_token: Some(RECOVERY.into()),
+        ..Settings::default()
+    })
+    .await;
+    api.post(
+        "/api/auth/setup",
+        json!({ "email": "alice@exemple.test", "password": PASSWORD, "name": "Alice" }),
+    )
+    .await;
+    assert_eq!(api.get("/api/auth/status").await["recovery_enabled"], true);
+    let old_session = api
+        .post(
+            "/api/auth/login",
+            json!({ "email": "alice@exemple.test", "password": PASSWORD }),
+        )
+        .await["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for token in [None, Some(""), Some("mauvais-code")] {
+        assert_eq!(
+            error_of(
+                &api.call(
+                    "POST",
+                    "/api/auth/reset",
+                    Some(reset(token, "alice@exemple.test"))
+                )
+                .await
+            ),
+            (403, "Code de secours invalide ou manquant")
+        );
+    }
+    assert_eq!(
+        error_of(
+            &api.call(
+                "POST",
+                "/api/auth/reset",
+                Some(reset(Some(RECOVERY), "inconnu@exemple.test"))
+            )
+            .await
+        ),
+        (404, "Aucun compte ne correspond à cette adresse e-mail")
+    );
+
+    let session = api
+        .post(
+            "/api/auth/reset",
+            reset(Some(RECOVERY), "Alice@Exemple.test"),
+        )
+        .await;
+    assert_eq!(session["user"]["email"], "alice@exemple.test");
+
+    api.token = old_session;
+    assert_eq!(
+        api.call("GET", "/api/auth/me", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    api.token = session["token"].as_str().unwrap().to_string();
+    api.get("/api/auth/me").await;
+    api.post(
+        "/api/auth/login",
+        json!({ "email": "alice@exemple.test", "password": NEW_PASSWORD }),
+    )
+    .await;
 }
 
 #[tokio::test]

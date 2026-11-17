@@ -347,6 +347,20 @@ async fn save_goal(conn: &mut PgConnection, g: &Goal) -> RepoResult<()> {
 
 // ---------------------------------------------------------------- utilisateurs
 
+type CredentialsRow = (Uuid, String, String, String, i64);
+
+fn credentials((id, email, name, password_hash, session_version): CredentialsRow) -> Credentials {
+    Credentials {
+        user: User {
+            id: UserId::from_uuid(id),
+            email,
+            name,
+        },
+        password_hash,
+        session_version,
+    }
+}
+
 #[async_trait]
 impl UserRepository for PgStore {
     async fn exists_any(&self) -> RepoResult<bool> {
@@ -357,34 +371,38 @@ impl UserRepository for PgStore {
     }
 
     async fn find_by_email(&self, email: &str) -> RepoResult<Option<Credentials>> {
-        let row: Option<(Uuid, String, String, String)> =
-            sqlx::query_as("SELECT id, email, name, password_hash FROM users WHERE email = $1")
-                .bind(email)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(db)?;
-        Ok(row.map(|(id, email, name, password_hash)| Credentials {
-            user: User {
-                id: UserId::from_uuid(id),
-                email,
-                name,
-            },
-            password_hash,
-        }))
+        let row: Option<CredentialsRow> = sqlx::query_as(
+            "SELECT id, email, name, password_hash, session_version FROM users WHERE email = $1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.map(credentials))
     }
 
-    async fn find_by_id(&self, id: UserId) -> RepoResult<Option<User>> {
-        let row: Option<(Uuid, String, String)> =
-            sqlx::query_as("SELECT id, email, name FROM users WHERE id = $1")
-                .bind(id.as_uuid())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(db)?;
-        Ok(row.map(|(id, email, name)| User {
-            id: UserId::from_uuid(id),
-            email,
-            name,
-        }))
+    async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>> {
+        let row: Option<CredentialsRow> = sqlx::query_as(
+            "SELECT id, email, name, password_hash, session_version FROM users WHERE id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.map(credentials))
+    }
+
+    async fn update_password(&self, id: UserId, password_hash: &str) -> RepoResult<Option<i64>> {
+        // Une seule requête : le hash et la version changent ensemble ou pas du tout.
+        sqlx::query_scalar(
+            "UPDATE users SET password_hash = $2, session_version = session_version + 1 \
+             WHERE id = $1 RETURNING session_version",
+        )
+        .bind(id.as_uuid())
+        .bind(password_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)
     }
 
     async fn create_first(
