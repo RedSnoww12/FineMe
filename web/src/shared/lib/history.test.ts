@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import type { HistoryPoint } from '@/shared/api/types'
+import type { HistoryAccount, HistoryPoint } from '@/shared/api/types'
 import { countEstimatedDays, fillMissingDays, toHistoryChartRows } from './history'
 
 function point(date: string, gross_assets: number, liabilities = 0): HistoryPoint {
-  return { date, gross_assets, liabilities, net_worth: gross_assets - liabilities }
+  return { date, gross_assets, liabilities, net_worth: gross_assets - liabilities, accounts: null }
+}
+
+function account(account_id: string, value: number, gain: number | null = null): HistoryAccount {
+  return { account_id, name: `Compte ${account_id}`, kind: 'investment', value, gain }
 }
 
 describe('fillMissingDays', () => {
@@ -24,10 +28,39 @@ describe('fillMissingDays', () => {
     const series = fillMissingDays([point('2026-03-01', 1000, 400), point('2026-03-05', 1400, 200)])
     expect(series.map((p) => p.date)).toEqual(['2026-03-01', '2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05'])
     expect(series.map((p) => p.estimated)).toEqual([false, true, true, true, false])
-    expect(series[2]).toEqual({ date: '2026-03-03', gross_assets: 1200, liabilities: 300, net_worth: 900, estimated: true })
+    expect(series[2]).toEqual({
+      date: '2026-03-03',
+      gross_assets: 1200,
+      liabilities: 300,
+      net_worth: 900,
+      accounts: null,
+      estimated: true,
+    })
     // Le patrimoine net estimé reste égal aux actifs moins les dettes estimés.
     for (const p of series) expect(p.net_worth).toBeCloseTo(p.gross_assets - p.liabilities, 9)
     expect(countEstimatedDays(series)).toBe(3)
+  })
+
+  it('interpole le détail par compte, un compte ouvert ou clôturé valant 0 de l’autre côté', () => {
+    const series = fillMissingDays([
+      { ...point('2026-03-01', 1000), accounts: [account('pea', 600, 100), account('livret', 400)] },
+      { ...point('2026-03-03', 1400), accounts: [account('pea', 1000, 300), account('cto', 400, 50)] },
+    ])
+    expect(series[1].estimated).toBe(true)
+    expect(series[1].accounts).toEqual([
+      account('pea', 800, 200),
+      account('livret', 200),
+      account('cto', 200, 25),
+    ])
+  })
+
+  it('n’invente pas de détail pour un jour encadré par un instantané sans détail', () => {
+    const series = fillMissingDays([
+      point('2026-03-01', 1000),
+      { ...point('2026-03-03', 1400), accounts: [account('pea', 1400)] },
+    ])
+    expect(series[1].accounts).toBeNull()
+    expect(series[2].accounts).toEqual([account('pea', 1400)])
   })
 
   it('franchit les fins de mois, d’année et les années bissextiles', () => {
