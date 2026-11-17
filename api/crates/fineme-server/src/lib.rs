@@ -6,9 +6,11 @@ use std::sync::Arc;
 use anyhow::Context;
 use axum::Router;
 use fineme_application::auth::MIN_RECOVERY_TOKEN_LEN;
+use fineme_application::daily::MIN_CRON_SECRET_LEN;
+use fineme_application::ports::PriceProvider;
 use fineme_application::{App, Ports, Settings};
 use fineme_infra::clock::SystemClock;
-use fineme_infra::market::{self, CoinGecko, Frankfurter, YahooFinance};
+use fineme_infra::market::{self, CoinGecko, Eodhd, Frankfurter, YahooFinance};
 use fineme_infra::postgres::{self, PgStore};
 use fineme_infra::security::{Argon2Hasher, JwtTokens};
 use sqlx::PgPool;
@@ -16,7 +18,7 @@ use sqlx::PgPool;
 pub const DEFAULT_PORT: u16 = 8080;
 
 /// Configuration lue dans l'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT`, `SETUP_TOKEN`,
-/// `RECOVERY_TOKEN`).
+/// `RECOVERY_TOKEN`, `CRON_SECRET`, `EODHD_API_KEY`).
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
@@ -27,6 +29,10 @@ pub struct Config {
     pub setup_token: Option<String>,
     /// Code de secours pour réinitialiser un mot de passe perdu (`RECOVERY_TOKEN`) ; `None` si absent ou vide.
     pub recovery_token: Option<String>,
+    /// Secret de la tâche quotidienne (`CRON_SECRET`) ; `None` si absent ou vide.
+    pub cron_secret: Option<String>,
+    /// Clé du fournisseur de cours de repli EODHD (`EODHD_API_KEY`) ; `None` = pas de repli.
+    pub eodhd_api_key: Option<String>,
 }
 
 /// Code facultatif lu dans l'environnement : espaces retirés, vide = absent.
@@ -36,22 +42,32 @@ fn optional_code(lookup: &impl Fn(&str) -> Option<String>, key: &str) -> Option<
         .filter(|code| !code.is_empty())
 }
 
+/// Code facultatif protégeant une route appelable sans session : trop court, il se devinerait.
+fn optional_secret(
+    lookup: &impl Fn(&str) -> Option<String>,
+    key: &str,
+    min_len: usize,
+) -> anyhow::Result<Option<String>> {
+    let code = optional_code(lookup, key);
+    if code
+        .as_ref()
+        .is_some_and(|code| code.chars().count() < min_len)
+    {
+        anyhow::bail!(
+            "{key} doit contenir au moins {min_len} caractères (ex. `openssl rand -hex 24`)"
+        );
+    }
+    Ok(code)
+}
+
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         Self::from_lookup(|key| std::env::var(key).ok())
     }
 
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
-        let recovery_token = optional_code(&lookup, "RECOVERY_TOKEN");
-        // La route de réinitialisation est publique : un code court se devinerait.
-        if recovery_token
-            .as_ref()
-            .is_some_and(|code| code.chars().count() < MIN_RECOVERY_TOKEN_LEN)
-        {
-            anyhow::bail!(
-                "RECOVERY_TOKEN doit contenir au moins {MIN_RECOVERY_TOKEN_LEN} caractères (ex. `openssl rand -hex 24`)"
-            );
-        }
+        let recovery_token = optional_secret(&lookup, "RECOVERY_TOKEN", MIN_RECOVERY_TOKEN_LEN)?;
+        let cron_secret = optional_secret(&lookup, "CRON_SECRET", MIN_CRON_SECRET_LEN)?;
         Ok(Self {
             database_url: lookup("DATABASE_URL").context("DATABASE_URL est requis")?,
             jwt_secret: lookup("JWT_SECRET")
@@ -63,19 +79,31 @@ impl Config {
                 .unwrap_or(DEFAULT_PORT),
             setup_token: optional_code(&lookup, "SETUP_TOKEN"),
             recovery_token,
+            cron_secret,
+            eodhd_api_key: optional_code(&lookup, "EODHD_API_KEY"),
         })
     }
 }
 
 /// Câble les adaptateurs réels (Postgres, fournisseurs de cours, argon2, JWT) sur les cas d'usage.
 /// Aucun agrégateur bancaire n'est branché : il suffira d'ajouter son adaptateur à `bank_providers`.
+/// `eodhd_api_key` : clé du fournisseur de repli des titres, absent = pas de repli.
 pub async fn build_app(
     pool: PgPool,
     jwt_secret: &str,
     settings: Settings,
+    eodhd_api_key: Option<&str>,
 ) -> anyhow::Result<Arc<App>> {
     let store = Arc::new(PgStore::new(pool));
     let http = market::http_client().context("client HTTP")?;
+    // Ordre d'essai : un fournisseur suivant ne reçoit que ce que les précédents n'ont pas su coter.
+    let mut price_providers: Vec<Arc<dyn PriceProvider>> = vec![
+        Arc::new(CoinGecko::new(http.clone(), market::COINGECKO_URL)),
+        Arc::new(YahooFinance::new(http.clone(), market::YAHOO_URL)),
+    ];
+    if let Some(key) = eodhd_api_key {
+        price_providers.push(Arc::new(Eodhd::new(http.clone(), market::EODHD_URL, key)));
+    }
     let ports = Ports {
         users: store.clone(),
         portfolio: store.clone(),
@@ -89,10 +117,7 @@ pub async fn build_app(
         hasher: Arc::new(Argon2Hasher),
         tokens: Arc::new(JwtTokens::new(jwt_secret)),
         fx_provider: Arc::new(Frankfurter::new(http.clone(), market::FRANKFURTER_URL)),
-        price_providers: vec![
-            Arc::new(CoinGecko::new(http.clone(), market::COINGECKO_URL)),
-            Arc::new(YahooFinance::new(http, market::YAHOO_URL)),
-        ],
+        price_providers,
         bank_providers: Vec::new(),
     };
     Ok(Arc::new(
@@ -108,9 +133,10 @@ pub async fn build_router(
     jwt_secret: &str,
     cors_origins: &str,
     settings: Settings,
+    eodhd_api_key: Option<&str>,
 ) -> anyhow::Result<Router> {
     Ok(fineme_http::router(
-        build_app(pool, jwt_secret, settings).await?,
+        build_app(pool, jwt_secret, settings, eodhd_api_key).await?,
         cors_origins,
     ))
 }
@@ -136,11 +162,27 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             "RECOVERY_TOKEN non défini : la réinitialisation d'un mot de passe perdu est désactivée"
         );
     }
+    if config.cron_secret.is_none() {
+        tracing::info!(
+            "CRON_SECRET non défini : la tâche quotidienne (cours du matin, instantané) est désactivée"
+        );
+    }
+    if config.eodhd_api_key.is_none() {
+        tracing::info!("EODHD_API_KEY non défini : pas de fournisseur de repli pour les titres");
+    }
     let settings = Settings {
         setup_token: config.setup_token.clone(),
         recovery_token: config.recovery_token.clone(),
+        cron_secret: config.cron_secret.clone(),
     };
-    let router = build_router(pool, &config.jwt_secret, &config.cors_origins, settings).await?;
+    let router = build_router(
+        pool,
+        &config.jwt_secret,
+        &config.cors_origins,
+        settings,
+        config.eodhd_api_key.as_deref(),
+    )
+    .await?;
     let address = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -220,6 +262,27 @@ mod tests {
                 .as_deref(),
             Some("code-de-secours-fictif")
         );
+    }
+
+    #[test]
+    fn cron_secret_must_be_long_enough_and_eodhd_key_is_optional() {
+        let base = [("DATABASE_URL", "postgres://x"), ("JWT_SECRET", "secret")];
+        let config = Config::from_lookup(lookup(&base)).unwrap();
+        assert_eq!((config.cron_secret, config.eodhd_api_key), (None, None));
+        let short = [base[0], base[1], ("CRON_SECRET", "court")];
+        assert!(Config::from_lookup(lookup(&short)).is_err());
+        let set = [
+            base[0],
+            base[1],
+            ("CRON_SECRET", " secret-quotidien-fictif "),
+            ("EODHD_API_KEY", " cle-fictive "),
+        ];
+        let config = Config::from_lookup(lookup(&set)).unwrap();
+        assert_eq!(
+            config.cron_secret.as_deref(),
+            Some("secret-quotidien-fictif")
+        );
+        assert_eq!(config.eodhd_api_key.as_deref(), Some("cle-fictive"));
     }
 
     #[test]

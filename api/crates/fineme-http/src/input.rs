@@ -25,6 +25,11 @@ pub struct ViewQuery {
 }
 
 #[derive(Deserialize)]
+pub struct RangeQuery {
+    pub range: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct HistoryQuery {
     pub range: Option<String>,
     pub member_id: Option<Uuid>,

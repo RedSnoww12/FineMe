@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::fx::{Currency, FxRates};
 use crate::ids::{AccountId, HoldingId};
@@ -32,6 +32,10 @@ pub struct Holding {
     pub price_updated_at: Option<DateTime<Utc>>,
 }
 
+/// Au-delà de ce nombre de jours, un cours récupéré automatiquement est jugé ancien
+/// (couvre un week-end prolongé, où les marchés ne cotent pas).
+pub const STALE_PRICE_AFTER_DAYS: i64 = 4;
+
 /// Valorisation d'une position, en EUR.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HoldingValuation {
@@ -43,6 +47,16 @@ pub struct HoldingValuation {
 }
 
 impl Holding {
+    /// Vrai si le cours est automatique et que sa dernière mise à jour date de plus de
+    /// [`STALE_PRICE_AFTER_DAYS`] jours (ou n'est pas datée) : le fournisseur ne le met plus à jour.
+    /// Un cours saisi à la main n'est jamais signalé : son ancienneté est un choix de l'utilisateur.
+    pub fn price_is_stale(&self, today: NaiveDate) -> bool {
+        self.price_source == PriceSource::Auto
+            && self.price_updated_at.is_none_or(|updated_at| {
+                (today - updated_at.date_naive()).num_days() > STALE_PRICE_AFTER_DAYS
+            })
+    }
+
     pub fn valuation(&self, rates: &FxRates) -> HoldingValuation {
         let value = rates.to_eur(self.quantity * self.current_price, &self.currency);
         let invested = self
@@ -107,6 +121,46 @@ mod tests {
         let v = holding(Some(0.0), "EUR").valuation(&FxRates::default());
         assert_eq!(v.gain, Some(1250.0));
         assert_eq!(v.gain_pct, None);
+    }
+
+    fn auto_price_updated(days_ago: Option<i64>) -> (Holding, NaiveDate) {
+        let today = NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let updated_at = days_ago.map(|days| {
+            (today - chrono::Duration::days(days))
+                .and_hms_opt(23, 59, 0)
+                .unwrap()
+                .and_utc()
+        });
+        let holding = Holding {
+            price_source: PriceSource::Auto,
+            price_updated_at: updated_at,
+            ..holding(None, "EUR")
+        };
+        (holding, today)
+    }
+
+    #[test]
+    fn auto_price_becomes_stale_after_the_threshold() {
+        for (days_ago, stale) in [
+            (0, false),
+            (STALE_PRICE_AFTER_DAYS, false),
+            (STALE_PRICE_AFTER_DAYS + 1, true),
+        ] {
+            let (holding, today) = auto_price_updated(Some(days_ago));
+            assert_eq!(holding.price_is_stale(today), stale, "{days_ago} jours");
+        }
+    }
+
+    #[test]
+    fn undated_auto_price_is_stale_but_manual_price_never_is() {
+        let (undated, today) = auto_price_updated(None);
+        assert!(undated.price_is_stale(today));
+        let (old, today) = auto_price_updated(Some(365));
+        let manual = Holding {
+            price_source: PriceSource::Manual,
+            ..old
+        };
+        assert!(!manual.price_is_stale(today));
     }
 
     #[test]

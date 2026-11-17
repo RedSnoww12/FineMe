@@ -1,5 +1,7 @@
 //! Rafraîchissement « best effort » des cours et des taux de change :
 //! un échec n'interrompt jamais l'opération, le prix existant reste en place.
+//! Les fournisseurs sont essayés dans l'ordre : un fournisseur suivant ne reçoit que les positions
+//! que les précédents n'ont pas su coter (repli).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,11 +9,36 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::ids::HoldingId;
+use uuid::Uuid;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use crate::overview::history_start;
 use crate::ports::{
-    Clock, FxProvider, FxRateRepository, PortfolioRepository, PriceProvider, QuoteRequest,
+    Clock, FxProvider, FxRateRepository, PortfolioRepository, PricePoint, PriceProvider,
+    QuoteRequest,
 };
+
+type Outcomes = HashMap<HoldingId, Result<f64, String>>;
+
+/// Retient le résultat d'un fournisseur : un succès remplace un échec précédent,
+/// deux échecs cumulent leurs raisons (sans doublon).
+fn merge_outcome(outcomes: &mut Outcomes, holding: HoldingId, outcome: Result<f64, String>) {
+    match (outcomes.get_mut(&holding), outcome) {
+        (Some(Err(previous)), Err(reason)) => {
+            if !previous.split(" ; ").any(|known| known == reason) {
+                previous.push_str(" ; ");
+                previous.push_str(&reason);
+            }
+        }
+        (_, outcome) => {
+            outcomes.insert(holding, outcome);
+        }
+    }
+}
+
+fn is_priced(outcomes: &Outcomes, holding: HoldingId) -> bool {
+    matches!(outcomes.get(&holding), Some(Ok(_)))
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FailedPrice {
@@ -60,12 +87,12 @@ impl PriceService {
         let (rates, _) = self.fx_rates.rates().await?;
         let holdings = self.portfolio.load().await?.holdings;
 
-        let mut outcomes: HashMap<HoldingId, Result<f64, String>> = HashMap::new();
+        let mut outcomes = Outcomes::new();
         for provider in &self.price_providers {
             let requests: Vec<QuoteRequest> = holdings
                 .iter()
                 .filter(|holding| {
-                    provider.handles(holding.kind) && !outcomes.contains_key(&holding.id)
+                    provider.handles(holding.kind) && !is_priced(&outcomes, holding.id)
                 })
                 .map(|holding| QuoteRequest {
                     holding_id: holding.id,
@@ -95,7 +122,7 @@ impl PriceService {
                             )
                         }),
                 };
-                outcomes.insert(request.holding_id, outcome);
+                merge_outcome(&mut outcomes, request.holding_id, outcome);
             }
         }
 
@@ -138,6 +165,27 @@ impl PriceService {
             }
         }
         Ok(report)
+    }
+
+    /// Historique des cours récupérés pour une position, sur une période (`1m`, `3m`, `1y`, `all`).
+    pub async fn history(
+        &self,
+        holding_id: Uuid,
+        range: Option<&str>,
+    ) -> AppResult<Vec<PricePoint>> {
+        let since = history_start(range, self.clock.today())?;
+        let id = HoldingId::from_uuid(holding_id);
+        if !self
+            .portfolio
+            .load()
+            .await?
+            .holdings
+            .iter()
+            .any(|holding| holding.id == id)
+        {
+            return Err(AppError::NotFound("Position introuvable"));
+        }
+        Ok(self.portfolio.price_history(id, since).await?)
     }
 }
 
@@ -244,7 +292,11 @@ mod tests {
             reasons,
             vec![
                 (unknown, "cours introuvable"),
-                (no_rate, "taux de change JPY/EUR indisponible"),
+                // Le repli n'a pas trouvé ce titre non plus : les deux raisons sont gardées.
+                (
+                    no_rate,
+                    "taux de change JPY/EUR indisponible ; cours introuvable"
+                ),
                 (bad, "cours invalide")
             ]
         );
@@ -252,6 +304,95 @@ mod tests {
         assert_eq!(
             price_of(&t, account, unknown).await,
             (10.0, PriceSource::Manual)
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_provider_prices_only_what_the_primary_missed() {
+        let t = TestApp::household().await;
+        let account = t.investment(t.alice, 0.0).await;
+        let listed = add(
+            &t,
+            account,
+            "security",
+            "Cotée partout",
+            Some("BOTH"),
+            "EUR",
+        )
+        .await;
+        let rescued = add(&t, account, "security", "Repli", Some("BACKUP"), "EUR").await;
+        t.securities.set("BOTH", 50.0, "EUR");
+        t.fallback.set("BOTH", 99.0, "EUR");
+        t.fallback.set("BACKUP", 12.5, "EUR");
+
+        let report = t.app.prices.refresh().await.unwrap();
+        assert_eq!((report.updated, report.failed), (2, vec![]));
+        // Le fournisseur principal garde la main quand il répond.
+        assert_eq!(
+            price_of(&t, account, listed).await,
+            (50.0, PriceSource::Auto)
+        );
+        assert_eq!(
+            price_of(&t, account, rescued).await,
+            (12.5, PriceSource::Auto)
+        );
+        assert_eq!(t.fallback.requested(), vec!["BACKUP".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn refresh_records_one_history_point_per_day() {
+        let t = TestApp::household().await;
+        let account = t.investment(t.alice, 0.0).await;
+        let stock = add(&t, account, "security", "Action Démo", Some("DEMO"), "USD").await;
+        t.set_rate("USD", 1.25);
+        t.securities.set("DEMO", 40.0, "USD");
+        t.app.prices.refresh().await.unwrap();
+        t.securities.set("DEMO", 41.0, "USD");
+        t.app.prices.refresh().await.unwrap();
+        t.clock.advance_days(1);
+        t.securities.set("DEMO", 42.0, "USD");
+        t.app.prices.refresh().await.unwrap();
+
+        let points = t.app.prices.history(stock.as_uuid(), None).await.unwrap();
+        let prices: Vec<(f64, &str)> = points
+            .iter()
+            .map(|p| (p.price, p.currency.as_str()))
+            .collect();
+        // Le dernier cours du jour remplace le précédent.
+        assert_eq!(prices, vec![(41.0, "USD"), (42.0, "USD")]);
+        assert!(points[0].date < points[1].date);
+        assert_eq!(
+            t.app
+                .prices
+                .history(stock.as_uuid(), Some("1m"))
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn history_of_an_unknown_holding_or_with_a_bad_range_is_refused() {
+        let t = TestApp::household().await;
+        let account = t.investment(t.alice, 0.0).await;
+        let manual = add(&t, account, "security", "Saisie", None, "EUR").await;
+        assert!(matches!(
+            t.app.prices.history(Uuid::new_v4(), None).await,
+            Err(AppError::NotFound(_))
+        ));
+        assert!(matches!(
+            t.app.prices.history(manual.as_uuid(), Some("5y")).await,
+            Err(AppError::Invalid(_))
+        ));
+        // Un cours saisi à la main n'entre pas dans l'historique.
+        assert!(
+            t.app
+                .prices
+                .history(manual.as_uuid(), None)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 

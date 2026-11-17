@@ -3,7 +3,7 @@ use std::sync::Arc;
 use chrono::{Months, NaiveDate};
 use fineme_domain::ids::MemberId;
 use fineme_domain::ownership::View;
-use fineme_domain::portfolio::Overview;
+use fineme_domain::portfolio::{Overview, Portfolio};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -18,7 +18,7 @@ pub struct OverviewService {
 }
 
 /// Début de la période d'historique : `1m`, `3m`, `1y` ou `all` (défaut).
-fn history_start(range: Option<&str>, today: NaiveDate) -> AppResult<NaiveDate> {
+pub(crate) fn history_start(range: Option<&str>, today: NaiveDate) -> AppResult<NaiveDate> {
     let months = match range.unwrap_or("all") {
         "1m" => Some(1),
         "3m" => Some(3),
@@ -38,18 +38,26 @@ impl OverviewService {
     pub async fn overview(&self, member_id: Option<Uuid>) -> AppResult<Overview> {
         let portfolio = self.reader.load().await?;
         let view = view_for(&portfolio, member_id)?;
+        self.save_snapshots(&portfolio).await?;
+        Ok(portfolio.overview(view))
+    }
+
+    /// Enregistre (ou remplace) l'instantané du jour, foyer et chaque membre ; renvoie sa date.
+    pub async fn record_snapshots(&self) -> AppResult<NaiveDate> {
+        let portfolio = self.reader.load().await?;
+        self.save_snapshots(&portfolio).await?;
+        Ok(portfolio.today)
+    }
+
+    async fn save_snapshots(&self, portfolio: &Portfolio) -> AppResult<()> {
         let views = std::iter::once(View::Household)
             .chain(portfolio.members.iter().map(|m| View::Member(m.id)));
-        for snapshot_view in views {
+        for view in views {
             self.snapshots
-                .upsert(
-                    portfolio.today,
-                    snapshot_view.member(),
-                    portfolio.totals(snapshot_view),
-                )
+                .upsert(portfolio.today, view.member(), portfolio.totals(view))
                 .await?;
         }
-        Ok(portfolio.overview(view))
+        Ok(())
     }
 
     pub async fn history(
@@ -156,6 +164,18 @@ mod tests {
             .await
             .unwrap();
         assert!(close(bob[0].totals.net_worth, 50_200.0));
+    }
+
+    #[tokio::test]
+    async fn record_snapshots_saves_every_view_without_reading_the_overview() {
+        let t = seeded().await;
+        assert_eq!(
+            t.app.overview.record_snapshots().await.unwrap(),
+            t.clock.today()
+        );
+        assert_eq!(t.store.state().snapshots.len(), 3);
+        let household = t.app.overview.history(None, None).await.unwrap();
+        assert!(close(household[0].totals.net_worth, 101_550.0));
     }
 
     #[tokio::test]

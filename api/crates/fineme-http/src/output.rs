@@ -4,8 +4,10 @@ use fineme_application::bundle::Bundle;
 use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, PropertyInput,
 };
+use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
-use fineme_application::ports::SnapshotPoint;
+use fineme_application::ports::{PricePoint, SnapshotPoint};
+use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
 use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
@@ -70,6 +72,7 @@ pub fn holding(view: &HoldingView) -> Value {
         "expense_ratio": h.expense_ratio,
         "price_source": h.price_source.as_str(),
         "price_updated_at": h.price_updated_at,
+        "price_stale": view.price_stale,
         "value": view.valuation.value,
         "invested": view.valuation.invested,
         "gain": view.valuation.gain,
@@ -226,6 +229,30 @@ pub fn history(points: &[SnapshotPoint]) -> Value {
         .map(|p| with(json!({ "date": p.date }), totals(&p.totals)))
         .collect();
     json!({ "points": points })
+}
+
+pub fn price_history(points: &[PricePoint]) -> Value {
+    let points: Vec<Value> = points
+        .iter()
+        .map(|p| json!({ "date": p.date, "price": p.price, "currency": p.currency.as_str() }))
+        .collect();
+    json!({ "points": points })
+}
+
+pub fn refresh_report(report: &RefreshReport) -> Value {
+    json!({
+        "updated": report.updated,
+        "failed": report.failed.iter().map(|f| json!({
+            "holding_id": f.holding_id.as_uuid(), "name": f.name, "reason": f.reason,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub fn daily_report(report: &DailyReport) -> Value {
+    json!({
+        "prices": refresh_report(&report.prices),
+        "snapshot_date": report.snapshot_date,
+    })
 }
 
 pub fn goal(view: &GoalView) -> Value {

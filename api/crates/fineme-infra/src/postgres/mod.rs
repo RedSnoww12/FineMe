@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use fineme_application::ports::{
     AccountWrite, ConnectionRepository, Credentials, FxRateRepository, GoalRepository, ImportBatch,
-    ImportRepository, PortfolioData, PortfolioRepository, RepoError, RepoResult, SnapshotPoint,
-    SnapshotRepository, TransactionRepository, UserRepository,
+    ImportRepository, PortfolioData, PortfolioRepository, PricePoint, RepoError, RepoResult,
+    SnapshotPoint, SnapshotRepository, TransactionRepository, UserRepository,
 };
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
@@ -616,8 +616,46 @@ impl PortfolioRepository for PgStore {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
+            sqlx::query(
+                "INSERT INTO price_history (holding_id, date, price, currency) \
+                 SELECT id, $2, $3, currency FROM holdings WHERE id = $1 \
+                 ON CONFLICT (holding_id, date) DO UPDATE SET price = EXCLUDED.price, currency = EXCLUDED.currency",
+            )
+            .bind(id.as_uuid())
+            .bind(at.date_naive())
+            .bind(price)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
         }
         tx.commit().await.map_err(db)
+    }
+
+    async fn price_history(
+        &self,
+        holding: HoldingId,
+        from: NaiveDate,
+    ) -> RepoResult<Vec<PricePoint>> {
+        let rows: Vec<(NaiveDate, f64, String)> = sqlx::query_as(
+            "SELECT date, price, currency FROM price_history WHERE holding_id = $1 AND date >= $2 ORDER BY date",
+        )
+        .bind(holding.as_uuid())
+        .bind(from)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        rows.into_iter()
+            .map(|(date, price, currency)| {
+                let currency = Currency::parse(&currency).map_err(|_| {
+                    RepoError::Backend(format!("devise invalide en base : {currency}"))
+                })?;
+                Ok(PricePoint {
+                    date,
+                    price,
+                    currency,
+                })
+            })
+            .collect()
     }
 }
 

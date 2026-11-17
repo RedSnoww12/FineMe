@@ -130,9 +130,24 @@ pub trait PortfolioRepository: Send + Sync {
     /// Crée ou met à jour une position et date la modification de son compte.
     async fn save_holding(&self, holding: &Holding, at: DateTime<Utc>) -> RepoResult<()>;
     async fn delete_holding(&self, id: HoldingId, at: DateTime<Utc>) -> RepoResult<bool>;
-    /// Enregistre des cours récupérés automatiquement.
+    /// Enregistre des cours récupérés automatiquement et les ajoute à l'historique des cours
+    /// (un point par position et par jour de `at`, dans la devise de la position), tous ou aucun.
     async fn update_prices(&self, prices: &[(HoldingId, f64)], at: DateTime<Utc>)
     -> RepoResult<()>;
+    /// Historique des cours d'une position depuis `from`, du plus ancien au plus récent.
+    async fn price_history(
+        &self,
+        holding: HoldingId,
+        from: NaiveDate,
+    ) -> RepoResult<Vec<PricePoint>>;
+}
+
+/// Cours d'une position à une date, dans la devise de la position à cette date.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PricePoint {
+    pub date: NaiveDate,
+    pub price: f64,
+    pub currency: Currency,
 }
 
 #[async_trait]

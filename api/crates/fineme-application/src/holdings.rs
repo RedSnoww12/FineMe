@@ -121,10 +121,7 @@ impl HoldingService {
         let now = self.clock.now();
         let holding = build_holding(None, account, input, now)?;
         self.repo.save_holding(&holding, now).await?;
-        Ok(HoldingView {
-            valuation: holding.valuation(&portfolio.rates),
-            holding,
-        })
+        Ok(HoldingView::new(holding, &portfolio.rates, portfolio.today))
     }
 
     /// Import en masse (CSV) ; renvoie toutes les positions du compte après l'opération.
@@ -176,10 +173,7 @@ impl HoldingService {
         let now = self.clock.now();
         let holding = build_holding(Some(existing), account, input, now)?;
         self.repo.save_holding(&holding, now).await?;
-        Ok(HoldingView {
-            valuation: holding.valuation(&portfolio.rates),
-            holding,
-        })
+        Ok(HoldingView::new(holding, &portfolio.rates, portfolio.today))
     }
 
     pub async fn delete(&self, id: Uuid) -> AppResult<()> {
