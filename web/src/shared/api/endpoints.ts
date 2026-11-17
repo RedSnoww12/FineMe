@@ -20,6 +20,8 @@ import type {
   Member,
   MemberInput,
   Overview,
+  PasswordChangeInput,
+  PasswordResetInput,
   PricesRefresh,
   Provider,
   RealEstate,
@@ -42,6 +44,10 @@ export const api = {
   login: (body: { email: string; password: string }) =>
     request<AuthResult>('/api/auth/login', { method: 'POST', body }),
   me: () => request<User>('/api/auth/me'),
+  changePassword: (body: PasswordChangeInput) =>
+    request<AuthResult>('/api/auth/password', { method: 'PUT', body }),
+  resetPassword: (body: PasswordResetInput) =>
+    request<AuthResult>('/api/auth/reset', { method: 'POST', body }),
 
   // Membres
   members: () => request<Member[]>('/api/members'),

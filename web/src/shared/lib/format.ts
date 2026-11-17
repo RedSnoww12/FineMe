@@ -39,6 +39,8 @@ export function moneyCompact(value: number): string {
     style: 'currency',
     currency: 'EUR',
     notation: 'compact',
+    // Minimum explicite : sinon l'euro impose ses décimales (« 12,0 k € ») selon la version d'ICU du moteur.
+    minimumFractionDigits: 0,
     maximumFractionDigits: 1,
   }).format(value)
 }

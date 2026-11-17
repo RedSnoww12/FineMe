@@ -179,20 +179,28 @@ fn export_account(account: &Account, portfolio: &Portfolio) -> BundleAccount {
     }
 }
 
+/// Liste triée : l'export ne dépend pas de l'ordre de stockage (identifiants aléatoires propres à chaque base).
+fn sorted(mut values: Vec<String>) -> Vec<String> {
+    values.sort();
+    values
+}
+
 fn export_goal(goal: &Goal, portfolio: &Portfolio) -> BundleGoal {
     BundleGoal {
-        account_external_ids: goal
-            .account_ids
-            .iter()
-            .filter_map(|id| portfolio.account(*id))
-            .map(external_id)
-            .collect(),
-        members: goal
-            .member_ids
-            .iter()
-            .filter_map(|id| portfolio.member(*id))
-            .map(|m| m.name.clone())
-            .collect(),
+        account_external_ids: sorted(
+            goal.account_ids
+                .iter()
+                .filter_map(|id| portfolio.account(*id))
+                .map(external_id)
+                .collect(),
+        ),
+        members: sorted(
+            goal.member_ids
+                .iter()
+                .filter_map(|id| portfolio.member(*id))
+                .map(|m| m.name.clone())
+                .collect(),
+        ),
         goal: GoalInput {
             name: Some(goal.name.clone()),
             icon: Some(goal.icon.clone()),
@@ -593,6 +601,21 @@ mod tests {
         assert_eq!(target.app.bundle.export().await.unwrap(), exported);
         // Dans une base vide, le membre principal du bundle le reste.
         assert!(target.app.members.list().await.unwrap()[0].is_primary);
+    }
+
+    #[tokio::test]
+    async fn export_lists_goal_links_in_a_stable_order() {
+        let mut bundle = sample();
+        bundle.goals[0].members = vec!["Bob".into(), "Alice".into()];
+        bundle.goals[0].account_external_ids = vec!["pea-1".into(), "livret-1".into()];
+        let t = TestApp::household().await;
+        t.app.bundle.import(bundle).await.unwrap();
+        let goal = &t.app.bundle.export().await.unwrap().goals[0];
+        assert_eq!(goal.members, vec!["Alice".to_string(), "Bob".to_string()]);
+        assert_eq!(
+            goal.account_external_ids,
+            vec!["livret-1".to_string(), "pea-1".to_string()]
+        );
     }
 
     #[tokio::test]

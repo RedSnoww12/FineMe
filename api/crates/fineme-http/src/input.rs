@@ -52,6 +52,20 @@ pub struct LoginBody {
 }
 
 #[derive(Deserialize)]
+pub struct PasswordChangeBody {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Deserialize)]
+pub struct PasswordResetBody {
+    pub email: String,
+    /// Code de secours, comparé à `RECOVERY_TOKEN` côté serveur.
+    pub recovery_token: Option<String>,
+    pub new_password: String,
+}
+
+#[derive(Deserialize)]
 pub struct MemberBody {
     pub name: Option<String>,
     pub color: Option<String>,

@@ -32,6 +32,13 @@ Tests : `cargo test --workspace` (Docker requis), `npm test`, `npm run e2e` (pil
    **code de configuration** : la valeur de `SETUP_TOKEN` générée par Render (onglet *Environment* du service). Les données peuvent ensuite
    être chargées depuis *Paramètres > Importer* (fichier d'export FineMe).
 
+### Mot de passe
+
+Le mot de passe se change dans *Paramètres > Mot de passe* ; les autres appareils sont alors déconnectés.
+Mot de passe perdu : lien *Mot de passe oublié* de l'écran de connexion, avec le **code de secours** =
+la valeur de `RECOVERY_TOKEN` générée par Render (onglet *Environment*). Sans cette variable, la récupération
+est désactivée. Toutes les sessions ouvertes sont fermées après une réinitialisation.
+
 L'offre gratuite de Render met l'API en veille après inactivité : la première requête peut prendre près d'une minute.
 
 ## Connexions bancaires

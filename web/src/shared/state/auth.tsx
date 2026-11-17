@@ -9,6 +9,8 @@ type AuthContextValue = {
   isAuthenticated: boolean
   user: User | null
   signIn: (result: AuthResult) => void
+  /** Remplace le jeton de la session en cours (après un changement de mot de passe), sans vider le cache. */
+  renewSession: (result: AuthResult) => void
   signOut: () => void
 }
 
@@ -16,6 +18,7 @@ const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
   user: null,
   signIn: () => {},
+  renewSession: () => {},
   signOut: () => {},
 })
 
@@ -50,15 +53,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.clear()
   }, [queryClient])
 
+  const renewSession = useCallback((result: AuthResult) => {
+    setToken(result.token)
+    storeUser(result.user)
+    setTokenState(result.token)
+    setUser(result.user)
+  }, [])
+
   const signIn = useCallback(
     (result: AuthResult) => {
       queryClient.clear()
-      setToken(result.token)
-      storeUser(result.user)
-      setTokenState(result.token)
-      setUser(result.user)
+      renewSession(result)
     },
-    [queryClient],
+    [queryClient, renewSession],
   )
 
   // Le client API vide le jeton sur un 401 ; on synchronise l'état pour revenir à la connexion.
@@ -68,8 +75,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [signOut])
 
   const value = useMemo(
-    () => ({ isAuthenticated: Boolean(token), user, signIn, signOut }),
-    [token, user, signIn, signOut],
+    () => ({ isAuthenticated: Boolean(token), user, signIn, renewSession, signOut }),
+    [token, user, signIn, renewSession, signOut],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

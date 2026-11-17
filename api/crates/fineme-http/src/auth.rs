@@ -32,7 +32,7 @@ pub async fn require_auth(
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
     let token = bearer_token(header_value).ok_or_else(ApiError::unauthenticated)?;
-    let user = app.auth.authenticate(token)?;
+    let user = app.auth.authenticate(token).await?;
     request.extensions_mut().insert(AuthUser(user));
     Ok(next.run(request).await)
 }

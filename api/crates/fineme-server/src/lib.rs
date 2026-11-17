@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use axum::Router;
+use fineme_application::auth::MIN_RECOVERY_TOKEN_LEN;
 use fineme_application::{App, Ports, Settings};
 use fineme_infra::clock::SystemClock;
 use fineme_infra::market::{self, CoinGecko, Frankfurter, YahooFinance};
@@ -14,7 +15,8 @@ use sqlx::PgPool;
 
 pub const DEFAULT_PORT: u16 = 8080;
 
-/// Configuration lue dans l'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT`, `SETUP_TOKEN`).
+/// Configuration lue dans l'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT`, `SETUP_TOKEN`,
+/// `RECOVERY_TOKEN`).
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
@@ -23,6 +25,15 @@ pub struct Config {
     pub port: u16,
     /// Code exigé pour la première configuration (`SETUP_TOKEN`) ; `None` si absent ou vide.
     pub setup_token: Option<String>,
+    /// Code de secours pour réinitialiser un mot de passe perdu (`RECOVERY_TOKEN`) ; `None` si absent ou vide.
+    pub recovery_token: Option<String>,
+}
+
+/// Code facultatif lu dans l'environnement : espaces retirés, vide = absent.
+fn optional_code(lookup: &impl Fn(&str) -> Option<String>, key: &str) -> Option<String> {
+    lookup(key)
+        .map(|code| code.trim().to_string())
+        .filter(|code| !code.is_empty())
 }
 
 impl Config {
@@ -31,6 +42,16 @@ impl Config {
     }
 
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
+        let recovery_token = optional_code(&lookup, "RECOVERY_TOKEN");
+        // La route de réinitialisation est publique : un code court se devinerait.
+        if recovery_token
+            .as_ref()
+            .is_some_and(|code| code.chars().count() < MIN_RECOVERY_TOKEN_LEN)
+        {
+            anyhow::bail!(
+                "RECOVERY_TOKEN doit contenir au moins {MIN_RECOVERY_TOKEN_LEN} caractères (ex. `openssl rand -hex 24`)"
+            );
+        }
         Ok(Self {
             database_url: lookup("DATABASE_URL").context("DATABASE_URL est requis")?,
             jwt_secret: lookup("JWT_SECRET")
@@ -40,9 +61,8 @@ impl Config {
             port: lookup("PORT")
                 .and_then(|port| port.parse().ok())
                 .unwrap_or(DEFAULT_PORT),
-            setup_token: lookup("SETUP_TOKEN")
-                .map(|token| token.trim().to_string())
-                .filter(|token| !token.is_empty()),
+            setup_token: optional_code(&lookup, "SETUP_TOKEN"),
+            recovery_token,
         })
     }
 }
@@ -111,8 +131,14 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     postgres::migrate(&pool).await?;
     tracing::info!("migrations appliquées");
 
+    if config.recovery_token.is_none() {
+        tracing::info!(
+            "RECOVERY_TOKEN non défini : la réinitialisation d'un mot de passe perdu est désactivée"
+        );
+    }
     let settings = Settings {
         setup_token: config.setup_token.clone(),
+        recovery_token: config.recovery_token.clone(),
     };
     let router = build_router(pool, &config.jwt_secret, &config.cors_origins, settings).await?;
     let address = SocketAddr::from(([0, 0, 0, 0], config.port));
@@ -172,6 +198,27 @@ mod tests {
                 .setup_token
                 .as_deref(),
             Some("code-fictif")
+        );
+    }
+
+    #[test]
+    fn recovery_token_is_optional_and_must_be_long_enough() {
+        let base = [("DATABASE_URL", "postgres://x"), ("JWT_SECRET", "secret")];
+        let read = |value: &'static str| {
+            Config::from_lookup(lookup(&[base[0], base[1], ("RECOVERY_TOKEN", value)]))
+        };
+        assert_eq!(
+            Config::from_lookup(lookup(&base)).unwrap().recovery_token,
+            None
+        );
+        assert_eq!(read("   ").unwrap().recovery_token, None);
+        assert!(read("trop-court-123").is_err());
+        assert_eq!(
+            read(" code-de-secours-fictif ")
+                .unwrap()
+                .recovery_token
+                .as_deref(),
+            Some("code-de-secours-fictif")
         );
     }
 
