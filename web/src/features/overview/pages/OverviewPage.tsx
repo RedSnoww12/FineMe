@@ -1,10 +1,21 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { Area, AreaChart, CartesianGrid, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  Area,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { useMembers, useOverview } from '@/shared/api/queries'
 import { useHistory } from '../hooks/useHistory'
 import type { HistoryRange, Overview } from '@/shared/api/types'
-import { AXIS_TICK, MoneyTooltip } from '@/shared/ui/charts'
+import { AXIS_TICK, MoneyTooltip, type TooltipProps } from '@/shared/ui/charts'
 import {
   Dot,
   EmptyState,
@@ -18,6 +29,7 @@ import {
   Stat,
 } from '@/shared/ui/ui'
 import { date, money, moneyCompact, pct, pctFromFraction } from '@/shared/lib/format'
+import { countEstimatedDays, fillMissingDays, type HistoryChartRow, toHistoryChartRows } from '@/shared/lib/history'
 import { CATEGORY_COLOR, envelopeLabel, SERIES_COLORS } from '@/shared/lib/labels'
 import { useView } from '@/shared/state/view'
 
@@ -28,10 +40,29 @@ const RANGES: { value: HistoryRange; label: string }[] = [
   { value: 'all', label: 'Tout' },
 ]
 
+/** Infobulle de l'historique : la valeur du jour, en précisant si elle est estimée. */
+function HistoryTooltip({ active, label, rows }: TooltipProps & { rows: ReadonlyMap<string, HistoryChartRow> }) {
+  const row = active ? rows.get(String(label)) : undefined
+  if (!row) return null
+  return (
+    <div className="rounded-[10px] border border-line bg-surface px-3 py-2 text-[13px] shadow-[0_6px_20px_rgb(0_0_0/0.14)]">
+      <div className="mb-1 font-medium">{date(row.date, 'long')}</div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-muted">Patrimoine net</span>
+        <span className="num font-medium">{money(row.net_worth)}</span>
+      </div>
+      {row.estimated ? <div className="mt-1 text-muted">Estimé : aucun instantané ce jour-là</div> : null}
+    </div>
+  )
+}
+
 function HistoryPanel() {
   const [range, setRange] = useState<HistoryRange>('3m')
   const history = useHistory(range)
-  const points = history.data?.points ?? []
+  const points = history.data?.points
+  const rows = useMemo(() => toHistoryChartRows(fillMissingDays(points ?? [])), [points])
+  const rowsByDate = useMemo(() => new Map(rows.map((row) => [row.date, row])), [rows])
+  const estimatedDays = countEstimatedDays(rows)
   const longRange = range === '1y' || range === 'all'
 
   return (
@@ -43,53 +74,80 @@ function HistoryPanel() {
         <Skeleton className="h-[240px]" />
       ) : history.isError ? (
         <ErrorState error={history.error} onRetry={() => void history.refetch()} />
-      ) : points.length < 2 ? (
+      ) : rows.length < 2 ? (
         <p className="py-8 text-muted">
-          L’historique se construit au fil du temps : FineMe enregistre un point à chaque jour où vous ouvrez la vue
-          d’ensemble. La courbe apparaîtra dès le deuxième jour.
+          L’historique se construit au fil du temps : FineMe enregistre chaque jour un point de votre patrimoine. La
+          courbe apparaîtra dès le deuxième jour.
         </p>
       ) : (
-        <div className="h-[240px] sm:h-[280px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={points} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
-              <defs>
-                <linearGradient id="net-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--c1)" stopOpacity={0.22} />
-                  <stop offset="100%" stopColor="var(--c1)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="var(--line)" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tickFormatter={(value: string) => (longRange ? date(value, 'month') : date(value).slice(0, 5))}
-                tick={AXIS_TICK}
-                tickLine={false}
-                axisLine={{ stroke: 'var(--line)' }}
-                minTickGap={40}
-              />
-              <YAxis
-                tickFormatter={(value: number) => moneyCompact(value)}
-                tick={AXIS_TICK}
-                tickLine={false}
-                axisLine={false}
-                width={62}
-                domain={['auto', 'auto']}
-              />
-              <Tooltip
-                content={(props) => <MoneyTooltip {...props} formatLabel={(label) => date(String(label), 'long')} />}
-              />
-              <Area
-                type="monotone"
-                dataKey="net_worth"
-                name="Patrimoine net"
-                stroke="var(--c1)"
-                strokeWidth={2}
-                fill="url(#net-fill)"
-                isAnimationActive={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+        <>
+          <div className="h-[240px] sm:h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={rows} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="net-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--c1)" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="var(--c1)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--line)" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(value: string) => (longRange ? date(value, 'month') : date(value).slice(0, 5))}
+                  tick={AXIS_TICK}
+                  tickLine={false}
+                  axisLine={{ stroke: 'var(--line)' }}
+                  minTickGap={40}
+                />
+                <YAxis
+                  tickFormatter={(value: number) => moneyCompact(value)}
+                  tick={AXIS_TICK}
+                  tickLine={false}
+                  axisLine={false}
+                  width={62}
+                  domain={['auto', 'auto']}
+                />
+                <Tooltip content={(props) => <HistoryTooltip {...props} rows={rowsByDate} />} />
+                <Area
+                  type="monotone"
+                  dataKey="net_worth"
+                  name="Patrimoine net"
+                  stroke="none"
+                  fill="url(#net-fill)"
+                  activeDot={false}
+                  isAnimationActive={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="measured"
+                  name="Patrimoine net"
+                  stroke="var(--c1)"
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="estimate"
+                  name="Patrimoine net estimé"
+                  stroke="var(--c1)"
+                  strokeWidth={2}
+                  strokeDasharray="4 4"
+                  strokeOpacity={0.7}
+                  dot={false}
+                  activeDot={false}
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          {estimatedDays > 0 ? (
+            <p className="mt-2 text-[13px] text-muted">
+              Pointillés : {estimatedDays === 1 ? '1 jour' : `${estimatedDays} jours`} sans instantané sur la période,
+              valeurs estimées entre les relevés qui les encadrent.
+            </p>
+          ) : null}
+        </>
       )}
     </Panel>
   )
