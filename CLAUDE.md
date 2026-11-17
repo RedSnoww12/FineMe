@@ -124,4 +124,9 @@ Messages de commit au format [Conventional Commits](https://www.conventionalcomm
 - Un commit = un changement cohérent ; un changement incompatible porte `!` et un pied `BREAKING CHANGE:`.
 - Exemples : `feat(api): exiger un code à la première configuration`, `fix(web): corriger le total des parts`.
 
+Une issue = une branche dédiée, créée depuis `main` avant de commencer : `<type>/<numéro>-<description-courte>`
+(type de Conventional Commits, description en minuscules sans accents, mots séparés par des tirets), par exemple
+`feat/21-rafraichissement-fiabilisation-cours` ou `fix/2-ci-startup-failure`. Les commits de la branche
+citent l'issue en pied (`Refs #21`) et la pull request la ferme (`Closes #21`).
+
 `make check` doit passer avant tout push.
