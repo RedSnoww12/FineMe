@@ -55,6 +55,7 @@ function HoldingsPanel({ account, onImport }: { account: AccountDetail; onImport
   const remove = useDeleteHolding(() => setDeleting(null))
   const refresh = useRefreshPrices(setRefreshed)
   const holdings = account.holdings
+  const staleCount = holdings.filter((holding) => holding.price_stale).length
 
   return (
     <Panel
@@ -100,6 +101,14 @@ function HoldingsPanel({ account, onImport }: { account: AccountDetail; onImport
             ) : null}
           </Notice>
         ) : null}
+        {staleCount > 0 ? (
+          <Notice>
+            {staleCount === 1
+              ? 'Un cours n’est plus mis à jour automatiquement depuis plusieurs jours : il est signalé « ancien ».'
+              : `${staleCount} cours ne sont plus mis à jour automatiquement depuis plusieurs jours : ils sont signalés « ancien ».`}{' '}
+            Actualisez les cours, ou vérifiez l’ISIN et le ticker de ces positions.
+          </Notice>
+        ) : null}
       </div>
 
       {holdings.length === 0 ? (
@@ -137,9 +146,17 @@ function HoldingsPanel({ account, onImport }: { account: AccountDetail; onImport
                   <td className="r">
                     {money(holding.current_price, { decimals: 2, currency: holding.currency })}
                     <div className="text-[12.5px] text-muted">
-                      {holding.price_source === 'auto' && holding.price_updated_at
-                        ? date(holding.price_updated_at)
+                      {holding.price_source === 'auto'
+                        ? holding.price_updated_at
+                          ? date(holding.price_updated_at)
+                          : 'auto'
                         : 'saisi'}
+                      {holding.price_stale ? (
+                        <>
+                          {' · '}
+                          <span className="font-medium text-neg">ancien</span>
+                        </>
+                      ) : null}
                     </div>
                   </td>
                   <td className="r font-medium">{money(holding.value)}</td>

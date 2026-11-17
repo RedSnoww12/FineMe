@@ -7,6 +7,7 @@ use crate::error::{AppError, AppResult};
 use crate::ports::{
     Clock, Credentials, PasswordHasher, TokenService, TokenSubject, UserRepository,
 };
+use crate::secret::code_matches;
 
 pub const MIN_PASSWORD_LEN: usize = 10;
 /// Longueur minimale du code de secours : la route de réinitialisation est publique.
@@ -19,27 +20,6 @@ const RECOVERY_DISABLED: &str =
     "La récupération du mot de passe n'est pas activée sur ce serveur (RECOVERY_TOKEN)";
 const WRONG_CURRENT_PASSWORD: &str = "Mot de passe actuel incorrect";
 const UNKNOWN_EMAIL: &str = "Aucun compte ne correspond à cette adresse e-mail";
-
-/// Comparaison en temps constant : la durée ne dépend pas de la position du premier octet différent.
-fn constant_time_eq(expected: &[u8], provided: &[u8]) -> bool {
-    let mut difference = expected.len() ^ provided.len();
-    for index in 0..expected.len().max(provided.len()) {
-        let (a, b) = (
-            expected.get(index).copied().unwrap_or(0),
-            provided.get(index).copied().unwrap_or(0),
-        );
-        difference |= usize::from(a ^ b);
-    }
-    difference == 0
-}
-
-/// Vrai si `provided` (espaces de début et de fin ignorés) correspond au code attendu.
-fn code_matches(expected: &str, provided: Option<&str>) -> bool {
-    constant_time_eq(
-        expected.as_bytes(),
-        provided.unwrap_or("").trim().as_bytes(),
-    )
-}
 
 fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
@@ -659,14 +639,5 @@ mod tests {
             Err(AppError::NotFound(_))
         ));
         assert_eq!(t.store.state().users[0].session_version, 0);
-    }
-
-    #[test]
-    fn constant_time_comparison_is_exact() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(constant_time_eq(b"", b""));
-        for other in [&b"abd"[..], b"ab", b"abcd", b"", b"ABC"] {
-            assert!(!constant_time_eq(b"abc", other));
-        }
     }
 }

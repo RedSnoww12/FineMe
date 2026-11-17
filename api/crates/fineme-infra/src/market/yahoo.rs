@@ -7,7 +7,7 @@ use fineme_domain::holding::HoldingKind;
 use fineme_domain::ids::HoldingId;
 use serde::Deserialize;
 
-use super::get_json;
+use super::{get_json, normalize_quote};
 
 /// Cours des titres via Yahoo Finance : recherche par ISIN ou ticker, puis dernier cours.
 /// Le cours est renvoyé dans la devise de cotation ; la conversion revient à l'appelant.
@@ -47,18 +47,6 @@ struct ChartResult {
 struct ChartMeta {
     currency: Option<String>,
     regular_market_price: Option<f64>,
-}
-
-/// Yahoo cote certaines places en centièmes (« GBp », « ZAc ») : ramène à l'unité principale.
-fn normalize_quote(price: f64, currency: &str) -> (f64, String) {
-    let upper = currency.to_ascii_uppercase();
-    if currency.len() == 3 && currency != upper {
-        (price / 100.0, upper)
-    } else if upper == "GBX" {
-        (price / 100.0, "GBP".to_string())
-    } else {
-        (price, upper)
-    }
 }
 
 /// Extrait (cours, devise) d'une réponse `v8/finance/chart`.
@@ -181,12 +169,5 @@ mod tests {
         assert_eq!((quote.price, quote.currency.as_str()), (356.27, "USD"));
         let empty = r#"{"chart":{"result":null,"error":{"code":"Not Found"}}}"#;
         assert!(parse_chart(serde_json::from_str(empty).unwrap()).is_none());
-    }
-
-    #[test]
-    fn normalizes_pence_quotes() {
-        assert_eq!(normalize_quote(1234.0, "GBp"), (12.34, "GBP".to_string()));
-        assert_eq!(normalize_quote(1234.0, "GBX"), (12.34, "GBP".to_string()));
-        assert_eq!(normalize_quote(50.0, "USD"), (50.0, "USD".to_string()));
     }
 }

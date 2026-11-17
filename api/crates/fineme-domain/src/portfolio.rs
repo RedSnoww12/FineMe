@@ -67,6 +67,18 @@ pub struct AccountView {
 pub struct HoldingView {
     pub holding: Holding,
     pub valuation: HoldingValuation,
+    /// Cours automatique qui n'est plus mis à jour (voir [`Holding::price_is_stale`]).
+    pub price_stale: bool,
+}
+
+impl HoldingView {
+    pub fn new(holding: Holding, rates: &FxRates, today: NaiveDate) -> Self {
+        Self {
+            valuation: holding.valuation(rates),
+            price_stale: holding.price_is_stale(today),
+            holding,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -255,10 +267,7 @@ impl Portfolio {
     pub fn holding_views(&self, account_id: AccountId) -> Vec<HoldingView> {
         self.holdings_of(account_id)
             .iter()
-            .map(|holding| HoldingView {
-                holding: holding.clone(),
-                valuation: holding.valuation(&self.rates),
-            })
+            .map(|holding| HoldingView::new(holding.clone(), &self.rates, self.today))
             .collect()
     }
 

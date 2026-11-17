@@ -44,7 +44,7 @@ fineme-domain        entités, value objects, règles métier pures (aucune E/S,
    ^
 fineme-application   cas d'usage + ports (traits) : repositories, PriceProvider, FxProvider, BankProvider, Clock, PasswordHasher, TokenService
    ^
-fineme-infra         adaptateurs sortants : Postgres (sqlx), Yahoo/CoinGecko/Frankfurter (reqwest), argon2, JWT
+fineme-infra         adaptateurs sortants : Postgres (sqlx), Yahoo/EODHD/CoinGecko/Frankfurter (reqwest), argon2, JWT
 fineme-http          adaptateur entrant : routes Axum, DTO JSON, extraction d'auth, mapping des erreurs
    ^
 fineme-server        binaire : configuration, composition root (câblage des adaptateurs), migrations
@@ -107,8 +107,10 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
 ## Sécurité et données
 
 - Données financières réelles : rien de personnel dans Git (ni fichiers de seed, ni captures, ni fixtures). Les fixtures de test sont fictives.
-- Secrets uniquement via variables d'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`) ; `.env.example` sans valeur réelle.
-- Mots de passe hashés en argon2id ; toute route hors `/api/health` et `/api/auth/{status,setup,login,reset}` exige le JWT.
+- Secrets uniquement via variables d'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `CRON_SECRET`,
+  `EODHD_API_KEY`) ; `.env.example` sans valeur réelle.
+- Mots de passe hashés en argon2id ; toute route hors `/api/health` et `/api/auth/{status,setup,login,reset}` exige le JWT,
+  sauf `/api/jobs/daily` (tâche planifiée) qui exige `CRON_SECRET` et refuse le JWT.
 - Le JWT porte la version de session de l'utilisateur : changer ou réinitialiser le mot de passe l'incrémente et
   invalide tous les jetons antérieurs. La réinitialisation exige `RECOVERY_TOKEN` (code de secours côté serveur).
 
@@ -121,5 +123,10 @@ Messages de commit au format [Conventional Commits](https://www.conventionalcomm
 - Portées : `api`, `web`, `e2e`, `docs`, `deploy` (omise si le changement est transversal).
 - Un commit = un changement cohérent ; un changement incompatible porte `!` et un pied `BREAKING CHANGE:`.
 - Exemples : `feat(api): exiger un code à la première configuration`, `fix(web): corriger le total des parts`.
+
+Une issue = une branche dédiée, créée depuis `main` avant de commencer : `<type>/<numéro>-<description-courte>`
+(type de Conventional Commits, description en minuscules sans accents, mots séparés par des tirets), par exemple
+`feat/21-rafraichissement-fiabilisation-cours` ou `fix/2-ci-startup-failure`. Les commits de la branche
+citent l'issue en pied (`Refs #21`) et la pull request la ferme (`Closes #21`).
 
 `make check` doit passer avant tout push.

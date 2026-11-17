@@ -4,8 +4,8 @@
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use fineme_application::ports::{
     AccountWrite, ConnectionRepository, Credentials, FxRateRepository, GoalRepository, ImportBatch,
-    ImportRepository, PortfolioRepository, RepoError, SnapshotRepository, TransactionRepository,
-    UserRepository,
+    ImportRepository, PortfolioRepository, PricePoint, RepoError, SnapshotRepository,
+    TransactionRepository, UserRepository,
 };
 use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::connection::{Connection, ConnectionStatus};
@@ -474,6 +474,68 @@ async fn holdings_are_saved_replaced_and_repriced() {
     let data = db.store.load().await.unwrap();
     assert_eq!(data.holdings.len(), 1);
     assert_eq!(data.accounts[0].updated_at, at(6));
+}
+
+#[tokio::test]
+async fn repricing_keeps_one_history_point_per_day_until_the_holding_is_deleted() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let pea = account(AccountKind::Investment, "PEA", &[(alice.id, 1.0)]);
+    save(&db, &pea).await;
+    let (etf, other) = (holding(pea.id, "ETF A"), holding(pea.id, "ETF B"));
+    db.store.save_holding(&etf, at(2)).await.unwrap();
+    db.store.save_holding(&other, at(2)).await.unwrap();
+
+    // Deux cours le 5 (le second l'emporte), un le 6 ; une position inconnue est ignorée.
+    for (price, day) in [(30.0, 5), (31.5, 5), (32.0, 6)] {
+        db.store
+            .update_prices(&[(etf.id, price), (HoldingId::generate(), 1.0)], at(day))
+            .await
+            .unwrap();
+    }
+    db.store
+        .update_prices(&[(other.id, 7.0)], at(6))
+        .await
+        .unwrap();
+    let usd = Currency::parse("USD").unwrap();
+    assert_eq!(
+        db.store
+            .price_history(etf.id, date(2026, 1, 1))
+            .await
+            .unwrap(),
+        vec![
+            PricePoint {
+                date: date(2026, 1, 5),
+                price: 31.5,
+                currency: usd.clone()
+            },
+            PricePoint {
+                date: date(2026, 1, 6),
+                price: 32.0,
+                currency: usd.clone()
+            },
+        ]
+    );
+    assert_eq!(
+        db.store
+            .price_history(etf.id, date(2026, 1, 6))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(count(&db, "price_history").await, 3);
+
+    // L'historique disparaît avec la position, pas celui des autres.
+    assert!(db.store.delete_holding(etf.id, at(7)).await.unwrap());
+    assert!(
+        db.store
+            .price_history(etf.id, date(2026, 1, 1))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(count(&db, "price_history").await, 1);
 }
 
 #[tokio::test]

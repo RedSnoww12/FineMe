@@ -48,6 +48,7 @@ impl Api {
             "secret-de-test-0123456789abcdef0123",
             ORIGIN,
             settings,
+            None,
         )
         .await
         .unwrap();
@@ -98,6 +99,16 @@ impl Api {
             None => request.body(Body::empty()),
         };
         let (status, _, body) = self.send(request.unwrap()).await;
+        (status, body)
+    }
+
+    /// Déclenche la tâche quotidienne avec ce secret (sans le jeton de session).
+    async fn daily(&self, secret: Option<&str>) -> (StatusCode, Value) {
+        let mut request = Request::builder().method("POST").uri("/api/jobs/daily");
+        if let Some(secret) = secret {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {secret}"));
+        }
+        let (status, _, body) = self.send(request.body(Body::empty()).unwrap()).await;
         (status, body)
     }
 
@@ -495,6 +506,56 @@ async fn lost_password_is_reset_with_the_recovery_token_only() {
 }
 
 #[tokio::test]
+async fn daily_job_requires_its_secret_and_records_todays_snapshot() {
+    const CRON: &str = "secret-quotidien-fictif-0123";
+
+    // Sans CRON_SECRET, la route existe mais la tâche est désactivée.
+    let (api, _, _) = Api::household().await;
+    assert_eq!(api.daily(Some(CRON)).await.0, StatusCode::NOT_IMPLEMENTED);
+
+    let mut api = Api::fresh_with(Settings {
+        cron_secret: Some(CRON.into()),
+        ..Settings::default()
+    })
+    .await;
+    let session = api
+        .post(
+            "/api/auth/setup",
+            json!({ "email": "alice@exemple.test", "password": PASSWORD, "name": "Alice" }),
+        )
+        .await;
+    api.token = session["token"].as_str().unwrap().to_string();
+    let alice = api.get("/api/members").await[0]["id"].clone();
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    api.post(
+        "/api/accounts",
+        json!({ "name": "Livret", "kind": "savings", "cash_balance": 1000, "owners": owners }),
+    )
+    .await;
+
+    // Le jeton de session ne remplace pas le secret, et un mauvais secret est refusé.
+    let session_token = api.token.clone();
+    for secret in [
+        None,
+        Some(session_token.as_str()),
+        Some("secret-quotidien-faux!"),
+    ] {
+        let (status, body) = api.daily(secret).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{secret:?}");
+        assert!(body["error"].is_string());
+    }
+    assert_eq!(api.get("/api/history").await, json!({ "points": [] }));
+
+    let (status, report) = api.daily(Some(CRON)).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["prices"], json!({ "updated": 0, "failed": [] }));
+    let points = api.get("/api/history").await["points"].clone();
+    assert_eq!(points.as_array().unwrap().len(), 1);
+    assert_eq!(points[0]["date"], report["snapshot_date"]);
+    assert!(close(&points[0]["net_worth"], 1000.0));
+}
+
+#[tokio::test]
 async fn error_responses_share_one_shape() {
     let (api, alice, _) = Api::household().await;
     assert_eq!(
@@ -786,6 +847,8 @@ async fn holdings_and_transactions_flow() {
             &json!("manual")
         )
     );
+    // Un cours saisi n'est jamais signalé comme ancien, et n'entre pas dans l'historique des cours.
+    assert_eq!(holding["price_stale"], false);
     assert!(
         close(&holding["value"], 2500.0)
             && close(&holding["gain"], 500.0)
@@ -793,6 +856,27 @@ async fn holdings_and_transactions_flow() {
     );
 
     let id = holding["id"].as_str().unwrap();
+    assert_eq!(
+        api.get(&format!("/api/holdings/{id}/prices?range=1y"))
+            .await,
+        json!({ "points": [] })
+    );
+    assert_eq!(
+        api.call("GET", &format!("/api/holdings/{id}/prices?range=5y"), None)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        api.call(
+            "GET",
+            "/api/holdings/00000000-0000-4000-8000-000000000000/prices",
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
     let (status, updated) = api
         .call(
             "PUT",

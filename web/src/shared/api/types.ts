@@ -65,6 +65,8 @@ export type Holding = {
   expense_ratio: number | null
   price_source: 'manual' | 'auto'
   price_updated_at: string | null
+  /** Cours automatique que le fournisseur ne met plus à jour (seuil fixé par l'API). */
+  price_stale: boolean
   value: number
   invested: number | null
   gain: number | null

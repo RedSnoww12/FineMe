@@ -7,7 +7,7 @@ use fineme_application::ports::{FxProvider, PriceProvider, ProviderError, Quote,
 use fineme_domain::fx::Currency;
 use fineme_domain::holding::HoldingKind;
 use fineme_domain::ids::HoldingId;
-use fineme_infra::market::{CoinGecko, Frankfurter, YahooFinance, http_client};
+use fineme_infra::market::{CoinGecko, Eodhd, Frankfurter, YahooFinance, http_client};
 use serde_json::json;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -345,4 +345,120 @@ async fn yahoo_reports_why_a_security_has_no_price() {
         "pas de cours pour VIDE sur Yahoo Finance"
     );
     assert_eq!(reason(&results, &throttled), "réponse HTTP 429");
+}
+
+// ---------------------------------------------------------------- EODHD (repli des titres)
+
+const EODHD_KEY: &str = "cle-fictive";
+
+fn eodhd_listing(
+    code: &str,
+    exchange: &str,
+    currency: &str,
+    isin: &str,
+    previous_close: serde_json::Value,
+) -> serde_json::Value {
+    json!({ "Code": code, "Exchange": exchange, "Name": "Titre Démo", "Type": "ETF", "Country": "France",
+            "Currency": currency, "ISIN": isin, "isPrimary": exchange == "PA",
+            "previousClose": previous_close, "previousCloseDate": "2026-01-02" })
+}
+
+#[tokio::test]
+async fn eodhd_finds_an_isin_and_uses_the_close_of_the_matching_listing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/LU0000000001"))
+        .and(query_param("api_token", EODHD_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            eodhd_listing("DEMO", "XETRA", "EUR", "LU0000000001", json!(10.6)),
+            eodhd_listing("DEMO", "PA", "EUR", "LU0000000001", json!(10.4)),
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = Eodhd::new(http_client().unwrap(), server.uri(), EODHD_KEY);
+    assert!(provider.handles(HoldingKind::Security) && !provider.handles(HoldingKind::Crypto));
+    let (paris, paris_again) = (
+        request(Some("LU0000000001"), Some("DEMO.PA"), "EUR"),
+        request(Some("LU0000000001"), Some("DEMO.PA"), "EUR"),
+    );
+    let results = provider.quotes(&[paris.clone(), paris_again.clone()]).await;
+    assert_eq!(price(&results, &paris), (10.4, "EUR".to_string()));
+    assert_eq!(price(&results, &paris_again), (10.4, "EUR".to_string()));
+}
+
+#[tokio::test]
+async fn eodhd_reads_the_last_close_when_the_search_has_none_and_normalizes_pence() {
+    let server = MockServer::start().await;
+    Mock::given(path("/search/DEMO"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!([eodhd_listing(
+                "DEMO",
+                "LSE",
+                "GBX",
+                "GB0000000003",
+                json!("NA")
+            ),])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/eod/DEMO.LSE"))
+        .and(query_param("filter", "last_close"))
+        .and(query_param("api_token", EODHD_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(1234.0)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = Eodhd::new(http_client().unwrap(), server.uri(), EODHD_KEY);
+    let london = request(None, Some("DEMO.L"), "GBP");
+    let results = provider.quotes(std::slice::from_ref(&london)).await;
+    assert_eq!(price(&results, &london), (12.34, "GBP".to_string()));
+}
+
+#[tokio::test]
+async fn eodhd_falls_back_from_isin_to_ticker_and_reports_failures() {
+    let server = MockServer::start().await;
+    Mock::given(path("/search/FR0000000009"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(path("/search/AUTRE"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!([eodhd_listing(
+                "AUTRE",
+                "US",
+                "USD",
+                "US0000000002",
+                json!(3.25)
+            ),])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/search/NOPE"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(path("/search/LIMIT"))
+        .respond_with(ResponseTemplate::new(402))
+        .mount(&server)
+        .await;
+    let provider = Eodhd::new(http_client().unwrap(), server.uri(), EODHD_KEY);
+    let (by_ticker, unknown, over_quota, nothing) = (
+        request(Some("FR0000000009"), Some("AUTRE"), "USD"),
+        request(None, Some("NOPE"), "EUR"),
+        request(None, Some("LIMIT"), "EUR"),
+        request(None, None, "EUR"),
+    );
+    let results = provider
+        .quotes(&[
+            by_ticker.clone(),
+            unknown.clone(),
+            over_quota.clone(),
+            nothing.clone(),
+        ])
+        .await;
+    assert_eq!(price(&results, &by_ticker), (3.25, "USD".to_string()));
+    assert_eq!(reason(&results, &unknown), "NOPE introuvable sur EODHD");
+    assert_eq!(reason(&results, &over_quota), "réponse HTTP 402");
+    assert_eq!(reason(&results, &nothing), "ni ISIN ni symbole");
 }

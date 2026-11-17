@@ -6,6 +6,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 - `web/` : React + Vite + TypeScript, hébergé sur Vercel.
 - Toutes les routes sont préfixées par `/api`. JSON partout, `snake_case`.
 - Auth : `Authorization: Bearer <JWT>` sur toutes les routes sauf `/api/health`, `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`, `/api/auth/reset`.
+  `/api/jobs/daily` n'accepte pas le JWT : elle exige `Authorization: Bearer <CRON_SECRET>` (voir « Tâche quotidienne »).
 - Montants : nombres JSON (f64). Devise de référence : EUR. Dates : `YYYY-MM-DD`. Identifiants : UUID.
 - Parts de détention : fraction `0..1` (0.5 = 50 %).
 - Erreurs : statut HTTP + `{ "error": "message lisible en français" }`.
@@ -13,7 +14,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 
 ## Variables d'environnement (api)
 
-`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte), `RECOVERY_TOKEN` (optionnel : code de secours qui permet de réinitialiser un mot de passe perdu ; absent = récupération désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer).
+`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte), `RECOVERY_TOKEN` (optionnel : code de secours qui permet de réinitialiser un mot de passe perdu ; absent = récupération désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `CRON_SECRET` (optionnel : secret de la tâche quotidienne `/api/jobs/daily` ; absent = tâche désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `EODHD_API_KEY` (optionnel : clé du fournisseur de cours de repli EODHD ; absente = pas de repli pour les titres).
 Les migrations sqlx s'exécutent au démarrage.
 
 ## Auth
@@ -113,6 +114,7 @@ type Holding = {
   expense_ratio: number | null; // frais courants annuels, fraction (0.002 = 0,2 %)
   price_source: "manual" | "auto";
   price_updated_at: string | null;
+  price_stale: boolean;        // true si le cours est automatique et date de plus de 4 jours (ou n'a pas de date)
   // calculés (EUR) :
   value: number; invested: number | null; gain: number | null; gain_pct: number | null;
 };
@@ -124,7 +126,13 @@ type Holding = {
 - DELETE `/api/holdings/:id` → 204
 - POST `/api/prices/refresh` → `{ updated: number, failed: { holding_id, name, reason }[] }`
   Best effort : crypto via CoinGecko (par `symbol`), titres via recherche ISIN/ticker sur Yahoo Finance,
-  taux de change via frankfurter.app. Un échec ne casse jamais la requête ; le prix manuel reste.
+  taux de change via frankfurter.app. Un titre que Yahoo ne cote pas est redemandé à EODHD (recherche par
+  ISIN ou ticker), si `EODHD_API_KEY` est défini. Un échec ne casse jamais la requête ; le prix existant reste.
+  `reason` réunit les raisons de chaque fournisseur essayé, séparées par « ; ».
+  Chaque cours récupéré est aussi enregistré dans l'historique des cours (un point par position et par jour,
+  le dernier du jour l'emporte).
+- GET `/api/holdings/:id/prices?range=1m|3m|1y|all` → `{ points: [{ date, price, currency }] }` (du plus ancien
+  au plus récent ; cours récupérés automatiquement uniquement ; 404 si la position n'existe pas)
 - GET `/api/fx` → `{ base: "EUR", rates: { "USD": 1.10, ... }, updated_at }` (rates = unités de devise pour 1 EUR)
 
 ## Transactions (import CSV / agrégateur)
@@ -194,8 +202,18 @@ GET `/api/overview` →
 ```
 GET `/api/history?range=1m|3m|1y|all` → `{ points: [{ date, gross_assets, liabilities, net_worth }] }`
 
-Un instantané du jour (foyer + chaque membre) est enregistré/mis à jour à chaque appel de `/api/overview`.
-`/api/history` respecte `member_id`.
+Un instantané du jour (foyer + chaque membre) est enregistré/mis à jour à chaque appel de `/api/overview`
+et par la tâche quotidienne. `/api/history` respecte `member_id`.
+
+## Tâche quotidienne
+
+POST `/api/jobs/daily`, en-tête `Authorization: Bearer <CRON_SECRET>`, sans corps →
+`{ prices: { updated, failed: { holding_id, name, reason }[] }, snapshot_date: "YYYY-MM-DD" }`
+
+Rafraîchit les taux et les cours (comme `/api/prices/refresh`), puis enregistre l'instantané du jour (foyer + chaque
+membre). Appelée chaque matin par un planificateur externe (workflow GitHub Actions `daily.yml`). Idempotente :
+un second appel le même jour remplace les cours et l'instantané du jour.
+- (501) si `CRON_SECRET` n'est pas défini ; (403) si le secret est absent ou différent (comparaison en temps constant).
 
 ## Objectifs
 

@@ -1,7 +1,7 @@
 //! Routes de l'API : chaque handler traduit la requête en appel de cas d'usage puis la réponse en JSON.
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::{delete, get, post, put};
 use axum::{Extension, Router, middleware};
 use fineme_application::auth::Session;
@@ -11,11 +11,11 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::auth::{AuthUser, require_auth};
+use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
     AccountBody, BundleBody, ConnectionBody, GoalBody, HistoryQuery, HoldingBody, HoldingsBulkBody,
-    LoginBody, MemberBody, PageQuery, PasswordChangeBody, PasswordResetBody, SetupBody,
+    LoginBody, MemberBody, PageQuery, PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody,
     TransactionsBulkBody, ViewQuery,
 };
 use crate::output;
@@ -37,7 +37,9 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/auth/status", get(auth_status))
         .route("/auth/setup", post(auth_setup))
         .route("/auth/login", post(auth_login))
-        .route("/auth/reset", post(auth_reset));
+        .route("/auth/reset", post(auth_reset))
+        // Protégée par CRON_SECRET et non par le JWT : appelée par un planificateur, sans session.
+        .route("/jobs/daily", post(jobs_daily));
 
     let protected = Router::new()
         .route("/auth/me", get(auth_me))
@@ -57,6 +59,7 @@ pub fn api(app: AppState) -> Router<AppState> {
             "/holdings/{id}",
             put(holdings_update).delete(holdings_delete),
         )
+        .route("/holdings/{id}/prices", get(holdings_prices))
         .route("/prices/refresh", post(prices_refresh))
         .route("/fx", get(fx))
         .route("/accounts/{id}/transactions", get(transactions_list))
@@ -287,14 +290,29 @@ async fn holdings_delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn holdings_prices(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<RangeQuery>,
+) -> JsonResponse {
+    ok(output::price_history(
+        &app.prices.history(id, query.range.as_deref()).await?,
+    ))
+}
+
 async fn prices_refresh(State(app): State<AppState>) -> JsonResponse {
-    let report = app.prices.refresh().await?;
-    ok(json!({
-        "updated": report.updated,
-        "failed": report.failed.iter().map(|f| json!({
-            "holding_id": f.holding_id.as_uuid(), "name": f.name, "reason": f.reason,
-        })).collect::<Vec<_>>(),
-    }))
+    ok(output::refresh_report(&app.prices.refresh().await?))
+}
+
+// ---------------------------------------------------------------- tâche quotidienne
+
+async fn jobs_daily(State(app): State<AppState>, headers: HeaderMap) -> JsonResponse {
+    let secret = bearer_token(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+    );
+    ok(output::daily_report(&app.run_daily(secret).await?))
 }
 
 async fn fx(State(app): State<AppState>) -> JsonResponse {

@@ -7,6 +7,7 @@ pub mod auth;
 pub mod bundle;
 pub mod commands;
 pub mod connections;
+pub mod daily;
 pub mod error;
 pub mod goals;
 pub mod holdings;
@@ -16,6 +17,7 @@ pub mod ports;
 pub mod prices;
 pub mod reader;
 pub mod real_estate;
+mod secret;
 pub mod transactions;
 
 #[cfg(test)]

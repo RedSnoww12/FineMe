@@ -47,6 +47,8 @@ pub struct Settings {
     pub setup_token: Option<String>,
     /// Code de secours pour réinitialiser un mot de passe perdu ; `None` ou vide = récupération désactivée.
     pub recovery_token: Option<String>,
+    /// Secret exigé par la tâche quotidienne ; `None` ou vide = tâche désactivée.
+    pub cron_secret: Option<String>,
 }
 
 /// Code facultatif : espaces retirés, vide = absent.
@@ -68,6 +70,8 @@ pub struct App {
     pub connections: ConnectionService,
     pub bundle: BundleService,
     pub prices: PriceService,
+    /// Secret de la tâche quotidienne (voir `daily`).
+    pub(crate) cron_secret: Option<String>,
 }
 
 impl App {
@@ -140,6 +144,7 @@ impl App {
                 price_providers: ports.price_providers,
                 clock: ports.clock,
             },
+            cron_secret: non_blank(settings.cron_secret),
         })
     }
 }

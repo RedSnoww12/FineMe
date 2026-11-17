@@ -15,5 +15,9 @@ services:
         generateValue: true # code demandé à la première configuration, à lire dans Render
       - key: RECOVERY_TOKEN
         generateValue: true # code de secours pour réinitialiser un mot de passe perdu, à lire dans Render
+      - key: CRON_SECRET
+        generateValue: true # secret de la tâche quotidienne, à recopier dans le secret GitHub CRON_SECRET
+      - key: EODHD_API_KEY
+        sync: false # optionnel : clé gratuite eodhd.com, fournisseur de cours de repli pour les titres
       - key: CORS_ORIGINS
         sync: false # URL Vercel du front, ex. https://fineme.vercel.app

@@ -33,6 +33,7 @@ pub struct State {
     pub holdings: Vec<Holding>,
     pub transactions: Vec<Transaction>,
     pub snapshots: Vec<(NaiveDate, Option<MemberId>, Totals)>,
+    pub price_history: Vec<(HoldingId, PricePoint)>,
     pub goals: Vec<Goal>,
     pub connections: Vec<Connection>,
     pub rates: Vec<(Currency, f64)>,
@@ -269,14 +270,40 @@ impl PortfolioRepository for InMemoryStore {
         if state.fail_price_updates {
             return Err(RepoError::Backend("panne simulée".into()));
         }
+        let date = at.date_naive();
         for (id, price) in prices {
-            if let Some(holding) = state.holdings.iter_mut().find(|holding| holding.id == *id) {
-                holding.current_price = *price;
-                holding.price_source = PriceSource::Auto;
-                holding.price_updated_at = Some(at);
-            }
+            let Some(holding) = state.holdings.iter_mut().find(|holding| holding.id == *id) else {
+                continue;
+            };
+            holding.current_price = *price;
+            holding.price_source = PriceSource::Auto;
+            holding.price_updated_at = Some(at);
+            let point = PricePoint {
+                date,
+                price: *price,
+                currency: holding.currency.clone(),
+            };
+            state
+                .price_history
+                .retain(|(holding, existing)| !(holding == id && existing.date == date));
+            state.price_history.push((*id, point));
         }
         Ok(())
+    }
+    async fn price_history(
+        &self,
+        holding: HoldingId,
+        from: NaiveDate,
+    ) -> RepoResult<Vec<PricePoint>> {
+        let mut points: Vec<PricePoint> = self
+            .lock()
+            .price_history
+            .iter()
+            .filter(|(id, point)| *id == holding && point.date >= from)
+            .map(|(_, point)| point.clone())
+            .collect();
+        points.sort_by_key(|point| point.date);
+        Ok(points)
     }
 }
 
@@ -571,10 +598,11 @@ impl FxProvider for FakeFx {
     }
 }
 
-/// Fournisseur de cours indexé par symbole, pour un type de position.
+/// Fournisseur de cours indexé par symbole, pour un type de position. Retient les symboles demandés.
 pub struct FakePrices {
     kind: HoldingKind,
     quotes: Mutex<HashMap<String, (f64, String)>>,
+    requested: Mutex<Vec<String>>,
 }
 
 impl FakePrices {
@@ -582,7 +610,12 @@ impl FakePrices {
         Self {
             kind,
             quotes: Mutex::new(HashMap::new()),
+            requested: Mutex::new(Vec::new()),
         }
+    }
+    /// Symboles demandés à ce fournisseur, dans l'ordre.
+    pub fn requested(&self) -> Vec<String> {
+        self.requested.lock().unwrap().clone()
     }
     pub fn set(&self, symbol: &str, price: f64, currency: &str) {
         self.quotes
@@ -601,6 +634,10 @@ impl PriceProvider for FakePrices {
         &self,
         requests: &[QuoteRequest],
     ) -> HashMap<HoldingId, Result<Quote, ProviderError>> {
+        self.requested
+            .lock()
+            .unwrap()
+            .extend(requests.iter().filter_map(|r| r.symbol.clone()));
         let quotes = self.quotes.lock().unwrap();
         requests
             .iter()
@@ -680,6 +717,8 @@ pub struct TestApp {
     pub hasher: Arc<FakeHasher>,
     pub fx: Arc<FakeFx>,
     pub securities: Arc<FakePrices>,
+    /// Fournisseur de repli pour les titres, essayé après `securities`.
+    pub fallback: Arc<FakePrices>,
     pub crypto: Arc<FakePrices>,
     pub alice: MemberId,
     pub bob: MemberId,
@@ -692,6 +731,7 @@ impl TestApp {
         let hasher = Arc::new(FakeHasher::default());
         let fx = Arc::new(FakeFx(Mutex::new(Ok(Vec::new()))));
         let securities = Arc::new(FakePrices::new(HoldingKind::Security));
+        let fallback = Arc::new(FakePrices::new(HoldingKind::Security));
         let crypto = Arc::new(FakePrices::new(HoldingKind::Crypto));
         let (alice, bob) = (MemberId::generate(), MemberId::generate());
         if with_household {
@@ -722,7 +762,7 @@ impl TestApp {
             hasher: hasher.clone(),
             tokens: Arc::new(FakeTokens),
             fx_provider: fx.clone(),
-            price_providers: vec![crypto.clone(), securities.clone()],
+            price_providers: vec![crypto.clone(), securities.clone(), fallback.clone()],
             bank_providers: bank
                 .into_iter()
                 .map(|b| Arc::new(b) as Arc<dyn BankProvider>)
@@ -736,6 +776,7 @@ impl TestApp {
             hasher,
             fx,
             securities,
+            fallback,
             crypto,
             alice,
             bob,
@@ -763,6 +804,15 @@ impl TestApp {
             ..Settings::default()
         };
         Self::build(false, None, settings).await
+    }
+
+    /// Foyer fictif dont la tâche quotidienne exige ce secret.
+    pub async fn with_cron_secret(secret: &str) -> Self {
+        let settings = Settings {
+            cron_secret: Some(secret.to_string()),
+            ..Settings::default()
+        };
+        Self::build(true, None, settings).await
     }
 
     /// Foyer fictif : Alice (membre principal) et Bob.
