@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 import { api } from '@/shared/api/endpoints'
 import { useApiMutation } from '@/shared/api/queries'
-import type { Bundle, ImportResult, MemberInput } from '@/shared/api/types'
+import type { AuthResult, Bundle, ImportResult, MemberInput } from '@/shared/api/types'
 
 /** Crée le membre, ou le met à jour quand `memberId` est fourni. */
 export function useSaveMember(memberId: string | undefined, onSuccess: () => void) {
@@ -21,4 +21,8 @@ export function useExportBundle(onSuccess: (bundle: Bundle) => void) {
 
 export function useImportBundle(onSuccess: (result: ImportResult) => void) {
   return useApiMutation((bundle: Bundle) => api.importBundle(bundle), onSuccess)
+}
+
+export function useChangePassword(onSuccess: (result: AuthResult) => void) {
+  return useMutation({ mutationFn: api.changePassword, onSuccess })
 }

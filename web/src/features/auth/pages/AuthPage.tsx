@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router'
-import { useAuthStatus, useLogin, useSetup } from '../hooks/useAuthApi'
+import { useAuthStatus, useLogin, useResetPassword, useSetup } from '../hooks/useAuthApi'
+import { MIN_PASSWORD_LENGTH, newPasswordErrors } from '@/shared/lib/password'
 import { Logo } from '@/shared/ui/Icon'
 import { Button, ErrorState, FormError, Skeleton, TextField } from '@/shared/ui/ui'
 import { useAuth } from '@/shared/state/auth'
@@ -19,8 +20,7 @@ function SetupForm({ tokenRequired }: { tokenRequired: boolean }) {
     const next: typeof errors = {}
     if (!form.name.trim()) next.name = 'Indiquez votre prénom ou votre nom.'
     if (!EMAIL.test(form.email.trim())) next.email = 'Saisissez une adresse e-mail valide.'
-    if (form.password.length < 10) next.password = 'Le mot de passe doit contenir au moins 10 caractères.'
-    if (form.confirm !== form.password) next.confirm = 'Les deux mots de passe ne correspondent pas.'
+    Object.assign(next, newPasswordErrors(form.password, form.confirm))
     if (tokenRequired && !form.setupToken.trim()) next.setupToken = 'Saisissez le code de configuration.'
     setErrors(next)
     if (Object.keys(next).length > 0) return
@@ -57,7 +57,7 @@ function SetupForm({ tokenRequired }: { tokenRequired: boolean }) {
         value={form.password}
         onChange={set('password')}
         error={errors.password}
-        hint="10 caractères minimum."
+        hint={`${MIN_PASSWORD_LENGTH} caractères minimum.`}
         autoComplete="new-password"
       />
       <TextField
@@ -87,7 +87,8 @@ function SetupForm({ tokenRequired }: { tokenRequired: boolean }) {
   )
 }
 
-function LoginForm() {
+/** `onForgot` absent : la récupération n'est pas activée sur le serveur, le lien est masqué. */
+function LoginForm({ onForgot }: { onForgot?: () => void }) {
   const { signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -127,6 +128,85 @@ function LoginForm() {
       <Button type="submit" variant="primary" busy={mutation.isPending}>
         Se connecter
       </Button>
+      {onForgot ? (
+        <Button variant="ghost" onClick={onForgot}>
+          Mot de passe oublié ?
+        </Button>
+      ) : null}
+    </form>
+  )
+}
+
+function ResetForm({ onBack }: { onBack: () => void }) {
+  const { signIn } = useAuth()
+  const [form, setForm] = useState({ email: '', recoveryToken: '', password: '', confirm: '' })
+  const [errors, setErrors] = useState<Partial<Record<keyof typeof form, string>>>({})
+  const mutation = useResetPassword(signIn)
+  const set = (key: keyof typeof form) => (value: string) => setForm((f) => ({ ...f, [key]: value }))
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    const next: typeof errors = newPasswordErrors(form.password, form.confirm)
+    if (!EMAIL.test(form.email.trim())) next.email = 'Saisissez une adresse e-mail valide.'
+    if (!form.recoveryToken.trim()) next.recoveryToken = 'Saisissez le code de secours.'
+    setErrors(next)
+    if (Object.keys(next).length > 0) return
+    mutation.mutate({
+      email: form.email.trim(),
+      recovery_token: form.recoveryToken.trim(),
+      new_password: form.password,
+    })
+  }
+
+  return (
+    <form onSubmit={submit} noValidate className="flex flex-col gap-4">
+      <div>
+        <h1 className="text-[26px] font-semibold">Mot de passe oublié</h1>
+        <p className="mt-1.5 text-muted">
+          Choisissez un nouveau mot de passe à l’aide du code de secours. Toutes les sessions ouvertes seront fermées.
+        </p>
+      </div>
+      <TextField
+        label="Adresse e-mail"
+        type="email"
+        value={form.email}
+        onChange={set('email')}
+        error={errors.email}
+        autoComplete="email"
+      />
+      <TextField
+        label="Code de secours"
+        type="password"
+        value={form.recoveryToken}
+        onChange={set('recoveryToken')}
+        error={errors.recoveryToken}
+        hint="La valeur de RECOVERY_TOKEN définie sur le serveur, visible dans le tableau de bord de l’hébergeur."
+        autoComplete="off"
+      />
+      <TextField
+        label="Nouveau mot de passe"
+        type="password"
+        value={form.password}
+        onChange={set('password')}
+        error={errors.password}
+        hint={`${MIN_PASSWORD_LENGTH} caractères minimum.`}
+        autoComplete="new-password"
+      />
+      <TextField
+        label="Confirmez le nouveau mot de passe"
+        type="password"
+        value={form.confirm}
+        onChange={set('confirm')}
+        error={errors.confirm}
+        autoComplete="new-password"
+      />
+      <FormError error={mutation.error} />
+      <Button type="submit" variant="primary" busy={mutation.isPending}>
+        Réinitialiser le mot de passe
+      </Button>
+      <Button variant="ghost" onClick={onBack}>
+        Retour à la connexion
+      </Button>
     </form>
   )
 }
@@ -153,6 +233,7 @@ export default function AuthPage() {
   const { isAuthenticated } = useAuth()
   const location = useLocation()
   const status = useAuthStatus()
+  const [resetting, setResetting] = useState(false)
 
   if (isAuthenticated) {
     const from = (location.state as { from?: string } | null)?.from
@@ -185,8 +266,10 @@ export default function AuthPage() {
           <ErrorState error={status.error} onRetry={() => void status.refetch()} />
         ) : status.data.setup_required ? (
           <SetupForm tokenRequired={status.data.setup_token_required === true} />
+        ) : resetting && status.data.recovery_enabled === true ? (
+          <ResetForm onBack={() => setResetting(false)} />
         ) : (
-          <LoginForm />
+          <LoginForm onForgot={status.data.recovery_enabled === true ? () => setResetting(true) : undefined} />
         )}
       </div>
     </div>

@@ -213,3 +213,79 @@ describe('code de configuration', () => {
     expect(localStorage.getItem('fineme.token')).toBeNull()
   })
 })
+
+describe('mot de passe oublié', () => {
+  const RECOVERY = 'code-de-secours-fictif'
+
+  async function openResetForm(actor: ReturnType<typeof renderApp>['user']) {
+    await actor.click(await screen.findByRole('button', { name: 'Mot de passe oublié ?' }))
+    expect(screen.getByRole('heading', { name: 'Mot de passe oublié' })).toBeInTheDocument()
+  }
+
+  async function fillResetForm(actor: ReturnType<typeof renderApp>['user'], code = RECOVERY) {
+    await actor.type(screen.getByLabelText('Adresse e-mail'), user.email)
+    await actor.type(screen.getByLabelText('Code de secours'), code)
+    await actor.type(screen.getByLabelText('Nouveau mot de passe'), PASSWORD)
+    await actor.type(screen.getByLabelText('Confirmez le nouveau mot de passe'), PASSWORD)
+    await actor.click(screen.getByRole('button', { name: 'Réinitialiser le mot de passe' }))
+  }
+
+  it.each([
+    ['false', { setup_required: false, recovery_enabled: false }],
+    ['absent de la réponse', { setup_required: false }],
+  ])('masque le lien quand recovery_enabled est %s', async (_case, status) => {
+    mockJson('get', '/api/auth/status', status)
+    renderApp('/connexion', { authenticated: false })
+    expect(await screen.findByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Mot de passe oublié ?' })).not.toBeInTheDocument()
+  })
+
+  it('valide la saisie avant tout envoi et permet de revenir à la connexion', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false, recovery_enabled: true })
+    const calls = spyOn('post', '/api/auth/reset')
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await openResetForm(actor)
+
+    expect(screen.getByLabelText('Code de secours')).toHaveAccessibleDescription(/RECOVERY_TOKEN/)
+    await actor.click(screen.getByRole('button', { name: 'Réinitialiser le mot de passe' }))
+    expect(screen.getByText('Saisissez une adresse e-mail valide.')).toBeInTheDocument()
+    expect(screen.getByText('Saisissez le code de secours.')).toBeInTheDocument()
+    expect(screen.getByText('Le mot de passe doit contenir au moins 10 caractères.')).toBeInTheDocument()
+    expect(calls.count).toBe(0)
+
+    await actor.click(screen.getByRole('button', { name: 'Retour à la connexion' }))
+    expect(screen.getByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
+  })
+
+  it('réinitialise le mot de passe, ouvre la session et la vue d’ensemble', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false, recovery_enabled: true })
+    let received: unknown
+    server.use(
+      http.post(`${API}/api/auth/reset`, async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ token: 'jeton-reset', user })
+      }),
+    )
+    mockShell()
+    mockOverviewScreen(buildOverview())
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await openResetForm(actor)
+    await fillResetForm(actor, ` ${RECOVERY} `)
+
+    expect(await screen.findByRole('heading', { name: 'Vue d’ensemble' })).toBeInTheDocument()
+    expect(received).toEqual({ email: user.email, recovery_token: RECOVERY, new_password: PASSWORD })
+    expect(localStorage.getItem('fineme.token')).toBe('jeton-reset')
+  })
+
+  it('affiche le message de l’API quand le code est refusé', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false, recovery_enabled: true })
+    mockApiError('post', '/api/auth/reset', 403, 'Code de secours invalide ou manquant')
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await openResetForm(actor)
+    await fillResetForm(actor, 'mauvais-code')
+
+    expect(await screen.findByText('Code de secours invalide ou manquant')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Mot de passe oublié' })).toBeInTheDocument()
+    expect(localStorage.getItem('fineme.token')).toBeNull()
+  })
+})

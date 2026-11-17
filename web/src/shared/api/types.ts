@@ -1,10 +1,12 @@
 // Types du contrat docs/API.md. Toute divergence front ↔ back se corrige ici.
 
 export type User = { id: string; email: string; name: string }
-/** `setup_token_required` peut manquer sur une API plus ancienne : absent = false. */
-export type AuthStatus = { setup_required: boolean; setup_token_required?: boolean }
+/** `setup_token_required` et `recovery_enabled` peuvent manquer sur une API plus ancienne : absent = false. */
+export type AuthStatus = { setup_required: boolean; setup_token_required?: boolean; recovery_enabled?: boolean }
 export type SetupInput = { email: string; password: string; name: string; setup_token?: string }
 export type AuthResult = { token: string; user: User }
+export type PasswordChangeInput = { current_password: string; new_password: string }
+export type PasswordResetInput = { email: string; recovery_token: string; new_password: string }
 
 export type Member = { id: string; name: string; color: string; is_primary: boolean }
 export type MemberInput = { name: string; color?: string }

@@ -1,6 +1,12 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useMembers } from '@/shared/api/queries'
-import { useDeleteMember, useExportBundle, useImportBundle, useSaveMember } from '../hooks/useSettingsApi'
+import {
+  useChangePassword,
+  useDeleteMember,
+  useExportBundle,
+  useImportBundle,
+  useSaveMember,
+} from '../hooks/useSettingsApi'
 import type { Bundle, ImportResult, Member } from '@/shared/api/types'
 import {
   Badge,
@@ -20,6 +26,7 @@ import {
 } from '@/shared/ui/ui'
 import { todayIso } from '@/shared/lib/format'
 import { MEMBER_COLORS } from '@/shared/lib/labels'
+import { MIN_PASSWORD_LENGTH, newPasswordErrors } from '@/shared/lib/password'
 import { useAuth } from '@/shared/state/auth'
 import { useTheme, type ThemeChoice } from '@/shared/state/theme'
 
@@ -278,6 +285,79 @@ function DataPanel() {
   )
 }
 
+const EMPTY_PASSWORD_FORM = { current: '', password: '', confirm: '' }
+
+function PasswordPanel() {
+  const { renewSession } = useAuth()
+  const [form, setForm] = useState(EMPTY_PASSWORD_FORM)
+  const [errors, setErrors] = useState<Partial<Record<keyof typeof form, string>>>({})
+  const [changed, setChanged] = useState(false)
+  const mutation = useChangePassword((result) => {
+    // Le serveur a fermé toutes les sessions : ce nouveau jeton garde cet appareil connecté.
+    renewSession(result)
+    setForm(EMPTY_PASSWORD_FORM)
+    setChanged(true)
+  })
+  const set = (key: keyof typeof form) => (value: string) => {
+    setChanged(false)
+    setForm((f) => ({ ...f, [key]: value }))
+  }
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    const next: typeof errors = newPasswordErrors(form.password, form.confirm)
+    if (!form.current) next.current = 'Saisissez votre mot de passe actuel.'
+    else if (!next.password && form.password === form.current) {
+      next.password = 'Le nouveau mot de passe doit être différent de l’actuel.'
+    }
+    setErrors(next)
+    if (Object.keys(next).length > 0) return
+    mutation.mutate({ current_password: form.current, new_password: form.password })
+  }
+
+  return (
+    <Panel title="Mot de passe">
+      <form onSubmit={submit} noValidate className="flex max-w-[420px] flex-col gap-4">
+        <p className="text-muted">Après le changement, les autres appareils devront se reconnecter.</p>
+        <TextField
+          label="Mot de passe actuel"
+          type="password"
+          value={form.current}
+          onChange={set('current')}
+          error={errors.current}
+          autoComplete="current-password"
+        />
+        <TextField
+          label="Nouveau mot de passe"
+          type="password"
+          value={form.password}
+          onChange={set('password')}
+          error={errors.password}
+          hint={`${MIN_PASSWORD_LENGTH} caractères minimum.`}
+          autoComplete="new-password"
+        />
+        <TextField
+          label="Confirmez le nouveau mot de passe"
+          type="password"
+          value={form.confirm}
+          onChange={set('confirm')}
+          error={errors.confirm}
+          autoComplete="new-password"
+        />
+        <FormError error={mutation.error} />
+        {changed ? (
+          <Notice tone="pos">Mot de passe modifié. Les autres appareils ont été déconnectés.</Notice>
+        ) : null}
+        <div>
+          <Button type="submit" variant="primary" busy={mutation.isPending}>
+            Changer le mot de passe
+          </Button>
+        </div>
+      </form>
+    </Panel>
+  )
+}
+
 export default function SettingsPage() {
   const { user, signOut } = useAuth()
   const { theme, setTheme } = useTheme()
@@ -300,6 +380,7 @@ export default function SettingsPage() {
             ]}
           />
         </Panel>
+        <PasswordPanel />
         <Panel title="Session">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-muted">
