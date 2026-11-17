@@ -132,6 +132,26 @@ pub struct Overview {
     pub weighted_expense_ratio: Option<f64>,
 }
 
+/// Ligne d'instantané : valeur d'un compte détenue dans une vue, à une date.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountSnapshot {
+    pub account_id: AccountId,
+    /// Nom au jour de l'instantané : l'historique survit au renommage et à la suppression.
+    pub name: String,
+    pub kind: AccountKind,
+    /// Valeur détenue en EUR, positive y compris pour un prêt.
+    pub value: f64,
+    /// Plus-value latente détenue des positions au PRU connu ; `None` si aucune.
+    pub gain: Option<f64>,
+}
+
+/// Photographie d'une vue : totaux et détail par compte.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub totals: Totals,
+    pub accounts: Vec<AccountSnapshot>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkedLoan {
     pub name: String,
@@ -311,6 +331,40 @@ impl Portfolio {
             .map(|account| self.owned_value(account, View::Household))
             .sum();
         sum + 0.0 // une somme vide vaut -0.0
+    }
+
+    /// Plus-value latente (100 %) des positions dont le PRU est connu ; `None` si aucune.
+    fn holdings_gain(&self, account: &Account) -> Option<f64> {
+        if !account.kind.can_hold_positions() {
+            return None;
+        }
+        let gains: Vec<f64> = self
+            .holdings_of(account.id)
+            .iter()
+            .filter_map(|holding| holding.valuation(&self.rates).gain)
+            .collect();
+        (!gains.is_empty()).then(|| gains.iter().sum())
+    }
+
+    /// Instantané d'une vue : totaux et valeur détenue de chaque compte de la vue.
+    pub fn snapshot(&self, view: View) -> Snapshot {
+        let accounts = self
+            .accounts_in_view(view)
+            .map(|account| {
+                let fraction = account.owners.fraction(view);
+                AccountSnapshot {
+                    account_id: account.id,
+                    name: account.name.clone(),
+                    kind: account.kind,
+                    value: self.valuation(account).value * fraction,
+                    gain: self.holdings_gain(account).map(|gain| gain * fraction),
+                }
+            })
+            .collect();
+        Snapshot {
+            totals: self.totals(view),
+            accounts,
+        }
     }
 
     pub fn overview(&self, view: View) -> Overview {
@@ -629,6 +683,71 @@ mod tests {
             a.net_worth + b.net_worth,
             f.portfolio.totals(View::Household).net_worth
         ));
+    }
+
+    fn line(snapshot: &Snapshot, id: AccountId) -> &AccountSnapshot {
+        snapshot
+            .accounts
+            .iter()
+            .find(|line| line.account_id == id)
+            .unwrap()
+    }
+
+    #[test]
+    fn household_snapshot_details_every_account_consistently_with_totals() {
+        let f = fixture();
+        let s = f.portfolio.snapshot(View::Household);
+        assert_eq!(s.totals, f.portfolio.totals(View::Household));
+        assert_eq!(s.accounts.len(), 4);
+        let assets: f64 = s
+            .accounts
+            .iter()
+            .filter(|l| !l.kind.is_liability())
+            .map(|l| l.value)
+            .sum();
+        let debts: f64 = s
+            .accounts
+            .iter()
+            .filter(|l| l.kind.is_liability())
+            .map(|l| l.value)
+            .sum();
+        assert!(close(assets, s.totals.gross_assets));
+        assert!(close(debts, s.totals.liabilities));
+        // Parts < 100 % : 80 % du compte courant.
+        assert!(close(line(&s, f.checking).value, 800.0));
+        // 10 parts × (125 − 100) $ à 1,25 $/€.
+        let pea = line(&s, f.pea);
+        assert_eq!(pea.name, "PEA");
+        assert_eq!(pea.kind, AccountKind::Investment);
+        assert!(close(pea.gain.unwrap(), 200.0));
+        assert!(close(
+            s.accounts.iter().filter_map(|l| l.gain).sum::<f64>(),
+            f.portfolio.overview(View::Household).gain
+        ));
+        // Sans positions, pas de plus-value : ni l'immobilier, ni le prêt, ni le compte courant.
+        assert_eq!(line(&s, f.house).gain, None);
+        assert_eq!(line(&s, f.loan).gain, None);
+        assert_eq!(line(&s, f.checking).gain, None);
+    }
+
+    #[test]
+    fn member_snapshot_keeps_only_owned_accounts_at_the_member_share() {
+        let f = fixture();
+        let bob = f.portfolio.snapshot(View::Member(f.bob));
+        assert_eq!(bob.totals, f.portfolio.totals(View::Member(f.bob)));
+        // Le PEA d'Alice n'apparaît pas chez Bob.
+        assert!(bob.accounts.iter().all(|l| l.account_id != f.pea));
+        assert_eq!(bob.accounts.len(), 3);
+        assert!(close(line(&bob, f.checking).value, 200.0));
+        assert!(close(line(&bob, f.loan).value, 100_000.0));
+        let alice = f.portfolio.snapshot(View::Member(f.alice));
+        assert!(close(line(&alice, f.pea).gain.unwrap(), 200.0));
+        assert!(
+            f.portfolio
+                .snapshot(View::Member(MemberId::generate()))
+                .accounts
+                .is_empty()
+        );
     }
 
     #[test]

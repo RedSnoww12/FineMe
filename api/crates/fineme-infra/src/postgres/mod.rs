@@ -22,7 +22,7 @@ use fineme_domain::ids::{
 };
 use fineme_domain::loan::Loan;
 use fineme_domain::member::{Member, User};
-use fineme_domain::portfolio::Totals;
+use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::Property;
 use fineme_domain::transaction::Transaction;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use rows::{
     AccountRow, ConnectionRow, GoalRow, HoldingRow, LoanRow, MemberRow, OwnerRow, PropertyRow,
-    TransactionRow,
+    SnapshotAccountRow, TransactionRow,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -763,22 +763,51 @@ impl SnapshotRepository for PgStore {
         &self,
         date: NaiveDate,
         member: Option<MemberId>,
-        totals: Totals,
+        snapshot: &Snapshot,
     ) -> RepoResult<()> {
+        let member = member.map(|m| m.as_uuid());
+        let totals = snapshot.totals;
+        let mut tx = self.pool.begin().await.map_err(db)?;
         sqlx::query(
-            "INSERT INTO snapshots (date, member_id, gross_assets, liabilities, net_worth) VALUES ($1, $2, $3, $4, $5) \
+            "INSERT INTO snapshots (date, member_id, gross_assets, liabilities, net_worth, detailed) \
+             VALUES ($1, $2, $3, $4, $5, true) \
              ON CONFLICT (date, member_id) DO UPDATE SET gross_assets = EXCLUDED.gross_assets, \
-             liabilities = EXCLUDED.liabilities, net_worth = EXCLUDED.net_worth",
+             liabilities = EXCLUDED.liabilities, net_worth = EXCLUDED.net_worth, detailed = true",
         )
         .bind(date)
-        .bind(member.map(|m| m.as_uuid()))
+        .bind(member)
         .bind(totals.gross_assets)
         .bind(totals.liabilities)
         .bind(totals.net_worth)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(db)?;
-        Ok(())
+        // Le détail du jour est remplacé en entier : un compte supprimé dans la journée disparaît.
+        sqlx::query(
+            "DELETE FROM snapshot_accounts WHERE date = $1 AND member_id IS NOT DISTINCT FROM $2",
+        )
+        .bind(date)
+        .bind(member)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        for line in &snapshot.accounts {
+            sqlx::query(
+                "INSERT INTO snapshot_accounts (date, member_id, account_id, name, kind, value, gain) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(date)
+            .bind(member)
+            .bind(line.account_id.as_uuid())
+            .bind(&line.name)
+            .bind(line.kind.as_str())
+            .bind(line.value)
+            .bind(line.gain)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)
     }
 
     async fn since(
@@ -786,25 +815,41 @@ impl SnapshotRepository for PgStore {
         member: Option<MemberId>,
         from: NaiveDate,
     ) -> RepoResult<Vec<SnapshotPoint>> {
-        let rows: Vec<(NaiveDate, f64, f64, f64)> = sqlx::query_as(
-            "SELECT date, gross_assets, liabilities, net_worth FROM snapshots \
+        let member = member.map(|m| m.as_uuid());
+        let rows: Vec<(NaiveDate, f64, f64, f64, bool)> = sqlx::query_as(
+            "SELECT date, gross_assets, liabilities, net_worth, detailed FROM snapshots \
              WHERE member_id IS NOT DISTINCT FROM $1 AND date >= $2 ORDER BY date",
         )
-        .bind(member.map(|m| m.as_uuid()))
+        .bind(member)
         .bind(from)
         .fetch_all(&self.pool)
         .await
         .map_err(db)?;
+        let lines: Vec<SnapshotAccountRow> = sqlx::query_as(
+            "SELECT date, account_id, name, kind, value, gain FROM snapshot_accounts \
+             WHERE member_id IS NOT DISTINCT FROM $1 AND date >= $2 ORDER BY date, name, account_id",
+        )
+        .bind(member)
+        .bind(from)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        let mut by_date: HashMap<NaiveDate, Vec<AccountSnapshot>> = HashMap::new();
+        for line in lines {
+            let date = line.date;
+            by_date.entry(date).or_default().push(line.try_into()?);
+        }
         Ok(rows
             .into_iter()
             .map(
-                |(date, gross_assets, liabilities, net_worth)| SnapshotPoint {
+                |(date, gross_assets, liabilities, net_worth, detailed)| SnapshotPoint {
                     date,
                     totals: Totals {
                         gross_assets,
                         liabilities,
                         net_worth,
                     },
+                    accounts: detailed.then(|| by_date.remove(&date).unwrap_or_default()),
                 },
             )
             .collect())
