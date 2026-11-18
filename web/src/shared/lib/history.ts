@@ -1,8 +1,19 @@
 // Série quotidienne du patrimoine : un point par jour, les jours sans instantané étant estimés.
-import type { HistoryAccount, HistoryPoint } from '@/shared/api/types'
+import type { History, HistoryAccount, HistoryPoint } from '@/shared/api/types'
 
 /** Point d'une série quotidienne. `estimated` : aucun instantané ce jour-là, valeurs interpolées. */
 export type DailyHistoryPoint = HistoryPoint & { estimated: boolean }
+
+/** Point tel que renvoyé par une API antérieure au détail par compte : le champ `accounts` peut manquer. */
+type RawHistoryPoint = Omit<HistoryPoint, 'accounts'> & { accounts?: HistoryAccount[] | null }
+
+/**
+ * Ramène une réponse de `/api/history` au contrat : un `accounts` absent (API pas encore à jour) devient
+ * `null`, comme un instantané enregistré avant le détail par compte.
+ */
+export function normalizeHistory(raw: { points: readonly RawHistoryPoint[] }): History {
+  return { points: raw.points.map((point) => ({ ...point, accounts: point.accounts ?? null })) }
+}
 
 const DAY_MS = 86_400_000
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/

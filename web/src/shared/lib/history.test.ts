@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { HistoryAccount, HistoryPoint } from '@/shared/api/types'
-import { countEstimatedDays, fillMissingDays, toHistoryChartRows } from './history'
+import { countEstimatedDays, fillMissingDays, normalizeHistory, toHistoryChartRows } from './history'
 
 function point(date: string, gross_assets: number, liabilities = 0): HistoryPoint {
   return { date, gross_assets, liabilities, net_worth: gross_assets - liabilities, accounts: null }
@@ -122,5 +122,17 @@ describe('toHistoryChartRows', () => {
   it('ne trace aucune estimation sur un historique complet', () => {
     const rows = toHistoryChartRows(fillMissingDays([point('2026-03-01', 100), point('2026-03-02', 200)]))
     expect(rows.every((row) => row.estimate === null)).toBe(true)
+  })
+})
+
+describe('normalizeHistory', () => {
+  it('traite un détail par compte absent (API pas encore à jour) comme un instantané sans détail', () => {
+    const raw = { points: [{ date: '2026-03-01', gross_assets: 1000, liabilities: 0, net_worth: 1000 }] }
+    expect(normalizeHistory(raw).points).toEqual([point('2026-03-01', 1000)])
+  })
+
+  it('garde le détail par compte quand il est présent', () => {
+    const detailed = { ...point('2026-03-01', 1000), accounts: [account('a', 1000)] }
+    expect(normalizeHistory({ points: [detailed] }).points).toEqual([detailed])
   })
 })
