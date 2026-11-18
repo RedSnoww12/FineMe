@@ -40,6 +40,10 @@ la valeur de `RECOVERY_TOKEN` générée par Render (onglet *Environment*). Sans
 est désactivée. Toutes les sessions ouvertes sont fermées après une réinitialisation.
 
 L'offre gratuite de Render met l'API en veille après inactivité : la première requête peut prendre près d'une minute.
+Décision : rester sur l'offre gratuite. Le front affiche « Réveil du serveur en cours » dès qu'une requête dépasse 5 s
+et rejoue les erreurs passagères du réveil (réseau, 502/503) ; le workflow quotidien (ci-dessous) réveille déjà l'API
+chaque matin. Si l'attente devient gênante : un ping périodique (ex. cron-job.org sur `/api/health` toutes les
+10 minutes) ou l'offre payante de Render, qui ne met pas en veille.
 
 ### Cours et instantané quotidiens
 

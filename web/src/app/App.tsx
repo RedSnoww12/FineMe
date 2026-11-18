@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router'
 import { Shell } from './Shell'
 import { EmptyState, LoadingBlock } from '@/shared/ui/ui'
+import { WakeNotice } from '@/shared/ui/WakeNotice'
 import AuthPage from '@/features/auth/pages/AuthPage'
 import { useAuth } from '@/shared/state/auth'
 
@@ -33,23 +34,26 @@ function NotFound() {
 
 export default function App() {
   return (
-    <Suspense fallback={<div className="p-6"><LoadingBlock /></div>}>
-      <Routes>
-        <Route path="/connexion" element={<AuthPage />} />
-        <Route element={<Protected />}>
-          <Route index element={<OverviewPage />} />
-          <Route path="analyse" element={<AnalysisPage />} />
-          <Route path="comptes" element={<AccountsPage />} />
-          <Route path="comptes/:id" element={<AccountDetailPage />} />
-          <Route path="immobilier" element={<RealEstatePage />} />
-          <Route path="objectifs" element={<GoalsPage />} />
-          <Route path="projection" element={<ProjectionPage />} />
-          <Route path="frais" element={<FeesPage />} />
-          <Route path="connexions" element={<ConnectionsPage />} />
-          <Route path="parametres" element={<SettingsPage />} />
-          <Route path="*" element={<NotFound />} />
-        </Route>
-      </Routes>
-    </Suspense>
+    <>
+      <WakeNotice />
+      <Suspense fallback={<div className="p-6"><LoadingBlock /></div>}>
+        <Routes>
+          <Route path="/connexion" element={<AuthPage />} />
+          <Route element={<Protected />}>
+            <Route index element={<OverviewPage />} />
+            <Route path="analyse" element={<AnalysisPage />} />
+            <Route path="comptes" element={<AccountsPage />} />
+            <Route path="comptes/:id" element={<AccountDetailPage />} />
+            <Route path="immobilier" element={<RealEstatePage />} />
+            <Route path="objectifs" element={<GoalsPage />} />
+            <Route path="projection" element={<ProjectionPage />} />
+            <Route path="frais" element={<FeesPage />} />
+            <Route path="connexions" element={<ConnectionsPage />} />
+            <Route path="parametres" element={<SettingsPage />} />
+            <Route path="*" element={<NotFound />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    </>
   )
 }
