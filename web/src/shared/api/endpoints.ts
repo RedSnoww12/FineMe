@@ -1,4 +1,5 @@
 import { request } from '@/shared/api/client'
+import { normalizeHistory } from '@/shared/lib/history'
 import type {
   AccountDetail,
   Account,
@@ -89,7 +90,8 @@ export const api = {
 
   // Vue d'ensemble
   overview: (view: View) => request<Overview>('/api/overview', { query: view }),
-  history: (range: HistoryRange, view: View) => request<History>('/api/history', { query: { range, ...view } }),
+  history: (range: HistoryRange, view: View): Promise<History> =>
+    request<History>('/api/history', { query: { range, ...view } }).then(normalizeHistory),
 
   // Objectifs
   goals: (view: View) => request<Goal[]>('/api/goals', { query: view }),

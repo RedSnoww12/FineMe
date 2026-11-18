@@ -177,6 +177,15 @@ describe('analyse', () => {
     expect(pageText(await panel('Variation sur la période'))).toContain('La performance n’est pas isolée')
   })
 
+  it('s’affiche face à une API antérieure au détail par compte (champ accounts absent)', async () => {
+    mockAnalysis()
+    const legacy = history.map(({ accounts: _accounts, ...rest }) => rest)
+    mockJson('get', '/api/history', { points: legacy })
+    renderApp('/analyse')
+    expect(pageText(await panel('Évolution des actifs par catégorie'))).toContain('au fil des prochains jours')
+    expect(pageText(await panel('Actifs, dettes et patrimoine net'))).toContain('Voir les données en tableau')
+  })
+
   it('affiche une erreur dans les graphiques d’historique sans masquer les autres', async () => {
     mockAnalysis()
     mockApiError('get', '/api/history', 500, 'Historique indisponible.')

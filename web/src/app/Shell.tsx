@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
 import { useMembers } from '@/shared/api/queries'
 import { useView } from '@/shared/state/view'
+import { ErrorBoundary } from '@/shared/ui/ErrorBoundary'
 import { Icon, Logo, type IconName } from '@/shared/ui/Icon'
 import { cx } from '@/shared/ui/ui'
 
@@ -112,7 +113,9 @@ export function Shell() {
       </header>
 
       <main id="contenu" className="mx-auto w-full max-w-[1180px] px-4 pt-5 pb-28 sm:px-6 lg:px-9 lg:pt-9 lg:pb-14">
-        <Outlet />
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
 
       {/* Barre d'onglets (téléphone) */}
