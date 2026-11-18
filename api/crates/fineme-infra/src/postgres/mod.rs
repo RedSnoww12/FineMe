@@ -13,6 +13,7 @@ use fineme_application::ports::{
     ImportRepository, PortfolioData, PortfolioRepository, PricePoint, RepoError, RepoResult,
     SnapshotPoint, SnapshotRepository, TransactionRepository, UserRepository,
 };
+use fineme_domain::account::Account;
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::Goal;
@@ -724,8 +725,9 @@ impl TransactionRepository for PgStore {
         ))
     }
 
-    async fn insert_new(&self, transactions: &[Transaction]) -> RepoResult<u64> {
+    async fn import(&self, account: &Account, transactions: &[Transaction]) -> RepoResult<u64> {
         let mut tx = self.pool.begin().await.map_err(db)?;
+        save_account(&mut tx, &AccountWrite::account_only(account.clone())).await?;
         let mut inserted = 0;
         for t in transactions {
             inserted += sqlx::query(

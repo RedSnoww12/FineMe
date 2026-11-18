@@ -166,8 +166,9 @@ pub trait TransactionRepository: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> RepoResult<(Vec<Transaction>, u64)>;
-    /// Insère les mouvements qui ne sont pas des doublons ; renvoie le nombre réellement inséré.
-    async fn insert_new(&self, transactions: &[Transaction]) -> RepoResult<u64>;
+    /// Enregistre le compte (sans ses positions) puis insère les mouvements qui ne sont pas des
+    /// doublons, tout ou rien ; renvoie le nombre de mouvements réellement insérés.
+    async fn import(&self, account: &Account, transactions: &[Transaction]) -> RepoResult<u64>;
     async fn delete(&self, id: TransactionId) -> RepoResult<bool>;
 }
 

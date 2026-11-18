@@ -560,12 +560,12 @@ async fn transactions_are_deduplicated_paged_and_deleted_with_their_account() {
         tx(checking.id, 1, "Courses", -54.2),
         tx(checking.id, 1, "Courses", -10.0),
     ];
-    assert_eq!(db.store.insert_new(&batch).await.unwrap(), 3);
-    assert_eq!(db.store.insert_new(&batch).await.unwrap(), 0);
+    assert_eq!(db.store.import(&checking, &batch).await.unwrap(), 3);
+    assert_eq!(db.store.import(&checking, &batch).await.unwrap(), 0);
     // Le même mouvement sur un autre compte n'est pas un doublon.
     assert_eq!(
         db.store
-            .insert_new(&[tx(other.id, 1, "Courses", -54.2)])
+            .import(&other, &[tx(other.id, 1, "Courses", -54.2)])
             .await
             .unwrap(),
         1
@@ -591,6 +591,66 @@ async fn transactions_are_deduplicated_paged_and_deleted_with_their_account() {
     );
     db.store.delete_account(checking.id).await.unwrap();
     assert_eq!(count(&db, "transactions").await, 1);
+}
+
+#[tokio::test]
+async fn import_is_all_or_nothing() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let checking = account(AccountKind::Checking, "Courant", &[(alice.id, 1.0)]);
+    save(&db, &checking).await;
+    let tx = |account: AccountId, label: &str| Transaction {
+        id: TransactionId::generate(),
+        account_id: account,
+        date: date(2026, 1, 1),
+        label: label.into(),
+        amount: -5.0,
+        category: None,
+    };
+    let updated = Account {
+        cash_balance: 3500.0,
+        source: AccountSource::Csv,
+        ..checking.clone()
+    };
+
+    // Un mouvement rattaché à un compte inexistant fait échouer l'import : rien n'est appliqué.
+    let batch = [
+        tx(checking.id, "Courses"),
+        tx(AccountId::generate(), "Orphelin"),
+    ];
+    assert_eq!(
+        db.store.import(&updated, &batch).await,
+        Err(RepoError::Reference)
+    );
+    assert_eq!(count(&db, "transactions").await, 0);
+    assert_eq!(
+        db.store.load().await.unwrap().accounts,
+        vec![checking.clone()]
+    );
+
+    // Un compte invalide (détenteur inconnu) n'insère aucun mouvement.
+    let orphan = Account {
+        owners: Ownership::sole(MemberId::generate()),
+        ..updated.clone()
+    };
+    assert_eq!(
+        db.store
+            .import(&orphan, &[tx(checking.id, "Courses")])
+            .await,
+        Err(RepoError::Reference)
+    );
+    assert_eq!(count(&db, "transactions").await, 0);
+    assert_eq!(db.store.load().await.unwrap().accounts, vec![checking]);
+
+    // Sinon, le compte et les mouvements sont enregistrés ensemble.
+    assert_eq!(
+        db.store
+            .import(&updated, &[tx(updated.id, "Courses")])
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(db.store.load().await.unwrap().accounts, vec![updated]);
 }
 
 fn totals_of(net: f64) -> Totals {
