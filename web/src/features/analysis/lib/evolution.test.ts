@@ -28,6 +28,11 @@ describe('évolution par catégorie', () => {
     expect(rows[1].checking).toBe(40)
   })
 
+  it('rapporte les parts aux seules catégories affichées', () => {
+    const rows = categoryRows(fillMissingDays([day1, day2]), 'pct', ['investment'])
+    expect(rows[0].checking).toBe(100)
+  })
+
   it('laisse un trou pour un jour sans détail par compte, et le compte', () => {
     const old = point('2026-02-28', null, { gross_assets: 3000, net_worth: 3000 })
     const series = fillMissingDays([old, day1])

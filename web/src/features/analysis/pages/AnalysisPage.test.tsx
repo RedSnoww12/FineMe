@@ -144,6 +144,25 @@ describe('analyse', () => {
     expect(await screen.findByText('La date de début doit précéder la date de fin.')).toBeInTheDocument()
   })
 
+  it('masque une catégorie depuis la légende et s’en souvient au rendu suivant', async () => {
+    mockAnalysis()
+    const first = renderApp('/analyse')
+    const evolution = await panel('Évolution des actifs par catégorie')
+    const entry = await within(evolution).findByRole('button', { name: 'Investissements' })
+    expect(entry).toHaveAttribute('aria-pressed', 'true')
+    await first.user.click(entry)
+    expect(entry).toHaveAttribute('aria-pressed', 'false')
+    await first.user.click(within(evolution).getByRole('button', { name: /Lisser/ }))
+    first.unmount()
+
+    renderApp('/analyse')
+    const again = await panel('Évolution des actifs par catégorie')
+    expect(await within(again).findByRole('button', { name: 'Investissements' })).toHaveAttribute('aria-pressed', 'false')
+    expect(within(again).getByRole('button', { name: /Lisser/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(again).getByRole('columnheader', { name: 'Date' })).toBeInTheDocument()
+    expect(within(again).queryByRole('columnheader', { name: 'Investissements' })).toBeNull()
+  })
+
   it('explique que les graphiques d’historique se construisent avec le temps', async () => {
     mockAnalysis({ points: [history[0]] })
     renderApp('/analyse')
