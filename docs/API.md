@@ -200,10 +200,29 @@ GET `/api/overview` →
   weighted_expense_ratio: number | null; // frais courants moyens pondérés des positions (fraction)
 }
 ```
-GET `/api/history?range=1m|3m|1y|all` → `{ points: [{ date, gross_assets, liabilities, net_worth }] }`
+GET `/api/history?range=1m|3m|1y|all` → `{ points: HistoryPoint[] }` (du plus ancien au plus récent)
+```ts
+type HistoryPoint = {
+  date: string; gross_assets: number; liabilities: number; net_worth: number;
+  // Détail par compte ; null pour les instantanés enregistrés avant l'introduction du détail.
+  accounts: HistoryAccount[] | null;
+};
+type HistoryAccount = {
+  account_id: string;   // le compte a pu être supprimé depuis : l'historique le garde
+  name: string;         // nom du compte au jour de l'instantané
+  kind: AccountKind;    // catégorie du compte ; "loan" = dette
+  value: number;        // valeur détenue dans la vue, en EUR (positive, y compris pour un prêt)
+  gain: number | null;  // plus-value latente détenue des positions au PRU connu ; null si aucune
+};
+```
 
 Un instantané du jour (foyer + chaque membre) est enregistré/mis à jour à chaque appel de `/api/overview`
 et par la tâche quotidienne. `/api/history` respecte `member_id`.
+
+Détail : seuls les comptes dont la vue détient une part figurent dans `accounts` (tous pour le foyer).
+Σ `value` des comptes hors prêts = `gross_assets`, Σ `value` des prêts = `liabilities`, Σ `gain` = `gain` de
+`/api/overview` au même jour. La répartition par catégorie se déduit de `kind` (mêmes catégories que `allocation`).
+Une période personnalisée se filtre côté front dans la réponse `range=all`.
 
 ## Tâche quotidienne
 

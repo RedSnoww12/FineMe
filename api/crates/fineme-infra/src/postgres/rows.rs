@@ -15,6 +15,7 @@ use fineme_domain::ids::{
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::member::Member;
 use fineme_domain::ownership::Ownership;
+use fineme_domain::portfolio::AccountSnapshot;
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
 use fineme_domain::transaction::Transaction;
 use sqlx::FromRow;
@@ -270,6 +271,31 @@ impl GoalRow {
             coverage_months: self.coverage_months,
             account_ids,
             member_ids,
+        })
+    }
+}
+
+#[derive(FromRow)]
+pub(super) struct SnapshotAccountRow {
+    pub date: NaiveDate,
+    account_id: Uuid,
+    name: String,
+    kind: String,
+    value: f64,
+    gain: Option<f64>,
+}
+
+impl TryFrom<SnapshotAccountRow> for AccountSnapshot {
+    type Error = RepoError;
+
+    fn try_from(row: SnapshotAccountRow) -> RepoResult<Self> {
+        Ok(AccountSnapshot {
+            account_id: AccountId::from_uuid(row.account_id),
+            kind: AccountKind::parse(&row.kind)
+                .map_err(corrupt("snapshot_accounts", row.account_id))?,
+            name: row.name,
+            value: row.value,
+            gain: row.gain,
         })
     }
 }

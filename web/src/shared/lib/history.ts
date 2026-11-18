@@ -1,5 +1,5 @@
 // Série quotidienne du patrimoine : un point par jour, les jours sans instantané étant estimés.
-import type { HistoryPoint } from '@/shared/api/types'
+import type { HistoryAccount, HistoryPoint } from '@/shared/api/types'
 
 /** Point d'une série quotidienne. `estimated` : aucun instantané ce jour-là, valeurs interpolées. */
 export type DailyHistoryPoint = HistoryPoint & { estimated: boolean }
@@ -21,12 +21,44 @@ function lerp(from: number, to: number, ratio: number): number {
   return from + (to - from) * ratio
 }
 
+function lerpGain(from: number | null, to: number | null, ratio: number): number | null {
+  if (from === null && to === null) return null
+  return lerp(from ?? 0, to ?? 0, ratio)
+}
+
+/**
+ * Détail par compte d'un jour estimé : chaque compte est interpolé ; un compte présent d'un seul côté
+ * (ouvert ou clôturé entre les deux relevés) vaut 0 de l'autre. Sans détail d'un côté, pas de détail.
+ */
+function interpolateAccounts(
+  before: HistoryAccount[] | null,
+  after: HistoryAccount[] | null,
+  ratio: number,
+): HistoryAccount[] | null {
+  if (before === null || after === null) return null
+  const afterById = new Map(after.map((account) => [account.account_id, account]))
+  const beforeIds = new Set(before.map((account) => account.account_id))
+  const fromBefore = before.map((account) => {
+    const next = afterById.get(account.account_id)
+    return {
+      ...account,
+      value: lerp(account.value, next?.value ?? 0, ratio),
+      gain: lerpGain(account.gain, next?.gain ?? null, ratio),
+    }
+  })
+  const opened = after
+    .filter((account) => !beforeIds.has(account.account_id))
+    .map((account) => ({ ...account, value: lerp(0, account.value, ratio), gain: lerpGain(null, account.gain, ratio) }))
+  return [...fromBefore, ...opened]
+}
+
 function interpolate(before: HistoryPoint, after: HistoryPoint, ratio: number, date: string): DailyHistoryPoint {
   return {
     date,
     gross_assets: lerp(before.gross_assets, after.gross_assets, ratio),
     liabilities: lerp(before.liabilities, after.liabilities, ratio),
     net_worth: lerp(before.net_worth, after.net_worth, ratio),
+    accounts: interpolateAccounts(before.accounts, after.accounts, ratio),
     estimated: true,
   }
 }

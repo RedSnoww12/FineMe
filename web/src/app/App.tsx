@@ -6,6 +6,7 @@ import AuthPage from '@/features/auth/pages/AuthPage'
 import { useAuth } from '@/shared/state/auth'
 
 const OverviewPage = lazy(() => import('@/features/overview/pages/OverviewPage'))
+const AnalysisPage = lazy(() => import('@/features/analysis/pages/AnalysisPage'))
 const AccountsPage = lazy(() => import('@/features/accounts/pages/AccountsPage'))
 const AccountDetailPage = lazy(() => import('@/features/accounts/pages/AccountDetailPage'))
 const RealEstatePage = lazy(() => import('@/features/real-estate/pages/RealEstatePage'))
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="/connexion" element={<AuthPage />} />
         <Route element={<Protected />}>
           <Route index element={<OverviewPage />} />
+          <Route path="analyse" element={<AnalysisPage />} />
           <Route path="comptes" element={<AccountsPage />} />
           <Route path="comptes/:id" element={<AccountDetailPage />} />
           <Route path="immobilier" element={<RealEstatePage />} />

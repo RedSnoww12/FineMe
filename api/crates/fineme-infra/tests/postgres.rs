@@ -16,7 +16,7 @@ use fineme_domain::ids::*;
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::member::{Member, User};
 use fineme_domain::ownership::Ownership;
-use fineme_domain::portfolio::Totals;
+use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
 use fineme_domain::transaction::Transaction;
 use fineme_infra::postgres::{self, PgStore};
@@ -593,23 +593,44 @@ async fn transactions_are_deduplicated_paged_and_deleted_with_their_account() {
     assert_eq!(count(&db, "transactions").await, 1);
 }
 
+fn totals_of(net: f64) -> Totals {
+    Totals {
+        gross_assets: net + 100.0,
+        liabilities: 100.0,
+        net_worth: net,
+    }
+}
+
+/// Instantané sans détail par compte.
+fn bare(net: f64) -> Snapshot {
+    Snapshot {
+        totals: totals_of(net),
+        accounts: vec![],
+    }
+}
+
+fn line(name: &str, kind: AccountKind, value: f64, gain: Option<f64>) -> AccountSnapshot {
+    AccountSnapshot {
+        account_id: AccountId::generate(),
+        name: name.into(),
+        kind,
+        value,
+        gain,
+    }
+}
+
 #[tokio::test]
 async fn snapshots_are_upserted_per_day_and_view() {
     let db = test_db().await;
     let (alice, _) = household(&db).await;
-    let totals = |net: f64| Totals {
-        gross_assets: net + 100.0,
-        liabilities: 100.0,
-        net_worth: net,
-    };
     let (day1, day2) = (date(2026, 1, 1), date(2026, 1, 2));
-    db.store.upsert(day1, None, totals(1000.0)).await.unwrap();
-    db.store.upsert(day1, None, totals(1100.0)).await.unwrap();
+    db.store.upsert(day1, None, &bare(1000.0)).await.unwrap();
+    db.store.upsert(day1, None, &bare(1100.0)).await.unwrap();
     db.store
-        .upsert(day1, Some(alice.id), totals(600.0))
+        .upsert(day1, Some(alice.id), &bare(600.0))
         .await
         .unwrap();
-    db.store.upsert(day2, None, totals(1200.0)).await.unwrap();
+    db.store.upsert(day2, None, &bare(1200.0)).await.unwrap();
     assert_eq!(count(&db, "snapshots").await, 3);
 
     let household = db.store.since(None, date(1900, 1, 1)).await.unwrap();
@@ -620,7 +641,9 @@ async fn snapshots_are_upserted_per_day_and_view() {
             .collect::<Vec<_>>(),
         vec![(day1, 1100.0), (day2, 1200.0)]
     );
-    assert_eq!(household[0].totals, totals(1100.0));
+    assert_eq!(household[0].totals, totals_of(1100.0));
+    // Un instantané enregistré sans compte reste détaillé : son détail est vide, pas absent.
+    assert_eq!(household[0].accounts, Some(vec![]));
     assert_eq!(db.store.since(None, day2).await.unwrap().len(), 1);
     let member = db.store.since(Some(alice.id), day1).await.unwrap();
     assert_eq!(member.len(), 1);
@@ -632,6 +655,68 @@ async fn snapshots_are_upserted_per_day_and_view() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn snapshot_detail_is_kept_per_view_and_replaced_within_the_day() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let (day1, day2) = (date(2026, 1, 1), date(2026, 1, 2));
+    let pea = line("PEA", AccountKind::Investment, 2000.0, Some(150.0));
+    let loan = line("Prêt", AccountKind::Loan, 100.0, None);
+    let morning = Snapshot {
+        totals: totals_of(1900.0),
+        accounts: vec![pea.clone(), loan.clone()],
+    };
+    db.store.upsert(day1, None, &morning).await.unwrap();
+    // Le prêt est soldé dans la journée : le second relevé remplace tout le détail du jour.
+    let evening = Snapshot {
+        totals: totals_of(2000.0),
+        accounts: vec![pea.clone()],
+    };
+    db.store.upsert(day1, None, &evening).await.unwrap();
+    let alice_view = Snapshot {
+        totals: totals_of(1000.0),
+        accounts: vec![AccountSnapshot {
+            value: 1000.0,
+            gain: Some(75.0),
+            ..pea.clone()
+        }],
+    };
+    db.store
+        .upsert(day1, Some(alice.id), &alice_view)
+        .await
+        .unwrap();
+    db.store.upsert(day2, None, &morning).await.unwrap();
+
+    let household = db.store.since(None, day1).await.unwrap();
+    assert_eq!(household[0].accounts, Some(vec![pea.clone()]));
+    // Trié par nom : « PEA » avant « Prêt ».
+    assert_eq!(household[1].accounts, Some(vec![pea, loan]));
+    let member = db.store.since(Some(alice.id), day1).await.unwrap();
+    assert_eq!(member[0].accounts, Some(alice_view.accounts));
+    assert_eq!(count(&db, "snapshot_accounts").await, 4);
+
+    // Le détail d'un membre disparaît avec lui.
+    db.store.delete_member(alice.id).await.unwrap();
+    assert_eq!(count(&db, "snapshot_accounts").await, 3);
+}
+
+#[tokio::test]
+async fn snapshots_recorded_before_the_detail_have_no_account_breakdown() {
+    let db = test_db().await;
+    // Instantané écrit tel qu'avant la migration 0004 : sans `detailed` ni lignes de comptes.
+    sqlx::query(
+        "INSERT INTO snapshots (date, member_id, gross_assets, liabilities, net_worth) \
+         VALUES ('2026-01-01', NULL, 1100, 100, 1000)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let points = db.store.since(None, date(1900, 1, 1)).await.unwrap();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].totals, totals_of(1000.0));
+    assert_eq!(points[0].accounts, None);
 }
 
 #[tokio::test]

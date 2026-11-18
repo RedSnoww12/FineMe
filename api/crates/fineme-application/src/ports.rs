@@ -13,7 +13,7 @@ use fineme_domain::ids::{
     AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
 };
 use fineme_domain::member::{Member, User};
-use fineme_domain::portfolio::Totals;
+use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::transaction::Transaction;
 
 // ---------------------------------------------------------------- erreurs
@@ -175,6 +175,8 @@ pub trait TransactionRepository: Send + Sync {
 pub struct SnapshotPoint {
     pub date: NaiveDate,
     pub totals: Totals,
+    /// Détail par compte ; `None` pour un instantané enregistré avant l'introduction du détail.
+    pub accounts: Option<Vec<AccountSnapshot>>,
 }
 
 #[async_trait]
@@ -184,7 +186,7 @@ pub trait SnapshotRepository: Send + Sync {
         &self,
         date: NaiveDate,
         member: Option<MemberId>,
-        totals: Totals,
+        snapshot: &Snapshot,
     ) -> RepoResult<()>;
     async fn since(
         &self,

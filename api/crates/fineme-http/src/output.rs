@@ -14,7 +14,8 @@ use fineme_domain::ids::AccountId;
 use fineme_domain::loan::ScheduleRow;
 use fineme_domain::member::{Member, User};
 use fineme_domain::portfolio::{
-    AccountDetail, AccountView, HoldingView, LoanView, Overview, RealEstateReport, Totals,
+    AccountDetail, AccountSnapshot, AccountView, HoldingView, LoanView, Overview, RealEstateReport,
+    Totals,
 };
 use fineme_domain::property::Property;
 use fineme_domain::transaction::Transaction;
@@ -223,10 +224,29 @@ pub fn overview(o: &Overview) -> Value {
     )
 }
 
+fn snapshot_account(line: &AccountSnapshot) -> Value {
+    json!({
+        "account_id": line.account_id.as_uuid(),
+        "name": line.name,
+        "kind": line.kind.as_str(),
+        "value": line.value,
+        "gain": line.gain,
+    })
+}
+
 pub fn history(points: &[SnapshotPoint]) -> Value {
     let points: Vec<Value> = points
         .iter()
-        .map(|p| with(json!({ "date": p.date }), totals(&p.totals)))
+        .map(|p| {
+            let accounts = p
+                .accounts
+                .as_ref()
+                .map(|lines| lines.iter().map(snapshot_account).collect::<Vec<_>>());
+            with(
+                json!({ "date": p.date, "accounts": accounts }),
+                totals(&p.totals),
+            )
+        })
         .collect();
     json!({ "points": points })
 }

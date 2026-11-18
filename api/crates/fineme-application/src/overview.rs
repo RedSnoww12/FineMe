@@ -54,7 +54,7 @@ impl OverviewService {
             .chain(portfolio.members.iter().map(|m| View::Member(m.id)));
         for view in views {
             self.snapshots
-                .upsert(portfolio.today, view.member(), portfolio.totals(view))
+                .upsert(portfolio.today, view.member(), &portfolio.snapshot(view))
                 .await?;
         }
         Ok(())
@@ -80,6 +80,7 @@ impl OverviewService {
 mod tests {
     use super::*;
     use crate::testing::{TestApp, holding_input};
+    use fineme_domain::account::AccountKind;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
@@ -164,6 +165,40 @@ mod tests {
             .await
             .unwrap();
         assert!(close(bob[0].totals.net_worth, 50_200.0));
+    }
+
+    #[tokio::test]
+    async fn history_details_each_account_held_in_the_view() {
+        let t = seeded().await;
+        t.app.overview.overview(None).await.unwrap();
+        let household = t.app.overview.history(None, None).await.unwrap();
+        let accounts = household[0].accounts.as_ref().unwrap();
+        // Courant, PEA, maison, prêt.
+        assert_eq!(accounts.len(), 4);
+        let debts: f64 = accounts
+            .iter()
+            .filter(|a| a.kind.is_liability())
+            .map(|a| a.value)
+            .sum();
+        assert!(close(debts, household[0].totals.liabilities));
+        let gain: f64 = accounts.iter().filter_map(|a| a.gain).sum();
+        assert!(close(gain, 50.0));
+
+        let bob = t
+            .app
+            .overview
+            .history(None, Some(t.bob.as_uuid()))
+            .await
+            .unwrap();
+        let bob_accounts = bob[0].accounts.as_ref().unwrap();
+        // Bob ne détient pas le PEA d'Alice.
+        assert_eq!(bob_accounts.len(), 3);
+        assert!(bob_accounts.iter().all(|a| a.gain.is_none()));
+        let checking = bob_accounts
+            .iter()
+            .find(|a| a.kind == AccountKind::Checking)
+            .unwrap();
+        assert!(close(checking.value, 200.0));
     }
 
     #[tokio::test]

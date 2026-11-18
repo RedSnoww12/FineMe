@@ -239,7 +239,22 @@ export type Overview = {
 }
 
 export type HistoryRange = '1m' | '3m' | '1y' | 'all'
-export type HistoryPoint = { date: string; gross_assets: number; liabilities: number; net_worth: number }
+/** Valeur détenue d'un compte dans un instantané. `kind = loan` : dette. */
+export type HistoryAccount = {
+  account_id: string
+  name: string
+  kind: AccountKind
+  value: number
+  gain: number | null
+}
+export type HistoryPoint = {
+  date: string
+  gross_assets: number
+  liabilities: number
+  net_worth: number
+  /** null : instantané enregistré avant l'introduction du détail par compte. */
+  accounts: HistoryAccount[] | null
+}
 export type History = { points: HistoryPoint[] }
 
 export type GoalKind = 'safety_net' | 'project'

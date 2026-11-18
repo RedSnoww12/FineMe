@@ -7,7 +7,7 @@ import { pageText, renderApp, screen } from '@/test/render'
 import { mockJson } from '@/test/server'
 
 function snapshot(date: string, net_worth: number): HistoryPoint {
-  return { date, gross_assets: net_worth, liabilities: 0, net_worth }
+  return { date, gross_assets: net_worth, liabilities: 0, net_worth, accounts: null }
 }
 
 function mockHistory(points: HistoryPoint[]) {

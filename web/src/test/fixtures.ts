@@ -1,5 +1,19 @@
 // Données de test entièrement fictives, construites à partir du contrat docs/API.md.
-import type { Account, AccountDetail, Goal, Holding, Member, Overview, User } from '@/shared/api/types'
+import type {
+  Account,
+  AccountDetail,
+  Goal,
+  HistoryAccount,
+  HistoryPoint,
+  Holding,
+  Member,
+  Overview,
+  RealEstate,
+  RealEstateItem,
+  RealEstateLoan,
+  ScheduleRow,
+  User,
+} from '@/shared/api/types'
 
 export const user: User = { id: 'u-1', email: 'camille@exemple.test', name: 'Camille Martin' }
 
@@ -130,5 +144,86 @@ export function buildGoal(overrides: Partial<Goal> = {}): Goal {
       coverage_months: null,
     },
     ...overrides,
+  }
+}
+
+/** Ligne de détail d'un instantané. */
+export function buildHistoryAccount(overrides: Partial<HistoryAccount> = {}): HistoryAccount {
+  return { account_id: 'a-1', name: 'Compte joint', kind: 'checking', value: 2400, gain: null, ...overrides }
+}
+
+/** Instantané détaillé : les totaux sont déduits des comptes, sauf s'ils sont donnés. */
+export function buildHistoryPoint(date: string, accounts: HistoryAccount[] | null, overrides: Partial<HistoryPoint> = {}): HistoryPoint {
+  const lines = accounts ?? []
+  const gross = lines.filter((a) => a.kind !== 'loan').reduce((sum, a) => sum + a.value, 0)
+  const debts = lines.filter((a) => a.kind === 'loan').reduce((sum, a) => sum + a.value, 0)
+  return { date, gross_assets: gross, liabilities: debts, net_worth: gross - debts, accounts, ...overrides }
+}
+
+export function buildRealEstateLoan(overrides: Partial<RealEstateLoan> = {}): RealEstateLoan {
+  return {
+    id: 'l-1',
+    account_id: 'a-pret',
+    name: 'Prêt maison',
+    property_account_id: 'a-maison',
+    principal: 1200,
+    interest_rate_pct: 0,
+    insurance_rate_pct: 0,
+    duration_months: 12,
+    start_date: '2026-01-01',
+    monthly_payment: 100,
+    monthly_insurance: 0,
+    remaining_capital: 600,
+    end_date: '2026-12-01',
+    total_interest: 0,
+    total_insurance: 0,
+    ...overrides,
+  }
+}
+
+/** Tableau d'amortissement sans intérêts : `principal / months` remboursés chaque mois. */
+export function buildScheduleRows(principal: number, months: number, firstDate = '2026-02-01'): ScheduleRow[] {
+  const [year, month] = firstDate.split('-').map(Number)
+  const step = principal / months
+  return Array.from({ length: months }, (_, i) => {
+    const index = year * 12 + (month - 1) + i
+    const date = `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}-01`
+    return { month: i + 1, date, payment: step, interest: 0, principal: step, insurance: 0, remaining: principal - step * (i + 1) }
+  })
+}
+
+export function buildRealEstateItem(overrides: Partial<RealEstateItem> = {}): RealEstateItem {
+  return {
+    account: buildAccount({ id: 'a-maison', name: 'Maison', kind: 'real_estate', value: 2000, owned_value: 2000, cash_balance: 0 }),
+    property: {
+      id: 'p-1',
+      account_id: 'a-maison',
+      address: null,
+      category: 'primary',
+      building_type: 'house',
+      surface_m2: null,
+      purchase_price: 1800,
+      purchase_fees: 100,
+      purchased_at: null,
+      current_value: 2000,
+      monthly_rent: 0,
+      monthly_charges: 0,
+      yearly_property_tax: 0,
+    },
+    loans: [buildRealEstateLoan()],
+    equity: 1400,
+    gross_yield_pct: null,
+    net_yield_pct: null,
+    latent_gain: 100,
+    ...overrides,
+  }
+}
+
+export function buildRealEstate(items: RealEstateItem[] = [buildRealEstateItem()]): RealEstate {
+  const value = items.reduce((sum, item) => sum + item.account.owned_value, 0)
+  const equity = items.reduce((sum, item) => sum + item.equity, 0)
+  return {
+    properties: items,
+    totals: { value, remaining_debt: value - equity, equity, monthly_rent: 0, monthly_payments: 100 },
   }
 }

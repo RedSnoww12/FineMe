@@ -15,7 +15,7 @@ use fineme_domain::ids::{
     AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
 };
 use fineme_domain::member::Member;
-use fineme_domain::portfolio::Totals;
+use fineme_domain::portfolio::Snapshot;
 use fineme_domain::transaction::Transaction;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ pub struct State {
     pub accounts: Vec<Account>,
     pub holdings: Vec<Holding>,
     pub transactions: Vec<Transaction>,
-    pub snapshots: Vec<(NaiveDate, Option<MemberId>, Totals)>,
+    pub snapshots: Vec<(NaiveDate, Option<MemberId>, Snapshot)>,
     pub price_history: Vec<(HoldingId, PricePoint)>,
     pub goals: Vec<Goal>,
     pub connections: Vec<Connection>,
@@ -391,13 +391,13 @@ impl SnapshotRepository for InMemoryStore {
         &self,
         date: NaiveDate,
         member: Option<MemberId>,
-        totals: Totals,
+        snapshot: &Snapshot,
     ) -> RepoResult<()> {
         let mut state = self.lock();
         state
             .snapshots
             .retain(|(d, m, _)| !(*d == date && *m == member));
-        state.snapshots.push((date, member, totals));
+        state.snapshots.push((date, member, snapshot.clone()));
         Ok(())
     }
     async fn since(
@@ -410,9 +410,10 @@ impl SnapshotRepository for InMemoryStore {
             .snapshots
             .iter()
             .filter(|(date, m, _)| *m == member && *date >= from)
-            .map(|(date, _, totals)| SnapshotPoint {
+            .map(|(date, _, snapshot)| SnapshotPoint {
                 date: *date,
-                totals: *totals,
+                totals: snapshot.totals,
+                accounts: Some(snapshot.accounts.clone()),
             })
             .collect();
         points.sort_by_key(|point| point.date);

@@ -1079,9 +1079,33 @@ async fn overview_for_household_and_member_with_history() {
     let points = history["points"].as_array().unwrap();
     assert_eq!(points.len(), 1);
     assert!(close(&points[0]["net_worth"], 101_550.0));
-    assert_eq!(points[0].as_object().unwrap().len(), 4);
+    assert_eq!(points[0].as_object().unwrap().len(), 5);
+    // Détail par compte, trié par nom, à la part détenue par la vue.
+    assert_eq!(
+        points[0]["accounts"],
+        json!([
+            { "account_id": points[0]["accounts"][0]["account_id"], "name": "Joint", "kind": "checking", "value": 800.0, "gain": null },
+            { "account_id": points[0]["accounts"][1]["account_id"], "name": "Maison", "kind": "real_estate", "value": 300000.0, "gain": null },
+            { "account_id": pea, "name": "PEA", "kind": "investment", "value": 750.0, "gain": 50.0 },
+            { "account_id": points[0]["accounts"][3]["account_id"], "name": "Prêt maison", "kind": "loan", "value": 200000.0, "gain": null },
+        ])
+    );
     let bob_history = api.get(&format!("/api/history?member_id={bob}")).await;
     assert!(close(&bob_history["points"][0]["net_worth"], 50_200.0));
+    let bob_accounts: Vec<(&str, f64)> = bob_history["points"][0]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["name"].as_str().unwrap(), a["value"].as_f64().unwrap()))
+        .collect();
+    assert_eq!(
+        bob_accounts,
+        vec![
+            ("Joint", 200.0),
+            ("Maison", 150_000.0),
+            ("Prêt maison", 100_000.0)
+        ]
+    );
 }
 
 #[tokio::test]
