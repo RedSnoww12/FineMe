@@ -13,8 +13,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::ports::{
-    AccountWrite, BankProvider, Clock, ConnectionRepository, PortfolioRepository,
-    TransactionRepository,
+    BankProvider, Clock, ConnectionRepository, PortfolioRepository, TransactionRepository,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,11 +169,9 @@ impl ConnectionService {
                     category: t.category,
                 })
                 .collect();
-            self.portfolio
-                .save_accounts(&[AccountWrite::account_only(account)])
-                .await?;
+            report.transactions_inserted +=
+                self.transactions.import(&account, &transactions).await?;
             report.accounts_updated += 1;
-            report.transactions_inserted += self.transactions.insert_new(&transactions).await?;
         }
         connection.status = ConnectionStatus::Active;
         connection.error = None;

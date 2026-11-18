@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::commands::{TransactionInput, clean};
 use crate::error::{AppError, AppResult};
-use crate::ports::{AccountWrite, Clock, PortfolioRepository, TransactionRepository};
+use crate::ports::{Clock, PortfolioRepository, TransactionRepository};
 
 const DEFAULT_PAGE: i64 = 50;
 const MAX_PAGE: i64 = 1000;
@@ -82,14 +82,11 @@ impl TransactionService {
         if let Some(balance) = new_cash_balance {
             account.cash_balance = finite(balance, "new_cash_balance")?;
         }
-        let inserted = self.transactions.insert_new(&transactions).await?;
         account.updated_at = self.clock.now();
         if account.source == AccountSource::Manual {
             account.source = AccountSource::Csv;
         }
-        self.portfolio
-            .save_accounts(&[AccountWrite::account_only(account)])
-            .await?;
+        let inserted = self.transactions.import(&account, &transactions).await?;
         Ok(ImportedTransactions {
             inserted,
             skipped: transactions.len() as u64 - inserted,

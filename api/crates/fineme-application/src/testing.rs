@@ -360,8 +360,9 @@ impl TransactionRepository for InMemoryStore {
             total,
         ))
     }
-    async fn insert_new(&self, transactions: &[Transaction]) -> RepoResult<u64> {
+    async fn import(&self, account: &Account, transactions: &[Transaction]) -> RepoResult<u64> {
         let mut state = self.lock();
+        state.save_account(&AccountWrite::account_only(account.clone()));
         let mut inserted = 0;
         for transaction in transactions {
             if !state
