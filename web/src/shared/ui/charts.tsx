@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { money } from '@/shared/lib/format'
-import { Dot } from '@/shared/ui/ui'
+import { cx, Dot } from '@/shared/ui/ui'
 
 type TooltipEntry = { name?: unknown; value?: unknown; color?: string; dataKey?: unknown }
 export type TooltipProps = {
@@ -39,16 +39,47 @@ export function MoneyTooltip({
 
 export const AXIS_TICK = { fill: 'var(--muted)', fontSize: 12 }
 
-/** Légende sous un graphique : une pastille par série. */
-export function Legend({ items }: { items: { label: string; color: string }[] }) {
+type LegendItem = { key?: string; label: string; color: string }
+
+/**
+ * Légende sous un graphique : une pastille par série. Avec `onToggle`, chaque entrée devient un bouton qui
+ * masque ou affiche sa série (`aria-pressed` vrai quand elle est affichée).
+ */
+export function Legend({
+  items,
+  hidden = [],
+  onToggle,
+}: {
+  items: LegendItem[]
+  hidden?: readonly string[]
+  onToggle?: (key: string) => void
+}) {
   return (
     <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-muted">
-      {items.map((item) => (
-        <li key={item.label} className="flex items-center gap-1.5">
-          <Dot color={item.color} />
-          {item.label}
-        </li>
-      ))}
+      {items.map((item) => {
+        const key = item.key ?? item.label
+        const shown = !hidden.includes(key)
+        return (
+          <li key={key} className="flex items-center gap-1.5">
+            {onToggle ? (
+              <button
+                type="button"
+                aria-pressed={shown}
+                onClick={() => onToggle(key)}
+                className={cx('flex min-h-8 items-center gap-1.5 rounded-[8px] px-1.5 transition hover:text-ink', !shown && 'line-through')}
+              >
+                <Dot color={item.color} />
+                {item.label}
+              </button>
+            ) : (
+              <>
+                <Dot color={item.color} />
+                {item.label}
+              </>
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }

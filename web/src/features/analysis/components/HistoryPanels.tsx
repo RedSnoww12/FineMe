@@ -4,6 +4,7 @@ import {
   AreaChart,
   Bar,
   BarChart,
+  Brush,
   CartesianGrid,
   Cell,
   Line,
@@ -22,8 +23,10 @@ import { Legend, type TooltipProps } from '@/shared/ui/charts'
 import { Panel, Signed } from '@/shared/ui/ui'
 import { balanceRows, categoryRows, countUndetailedDays, presentCategories, type BalanceRow } from '../lib/evolution'
 import { formatAxis, formatUnit, sampleForTable, type Unit } from '../lib/period'
+import { useChartSettings, useZoom } from '../hooks/useChartSettings'
+import { canUseLog, smoothRows, SMOOTH_DAYS, toggleHidden } from '../lib/chartSettings'
 import { periodVariation, waterfallSteps, type WaterfallStep, type WaterfallStepKey } from '../lib/waterfall'
-import { AXIS_TICK, ChartFigure, ChartIntro, DataTable, dateTick, PanelState, UnitTooltip } from './chartParts'
+import { AXIS_TICK, ChartControls, ChartFigure, ChartIntro, DataTable, dateTick, PanelState, UnitTooltip } from './chartParts'
 
 export type HistoryPanelProps = {
   /** Série quotidienne de la période, jours manquants estimés. */
@@ -48,17 +51,44 @@ function EstimatedNote({ series }: { series: DailyHistoryPoint[] }) {
   )
 }
 
+function SmoothNote({ smooth }: { smooth: boolean }) {
+  if (!smooth) return null
+  return <p className="mt-2 text-[13px] text-muted">Courbes lissées sur {SMOOTH_DAYS} jours ; le tableau garde les valeurs exactes.</p>
+}
+
+/** Glissière de zoom sous l'axe des dates. */
+function zoomBrush(zoom: ReturnType<typeof useZoom>, tick: (value: string) => string) {
+  return (
+    <Brush
+      key={zoom.brushKey}
+      dataKey="date"
+      height={22}
+      travellerWidth={8}
+      stroke="var(--muted)"
+      fill="var(--surface)"
+      tickFormatter={tick}
+      onChange={zoom.onChange}
+    />
+  )
+}
+
 function periodLabel(series: DailyHistoryPoint[]): string {
   return `du ${date(series[0]?.date, 'long')} au ${date(series[series.length - 1]?.date, 'long')}`
 }
 
 /** Aires empilées : la valeur de chaque catégorie d'actifs, jour après jour. */
 export function CategoryEvolutionPanel({ series, unit, isPending, error, onRetry }: HistoryPanelProps) {
-  const rows = useMemo(() => categoryRows(series, unit), [series, unit])
-  const categories = presentCategories(rows)
+  const { settings, update } = useChartSettings('categories')
+  const rows = useMemo(() => categoryRows(series, unit, settings.hidden), [series, unit, settings.hidden])
+  const categories = useMemo(() => presentCategories(rows), [rows])
+  const visible = useMemo(() => categories.filter((category) => !settings.hidden.includes(category)), [categories, settings.hidden])
+  // Mémorisé : de nouvelles données remettraient le zoom du Brush à zéro.
+  const plotted = useMemo(() => (settings.smooth ? smoothRows(rows, visible, SMOOTH_DAYS) : rows), [rows, visible, settings.smooth])
+  const zoom = useZoom(rows.length)
   const undetailed = countUndetailedDays(series)
   const tick = dateTick(series[0]?.date, series[series.length - 1]?.date)
   const legend = categories.map((category) => ({ key: category, label: ACCOUNT_KIND_PLURAL[category], color: CATEGORY_COLOR[category] }))
+  const shown = legend.filter((s) => visible.includes(s.key))
   const last = [...rows].reverse().find((row) => row.checking !== null)
 
   return (
@@ -82,13 +112,14 @@ export function CategoryEvolutionPanel({ series, unit, isPending, error, onRetry
       >
         {() => (
           <>
+            <ChartControls settings={settings} update={update} zoom={zoom} />
             <ChartFigure
-              summary={`Actifs par catégorie ${periodLabel(series)}. Dernier relevé : ${legend
+              summary={`Actifs par catégorie ${periodLabel(series)}. Dernier relevé : ${shown
                 .map((s) => `${s.label} ${formatUnit(last?.[s.key] ?? 0, unit)}`)
                 .join(', ')}.`}
             >
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={rows} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} accessibilityLayer={false}>
+                <AreaChart data={plotted} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} accessibilityLayer={false}>
                   <CartesianGrid stroke="var(--line)" vertical={false} />
                   <XAxis dataKey="date" tickFormatter={tick} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: 'var(--line)' }} minTickGap={40} />
                   <YAxis
@@ -99,8 +130,8 @@ export function CategoryEvolutionPanel({ series, unit, isPending, error, onRetry
                     width={62}
                     domain={unit === 'pct' ? [0, 100] : [0, 'auto']}
                   />
-                  <Tooltip content={(props) => <UnitTooltip {...props} unit={unit} series={[...legend].reverse()} />} />
-                  {categories.map((category) => (
+                  <Tooltip content={(props) => <UnitTooltip {...props} unit={unit} series={[...shown].reverse()} />} />
+                  {visible.map((category) => (
                     <Area
                       key={category}
                       type="linear"
@@ -113,10 +144,12 @@ export function CategoryEvolutionPanel({ series, unit, isPending, error, onRetry
                       isAnimationActive={false}
                     />
                   ))}
+                  {zoomBrush(zoom, tick)}
                 </AreaChart>
               </ResponsiveContainer>
             </ChartFigure>
-            <Legend items={legend} />
+            <Legend items={legend} hidden={settings.hidden} onToggle={(key) => update((s) => ({ hidden: toggleHidden(s.hidden, key) }))} />
+            <SmoothNote smooth={settings.smooth} />
             <EstimatedNote series={series} />
             {undetailed > 0 ? (
               <p className="mt-1 text-[13px] text-muted">
@@ -128,14 +161,14 @@ export function CategoryEvolutionPanel({ series, unit, isPending, error, onRetry
               caption="Valeur des actifs par catégorie"
               columns={[
                 { header: 'Date' },
-                ...legend.map((s) => ({ header: s.label, numeric: true })),
+                ...shown.map((s) => ({ header: s.label, numeric: true })),
               ]}
               rows={sampleForTable(rows.filter((row) => row.checking !== null)).map((row) => [
                 <>
                   {date(row.date)}
                   {row.estimated ? <span className="text-muted"> (estimé)</span> : null}
                 </>,
-                ...legend.map((s) => formatUnit(row[s.key], unit)),
+                ...shown.map((s) => formatUnit(row[s.key], unit)),
               ])}
             />
           </>
@@ -153,7 +186,15 @@ const BALANCE_SERIES: { key: 'gross_assets' | 'liabilities' | 'net_worth'; label
 
 /** Courbes : actifs bruts, dettes et patrimoine net (actifs moins dettes). */
 export function BalancePanel({ series, unit, isPending, error, onRetry }: HistoryPanelProps) {
+  const { settings, update } = useChartSettings('balance')
   const rows = useMemo(() => balanceRows(series, unit), [series, unit])
+  const shown = useMemo(() => BALANCE_SERIES.filter((s) => !settings.hidden.includes(s.key)), [settings.hidden])
+  const keys = useMemo(() => shown.map((s) => s.key), [shown])
+  // Mémorisé : de nouvelles données remettraient le zoom du Brush à zéro.
+  const plotted = useMemo(() => (settings.smooth ? smoothRows(rows, keys, SMOOTH_DAYS) : rows), [rows, keys, settings.smooth])
+  const logAvailable = unit === 'eur' && canUseLog(rows, keys)
+  const log = settings.log && logAvailable
+  const zoom = useZoom(rows.length)
   const tick = dateTick(series[0]?.date, series[series.length - 1]?.date)
   const last: BalanceRow | undefined = rows[rows.length - 1]
 
@@ -167,13 +208,14 @@ export function BalancePanel({ series, unit, isPending, error, onRetry }: Histor
       <PanelState isPending={isPending} error={error} onRetry={onRetry} empty={series.length < 2 ? TOO_SHORT : null}>
         {() => (
           <>
+            <ChartControls settings={settings} update={update} log={{ available: logAvailable }} zoom={zoom} />
             <ChartFigure
-              summary={`Actifs, dettes et patrimoine net ${periodLabel(series)}. Dernier relevé : ${BALANCE_SERIES
+              summary={`Actifs, dettes et patrimoine net ${periodLabel(series)}. Dernier relevé : ${shown
                 .map((s) => `${s.label} ${formatUnit(last?.[s.key], unit, unit === 'pct')}`)
                 .join(', ')}.`}
             >
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={rows} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} accessibilityLayer={false}>
+                <LineChart data={plotted} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} accessibilityLayer={false}>
                   <CartesianGrid stroke="var(--line)" vertical={false} />
                   <XAxis dataKey="date" tickFormatter={tick} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: 'var(--line)' }} minTickGap={40} />
                   <YAxis
@@ -182,11 +224,12 @@ export function BalancePanel({ series, unit, isPending, error, onRetry }: Histor
                     tickLine={false}
                     axisLine={false}
                     width={62}
+                    scale={log ? 'log' : 'auto'}
                     domain={['auto', 'auto']}
                   />
                   {unit === 'pct' ? <ReferenceLine y={0} stroke="var(--muted)" strokeDasharray="3 3" /> : null}
-                  <Tooltip content={(props) => <UnitTooltip {...props} unit={unit} series={BALANCE_SERIES} />} />
-                  {BALANCE_SERIES.map((s) => (
+                  <Tooltip content={(props) => <UnitTooltip {...props} unit={unit} series={shown} />} />
+                  {shown.map((s) => (
                     <Line
                       key={s.key}
                       type="monotone"
@@ -199,10 +242,12 @@ export function BalancePanel({ series, unit, isPending, error, onRetry }: Histor
                       isAnimationActive={false}
                     />
                   ))}
+                  {zoomBrush(zoom, tick)}
                 </LineChart>
               </ResponsiveContainer>
             </ChartFigure>
-            <Legend items={BALANCE_SERIES} />
+            <Legend items={BALANCE_SERIES} hidden={settings.hidden} onToggle={(key) => update((s) => ({ hidden: toggleHidden(s.hidden, key) }))} />
+            <SmoothNote smooth={settings.smooth} />
             <EstimatedNote series={series} />
             <DataTable
               caption="Actifs bruts, dettes et patrimoine net"

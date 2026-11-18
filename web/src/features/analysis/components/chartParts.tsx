@@ -1,7 +1,8 @@
 import { useId, type ReactNode } from 'react'
 import { AXIS_TICK, type TooltipProps } from '@/shared/ui/charts'
-import { Dot, ErrorState, Skeleton } from '@/shared/ui/ui'
+import { Button, Dot, ErrorState, Skeleton } from '@/shared/ui/ui'
 import { date as formatDate } from '@/shared/lib/format'
+import { SMOOTH_DAYS, type ChartSettings } from '../lib/chartSettings'
 import { formatUnit, type Unit } from '../lib/period'
 
 export { AXIS_TICK }
@@ -135,6 +136,51 @@ export function UnitTooltip({
         ))}
       </ul>
       {note?.(key)}
+    </div>
+  )
+}
+
+function Toggle({ pressed, onClick, disabled, title, children }: { pressed: boolean; onClick: () => void; disabled?: boolean; title?: string; children: ReactNode }) {
+  return (
+    <Button size="sm" variant={pressed ? 'primary' : 'secondary'} aria-pressed={pressed} onClick={onClick} disabled={disabled} title={title}>
+      {children}
+    </Button>
+  )
+}
+
+/**
+ * Réglages d'un graphique daté : lissage, échelle logarithmique (si `log` est fourni) et réinitialisation du
+ * zoom. L'échelle logarithmique est désactivée quand une série tracée est nulle ou négative.
+ */
+export function ChartControls({
+  settings,
+  update,
+  log,
+  zoom,
+}: {
+  settings: ChartSettings
+  update: (change: (current: ChartSettings) => Partial<ChartSettings>) => void
+  log?: { available: boolean }
+  zoom: { zoomed: boolean; reset: () => void }
+}) {
+  return (
+    <div role="group" aria-label="Affichage du graphique" className="mb-3 flex flex-wrap gap-2">
+      <Toggle pressed={settings.smooth} onClick={() => update((s) => ({ smooth: !s.smooth }))}>
+        Lisser ({SMOOTH_DAYS} j)
+      </Toggle>
+      {log ? (
+        <Toggle
+          pressed={settings.log && log.available}
+          disabled={!log.available}
+          title={log.available ? undefined : 'Indisponible : une série affichée est nulle ou négative, ou les valeurs sont en %.'}
+          onClick={() => update((s) => ({ log: !s.log }))}
+        >
+          Échelle log
+        </Toggle>
+      ) : null}
+      <Button size="sm" variant="ghost" onClick={zoom.reset} disabled={!zoom.zoomed}>
+        Réinitialiser le zoom
+      </Button>
     </div>
   )
 }

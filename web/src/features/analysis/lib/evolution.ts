@@ -17,9 +17,10 @@ function emptyCategories(value: number | null): Record<AllocationCategory, numbe
 
 /**
  * Valeur des actifs par catégorie, jour par jour. En pourcentage, chaque catégorie est rapportée aux actifs
- * bruts du jour (les aires empilées font 100 %). Un jour sans détail par compte n'a aucune valeur (trou).
+ * du jour hors catégories masquées (les aires affichées font 100 %). Un jour sans détail par compte n'a
+ * aucune valeur (trou).
  */
-export function categoryRows(series: readonly DailyHistoryPoint[], unit: Unit): CategoryRow[] {
+export function categoryRows(series: readonly DailyHistoryPoint[], unit: Unit, hidden: readonly string[] = []): CategoryRow[] {
   return series.map((point) => {
     if (point.accounts === null) return { date: point.date, estimated: point.estimated, ...emptyCategories(null) }
     const values = emptyCategories(0)
@@ -28,7 +29,10 @@ export function categoryRows(series: readonly DailyHistoryPoint[], unit: Unit): 
       values[account.kind] = (values[account.kind] ?? 0) + account.value
     }
     if (unit === 'pct') {
-      const total = ASSET_CATEGORIES.reduce((sum, category) => sum + (values[category] ?? 0), 0)
+      const total = ASSET_CATEGORIES.filter((category) => !hidden.includes(category)).reduce(
+        (sum, category) => sum + (values[category] ?? 0),
+        0,
+      )
       for (const category of ASSET_CATEGORIES) values[category] = share(values[category] ?? 0, total) ?? 0
     }
     return { date: point.date, estimated: point.estimated, ...values }
