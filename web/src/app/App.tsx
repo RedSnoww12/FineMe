@@ -16,6 +16,7 @@ const ProjectionPage = lazy(() => import('@/features/projection/pages/Projection
 const FeesPage = lazy(() => import('@/features/fees/pages/FeesPage'))
 const ConnectionsPage = lazy(() => import('@/features/connections/pages/ConnectionsPage'))
 const SettingsPage = lazy(() => import('@/features/settings/pages/SettingsPage'))
+const HistoryCleanupPage = lazy(() => import('@/features/settings/pages/HistoryCleanupPage'))
 
 function Protected() {
   const { isAuthenticated } = useAuth()
@@ -50,6 +51,7 @@ export default function App() {
             <Route path="frais" element={<FeesPage />} />
             <Route path="connexions" element={<ConnectionsPage />} />
             <Route path="parametres" element={<SettingsPage />} />
+            <Route path="parametres/historique" element={<HistoryCleanupPage />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
