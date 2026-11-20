@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::{delete, get, post, put};
 use axum::{Extension, Router, middleware};
+use chrono::NaiveDate;
 use fineme_application::auth::Session;
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{HoldingInput, TransactionInput};
@@ -14,8 +15,9 @@ use crate::AppState;
 use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
-    AccountBody, BundleBody, ConnectionBody, GoalBody, HistoryQuery, HoldingBody, HoldingsBulkBody,
-    LoginBody, MemberBody, PageQuery, PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody,
+    AccountBody, BundleBody, ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody,
+    HistoryQuery, HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody, LoginBody,
+    MemberBody, PageQuery, PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody,
     TransactionsBulkBody, ViewQuery,
 };
 use crate::output;
@@ -69,6 +71,13 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/loans/{account_id}/schedule", get(loan_schedule))
         .route("/overview", get(overview))
         .route("/history", get(history))
+        .route(
+            "/history/points",
+            get(history_review).delete(history_delete),
+        )
+        .route("/history/points/{date}", put(history_correct))
+        .route("/history/recompute", post(history_recompute))
+        .route("/history/reset", post(history_reset))
         .route("/goals", get(goals_list).post(goals_create))
         .route("/goals/{id}", put(goals_update).delete(goals_delete))
         .route("/connections/providers", get(connection_providers))
@@ -387,6 +396,57 @@ async fn history(State(app): State<AppState>, Query(query): Query<HistoryQuery>)
             .history(query.range.as_deref(), query.member_id)
             .await?,
     ))
+}
+
+// ---------------------------------------------------------------- nettoyage de l'historique
+
+async fn history_review(
+    State(app): State<AppState>,
+    Query(query): Query<HistoryReviewQuery>,
+) -> JsonResponse {
+    ok(output::history_review(
+        &app.history.review(query.member_id, query.threshold).await?,
+    ))
+}
+
+async fn history_correct(
+    State(app): State<AppState>,
+    Path(date): Path<String>,
+    Query(view): Query<ViewQuery>,
+    Json(body): Json<HistoryCorrectionBody>,
+) -> JsonResponse {
+    let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Date invalide dans l'URL (AAAA-MM-JJ attendu)",
+        )
+    })?;
+    let point = app
+        .history
+        .correct(date, view.member_id, body.gross_assets, body.liabilities)
+        .await?;
+    ok(output::reviewed_point(&point))
+}
+
+async fn history_delete(
+    State(app): State<AppState>,
+    Query(range): Query<DateRangeQuery>,
+) -> JsonResponse {
+    let deleted_days = app.history.delete(range.from, range.to).await?;
+    ok(json!({ "deleted_days": deleted_days }))
+}
+
+async fn history_recompute(State(app): State<AppState>) -> JsonResponse {
+    let snapshot_date = app.overview.record_snapshots().await?;
+    ok(json!({ "snapshot_date": snapshot_date }))
+}
+
+async fn history_reset(
+    State(app): State<AppState>,
+    Json(body): Json<HistoryResetBody>,
+) -> JsonResponse {
+    let deleted_days = app.history.reset(body.confirmation.as_deref()).await?;
+    ok(json!({ "deleted_days": deleted_days }))
 }
 
 // ---------------------------------------------------------------- objectifs

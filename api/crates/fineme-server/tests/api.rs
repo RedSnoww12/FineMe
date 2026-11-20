@@ -20,6 +20,8 @@ const FAR_FUTURE: &str = "2090-01-01";
 struct Api {
     router: Router,
     token: String,
+    /// Accès direct à la base, pour préparer des données qu'aucune route ne crée (instantanés passés).
+    pool: sqlx::PgPool,
     _container: ContainerAsync<Postgres>,
 }
 
@@ -44,7 +46,7 @@ impl Api {
         let pool = fineme_infra::postgres::connect(&url).await.unwrap();
         fineme_infra::postgres::migrate(&pool).await.unwrap();
         let router = fineme_server::build_router(
-            pool,
+            pool.clone(),
             "secret-de-test-0123456789abcdef0123",
             ORIGIN,
             settings,
@@ -55,6 +57,7 @@ impl Api {
         Self {
             router,
             token: String::new(),
+            pool,
             _container: container,
         }
     }
@@ -1361,4 +1364,167 @@ async fn connections_fx_and_cors() {
     );
     let (_, headers, _) = api.send(preflight("https://ailleurs.example")).await;
     assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+}
+
+/// Instantané du foyer `days_ago` jours avant aujourd'hui (selon Postgres), sans dette.
+async fn seed_household_snapshot(api: &Api, days_ago: i32, net_worth: f64) {
+    sqlx::query(
+        "INSERT INTO snapshots (date, member_id, gross_assets, liabilities, net_worth, detailed) \
+         VALUES (CURRENT_DATE - $1, NULL, $2, 0, $2, true)",
+    )
+    .bind(days_ago)
+    .bind(net_worth)
+    .execute(&api.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn history_cleanup_routes_review_correct_delete_recompute_and_reset() {
+    let (mut api, alice, _) = Api::household().await;
+    api.post(
+        "/api/accounts",
+        json!({ "name": "Livret", "kind": "savings", "cash_balance": 100_000,
+            "owners": [{ "member_id": alice, "share": 1 }] }),
+    )
+    .await;
+    // Quatre jours passés, dont un pic aberrant il y a 3 jours, puis l'instantané du jour.
+    for (days_ago, net) in [
+        (4, 100_000.0),
+        (3, 10_000.0),
+        (2, 100_500.0),
+        (1, 101_000.0),
+    ] {
+        seed_household_snapshot(&api, days_ago, net).await;
+    }
+    let (status, recomputed) = api.call("POST", "/api/history/recompute", None).await;
+    assert_eq!(status, StatusCode::OK, "{recomputed}");
+    let today = recomputed["snapshot_date"].as_str().unwrap().to_string();
+
+    let review = api.get("/api/history/points").await;
+    assert!(close(&review["threshold"], 0.2));
+    let points = review["points"].as_array().unwrap();
+    assert_eq!(points.len(), 5);
+    let flagged: Vec<bool> = points
+        .iter()
+        .map(|p| p["suspicious"].as_bool().unwrap())
+        .collect();
+    assert_eq!(flagged, vec![false, true, false, false, false]);
+    assert_eq!(points[0]["change"], Value::Null);
+    assert_eq!(points[4]["date"], today.as_str());
+    assert_eq!(points[4]["detailed"], true);
+    let spike = points[1]["date"].as_str().unwrap().to_string();
+    let first = points[0]["date"].as_str().unwrap().to_string();
+    let yesterday = points[3]["date"].as_str().unwrap().to_string();
+
+    // Paramètres invalides.
+    let amounts = json!({ "gross_assets": 1, "liabilities": 0 });
+    assert_eq!(
+        error_of(
+            &api.call("GET", "/api/history/points?threshold=0", None)
+                .await
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        error_of(
+            &api.call("PUT", "/api/history/points/hier", Some(amounts.clone()))
+                .await
+        ),
+        (400, "Date invalide dans l'URL (AAAA-MM-JJ attendu)")
+    );
+    let today_path = format!("/api/history/points/{today}");
+    assert_eq!(
+        error_of(&api.call("PUT", &today_path, Some(amounts.clone())).await).0,
+        400
+    );
+    assert_eq!(
+        error_of(
+            &api.call("PUT", "/api/history/points/2001-01-01", Some(amounts))
+                .await
+        ),
+        (404, "Aucun point d'historique à cette date pour cette vue")
+    );
+
+    // Correction du pic : le point n'est plus suspect et le graphique lit la valeur saisie.
+    let (status, corrected) = api
+        .call(
+            "PUT",
+            &format!("/api/history/points/{spike}"),
+            Some(json!({ "gross_assets": 100_300, "liabilities": 100 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{corrected}");
+    assert_eq!(corrected["corrected"], true);
+    assert_eq!(corrected["detailed"], false);
+    assert!(close(&corrected["net_worth"], 100_200.0));
+    let history = api.get("/api/history").await;
+    assert!(close(&history["points"][1]["net_worth"], 100_200.0));
+    assert_eq!(history["points"][1]["accounts"], Value::Null);
+    let review = api.get("/api/history/points").await;
+    assert!(
+        review["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["suspicious"] == false)
+    );
+
+    // Suppression d'un point, puis d'une plage.
+    let reversed = format!("/api/history/points?from={yesterday}&to={first}");
+    assert_eq!(error_of(&api.call("DELETE", &reversed, None).await).0, 400);
+    let one = format!("/api/history/points?from={first}&to={first}");
+    assert_eq!(
+        api.call("DELETE", &one, None).await,
+        (StatusCode::OK, json!({ "deleted_days": 1 }))
+    );
+    let range = format!("/api/history/points?from={spike}&to={yesterday}");
+    assert_eq!(
+        api.call("DELETE", &range, None).await,
+        (StatusCode::OK, json!({ "deleted_days": 3 }))
+    );
+    let remaining = api.get("/api/history").await["points"].clone();
+    assert_eq!(remaining.as_array().unwrap().len(), 1);
+
+    // Remise à zéro : refusée sans le mot exact.
+    let refused = api
+        .call(
+            "POST",
+            "/api/history/reset",
+            Some(json!({ "confirmation": "oui" })),
+        )
+        .await;
+    assert_eq!(
+        error_of(&refused),
+        (
+            400,
+            "Confirmation manquante : saisissez EFFACER pour supprimer tout l'historique"
+        )
+    );
+    assert_eq!(
+        api.post("/api/history/reset", json!({ "confirmation": "EFFACER" }))
+            .await,
+        json!({ "deleted_days": 1 })
+    );
+    assert_eq!(api.get("/api/history").await, json!({ "points": [] }));
+
+    // Toutes ces routes exigent le JWT.
+    api.token.clear();
+    for (method, path) in [
+        ("GET", "/api/history/points"),
+        ("PUT", "/api/history/points/2026-01-01"),
+        (
+            "DELETE",
+            "/api/history/points?from=2026-01-01&to=2026-01-02",
+        ),
+        ("POST", "/api/history/recompute"),
+        ("POST", "/api/history/reset"),
+    ] {
+        assert_eq!(
+            error_of(&api.call(method, path, None).await),
+            (401, "Authentification requise"),
+            "{method} {path}"
+        );
+    }
 }

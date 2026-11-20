@@ -17,6 +17,7 @@ use fineme_domain::account::Account;
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::Goal;
+use fineme_domain::history::DateRange;
 use fineme_domain::holding::Holding;
 use fineme_domain::ids::{
     AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
@@ -774,7 +775,8 @@ impl SnapshotRepository for PgStore {
             "INSERT INTO snapshots (date, member_id, gross_assets, liabilities, net_worth, detailed) \
              VALUES ($1, $2, $3, $4, $5, true) \
              ON CONFLICT (date, member_id) DO UPDATE SET gross_assets = EXCLUDED.gross_assets, \
-             liabilities = EXCLUDED.liabilities, net_worth = EXCLUDED.net_worth, detailed = true",
+             liabilities = EXCLUDED.liabilities, net_worth = EXCLUDED.net_worth, detailed = true, \
+             corrected = false",
         )
         .bind(date)
         .bind(member)
@@ -818,8 +820,8 @@ impl SnapshotRepository for PgStore {
         from: NaiveDate,
     ) -> RepoResult<Vec<SnapshotPoint>> {
         let member = member.map(|m| m.as_uuid());
-        let rows: Vec<(NaiveDate, f64, f64, f64, bool)> = sqlx::query_as(
-            "SELECT date, gross_assets, liabilities, net_worth, detailed FROM snapshots \
+        let rows: Vec<(NaiveDate, f64, f64, f64, bool, bool)> = sqlx::query_as(
+            "SELECT date, gross_assets, liabilities, net_worth, detailed, corrected FROM snapshots \
              WHERE member_id IS NOT DISTINCT FROM $1 AND date >= $2 ORDER BY date",
         )
         .bind(member)
@@ -844,7 +846,7 @@ impl SnapshotRepository for PgStore {
         Ok(rows
             .into_iter()
             .map(
-                |(date, gross_assets, liabilities, net_worth, detailed)| SnapshotPoint {
+                |(date, gross_assets, liabilities, net_worth, detailed, corrected)| SnapshotPoint {
                     date,
                     totals: Totals {
                         gross_assets,
@@ -852,9 +854,82 @@ impl SnapshotRepository for PgStore {
                         net_worth,
                     },
                     accounts: detailed.then(|| by_date.remove(&date).unwrap_or_default()),
+                    corrected,
                 },
             )
             .collect())
+    }
+
+    async fn correct(
+        &self,
+        date: NaiveDate,
+        member: Option<MemberId>,
+        totals: Totals,
+    ) -> RepoResult<bool> {
+        let member = member.map(|m| m.as_uuid());
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let updated = sqlx::query(
+            "UPDATE snapshots SET gross_assets = $3, liabilities = $4, net_worth = $5, \
+             detailed = false, corrected = true \
+             WHERE date = $1 AND member_id IS NOT DISTINCT FROM $2",
+        )
+        .bind(date)
+        .bind(member)
+        .bind(totals.gross_assets)
+        .bind(totals.liabilities)
+        .bind(totals.net_worth)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?
+        .rows_affected();
+        // Le détail ne correspondrait plus aux totaux saisis.
+        sqlx::query(
+            "DELETE FROM snapshot_accounts WHERE date = $1 AND member_id IS NOT DISTINCT FROM $2",
+        )
+        .bind(date)
+        .bind(member)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(updated > 0)
+    }
+
+    async fn delete_range(&self, range: DateRange) -> RepoResult<u64> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        sqlx::query("DELETE FROM snapshot_accounts WHERE date BETWEEN $1 AND $2")
+            .bind(range.from())
+            .bind(range.to())
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        let (days,): (i64,) = sqlx::query_as(
+            "WITH gone AS (DELETE FROM snapshots WHERE date BETWEEN $1 AND $2 RETURNING date) \
+             SELECT COUNT(DISTINCT date) FROM gone",
+        )
+        .bind(range.from())
+        .bind(range.to())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(days.unsigned_abs())
+    }
+
+    async fn delete_all(&self) -> RepoResult<u64> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        sqlx::query("DELETE FROM snapshot_accounts")
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        let (days,): (i64,) = sqlx::query_as(
+            "WITH gone AS (DELETE FROM snapshots RETURNING date) SELECT COUNT(DISTINCT date) FROM gone",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(days.unsigned_abs())
     }
 }
 

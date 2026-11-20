@@ -8,6 +8,7 @@ use crate::bundle::BundleService;
 use crate::connections::ConnectionService;
 use crate::error::AppResult;
 use crate::goals::GoalService;
+use crate::history::HistoryService;
 use crate::holdings::HoldingService;
 use crate::members::MemberService;
 use crate::overview::OverviewService;
@@ -65,6 +66,7 @@ pub struct App {
     pub holdings: HoldingService,
     pub transactions: TransactionService,
     pub overview: OverviewService,
+    pub history: HistoryService,
     pub real_estate: RealEstateService,
     pub goals: GoalService,
     pub connections: ConnectionService,
@@ -114,7 +116,12 @@ impl App {
             overview: OverviewService {
                 reader: reader.clone(),
                 members: ports.portfolio.clone(),
+                snapshots: ports.snapshots.clone(),
+                clock: ports.clock.clone(),
+            },
+            history: HistoryService {
                 snapshots: ports.snapshots,
+                members: ports.portfolio.clone(),
                 clock: ports.clock.clone(),
             },
             real_estate: RealEstateService {

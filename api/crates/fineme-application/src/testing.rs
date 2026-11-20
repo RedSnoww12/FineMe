@@ -10,12 +10,13 @@ use fineme_domain::account::Account;
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::Goal;
+use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
     AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
 };
 use fineme_domain::member::Member;
-use fineme_domain::portfolio::Snapshot;
+use fineme_domain::portfolio::{Snapshot, Totals};
 use fineme_domain::transaction::Transaction;
 use uuid::Uuid;
 
@@ -32,7 +33,8 @@ pub struct State {
     pub accounts: Vec<Account>,
     pub holdings: Vec<Holding>,
     pub transactions: Vec<Transaction>,
-    pub snapshots: Vec<(NaiveDate, Option<MemberId>, Snapshot)>,
+    /// Instantanés enregistrés, par vue (`None` = foyer).
+    pub snapshots: Vec<(Option<MemberId>, SnapshotPoint)>,
     pub price_history: Vec<(HoldingId, PricePoint)>,
     pub goals: Vec<Goal>,
     pub connections: Vec<Connection>,
@@ -208,7 +210,7 @@ impl PortfolioRepository for InMemoryStore {
             return Err(RepoError::Reference);
         }
         state.members.retain(|member| member.id != id);
-        state.snapshots.retain(|(_, member, _)| *member != Some(id));
+        state.snapshots.retain(|(member, _)| *member != Some(id));
         for goal in &mut state.goals {
             goal.member_ids.retain(|member| *member != id);
         }
@@ -397,8 +399,16 @@ impl SnapshotRepository for InMemoryStore {
         let mut state = self.lock();
         state
             .snapshots
-            .retain(|(d, m, _)| !(*d == date && *m == member));
-        state.snapshots.push((date, member, snapshot.clone()));
+            .retain(|(m, point)| !(point.date == date && *m == member));
+        state.snapshots.push((
+            member,
+            SnapshotPoint {
+                date,
+                totals: snapshot.totals,
+                accounts: Some(snapshot.accounts.clone()),
+                corrected: false,
+            },
+        ));
         Ok(())
     }
     async fn since(
@@ -410,15 +420,53 @@ impl SnapshotRepository for InMemoryStore {
             .lock()
             .snapshots
             .iter()
-            .filter(|(date, m, _)| *m == member && *date >= from)
-            .map(|(date, _, snapshot)| SnapshotPoint {
-                date: *date,
-                totals: snapshot.totals,
-                accounts: Some(snapshot.accounts.clone()),
-            })
+            .filter(|(m, point)| *m == member && point.date >= from)
+            .map(|(_, point)| point.clone())
             .collect();
         points.sort_by_key(|point| point.date);
         Ok(points)
+    }
+    async fn correct(
+        &self,
+        date: NaiveDate,
+        member: Option<MemberId>,
+        totals: Totals,
+    ) -> RepoResult<bool> {
+        let mut state = self.lock();
+        let found = state
+            .snapshots
+            .iter_mut()
+            .find(|(m, point)| *m == member && point.date == date);
+        Ok(found
+            .map(|(_, point)| {
+                point.totals = totals;
+                point.accounts = None;
+                point.corrected = true;
+            })
+            .is_some())
+    }
+    async fn delete_range(&self, range: DateRange) -> RepoResult<u64> {
+        let mut state = self.lock();
+        let mut days: Vec<NaiveDate> = state
+            .snapshots
+            .iter()
+            .map(|(_, point)| point.date)
+            .filter(|date| range.contains(*date))
+            .collect();
+        days.sort();
+        days.dedup();
+        state
+            .snapshots
+            .retain(|(_, point)| !range.contains(point.date));
+        Ok(days.len() as u64)
+    }
+    async fn delete_all(&self) -> RepoResult<u64> {
+        let mut state = self.lock();
+        let mut days: Vec<NaiveDate> = state.snapshots.iter().map(|(_, p)| p.date).collect();
+        days.sort();
+        days.dedup();
+        state.snapshots.clear();
+        Ok(days.len() as u64)
     }
 }
 

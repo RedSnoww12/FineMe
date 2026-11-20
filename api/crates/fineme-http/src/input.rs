@@ -36,6 +36,30 @@ pub struct HistoryQuery {
 }
 
 #[derive(Deserialize)]
+pub struct HistoryReviewQuery {
+    pub member_id: Option<Uuid>,
+    /// Seuil de variation, fraction (0.2 = 20 %).
+    pub threshold: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub struct DateRangeQuery {
+    pub from: NaiveDate,
+    pub to: NaiveDate,
+}
+
+#[derive(Deserialize)]
+pub struct HistoryCorrectionBody {
+    pub gross_assets: f64,
+    pub liabilities: f64,
+}
+
+#[derive(Deserialize)]
+pub struct HistoryResetBody {
+    pub confirmation: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct PageQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
