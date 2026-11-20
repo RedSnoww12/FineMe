@@ -10,6 +10,7 @@ pub mod connections;
 pub mod daily;
 pub mod error;
 pub mod goals;
+pub mod history;
 pub mod holdings;
 pub mod members;
 pub mod overview;

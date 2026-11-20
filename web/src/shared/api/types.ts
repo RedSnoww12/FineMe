@@ -257,6 +257,24 @@ export type HistoryPoint = {
 }
 export type History = { points: HistoryPoint[] }
 
+/** Point de l'historique tel que le voit l'écran de nettoyage. */
+export type HistoryReviewPoint = {
+  date: string
+  gross_assets: number
+  liabilities: number
+  net_worth: number
+  /** false : pas de détail par compte (instantané ancien ou corrigé). */
+  detailed: boolean
+  corrected: boolean
+  /** Variation depuis le point précédent, fraction ; null pour le premier point ou une base nulle. */
+  change: number | null
+  suspicious: boolean
+}
+export type HistoryReview = { threshold: number; points: HistoryReviewPoint[] }
+export type HistoryCorrectionInput = { gross_assets: number; liabilities: number }
+export type HistoryDeleteResult = { deleted_days: number }
+export type HistoryRecomputeResult = { snapshot_date: string }
+
 export type GoalKind = 'safety_net' | 'project'
 export type GoalStatus = 'completed' | 'on_track' | 'challenging' | 'overdue' | 'underfunded' | 'funded'
 

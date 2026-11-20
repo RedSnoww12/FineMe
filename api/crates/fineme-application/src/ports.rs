@@ -8,6 +8,7 @@ use fineme_domain::account::Account;
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::Goal;
+use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
     AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
@@ -178,6 +179,8 @@ pub struct SnapshotPoint {
     pub totals: Totals,
     /// Détail par compte ; `None` pour un instantané enregistré avant l'introduction du détail.
     pub accounts: Option<Vec<AccountSnapshot>>,
+    /// Totaux corrigés à la main (le détail par compte a alors été retiré).
+    pub corrected: bool,
 }
 
 #[async_trait]
@@ -194,6 +197,18 @@ pub trait SnapshotRepository: Send + Sync {
         member: Option<MemberId>,
         from: NaiveDate,
     ) -> RepoResult<Vec<SnapshotPoint>>;
+    /// Remplace les totaux d'un jour pour une vue, retire son détail par compte et le marque corrigé.
+    /// Renvoie `false` si aucun instantané n'existe ce jour-là pour cette vue.
+    async fn correct(
+        &self,
+        date: NaiveDate,
+        member: Option<MemberId>,
+        totals: Totals,
+    ) -> RepoResult<bool>;
+    /// Supprime les instantanés de la plage (toutes vues) ; renvoie le nombre de jours supprimés.
+    async fn delete_range(&self, range: DateRange) -> RepoResult<u64>;
+    /// Supprime tout l'historique (toutes vues) ; renvoie le nombre de jours supprimés.
+    async fn delete_all(&self) -> RepoResult<u64>;
 }
 
 #[async_trait]

@@ -5,6 +5,7 @@ import type {
   Goal,
   HistoryAccount,
   HistoryPoint,
+  HistoryReviewPoint,
   Holding,
   Member,
   Overview,
@@ -158,6 +159,22 @@ export function buildHistoryPoint(date: string, accounts: HistoryAccount[] | nul
   const gross = lines.filter((a) => a.kind !== 'loan').reduce((sum, a) => sum + a.value, 0)
   const debts = lines.filter((a) => a.kind === 'loan').reduce((sum, a) => sum + a.value, 0)
   return { date, gross_assets: gross, liabilities: debts, net_worth: gross - debts, accounts, ...overrides }
+}
+
+/** Point de l'écran de nettoyage : sans dette, ni suspect ni corrigé par défaut. */
+export function buildHistoryReviewPoint(date: string, overrides: Partial<HistoryReviewPoint> = {}): HistoryReviewPoint {
+  const netWorth = overrides.net_worth ?? 100_000
+  return {
+    date,
+    gross_assets: netWorth,
+    liabilities: 0,
+    net_worth: netWorth,
+    detailed: true,
+    corrected: false,
+    change: null,
+    suspicious: false,
+    ...overrides,
+  }
 }
 
 export function buildRealEstateLoan(overrides: Partial<RealEstateLoan> = {}): RealEstateLoan {

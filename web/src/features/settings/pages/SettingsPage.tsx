@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { Link } from 'react-router'
 import { useMembers } from '@/shared/api/queries'
 import {
   useChangePassword,
@@ -368,6 +369,20 @@ export default function SettingsPage() {
       <div className="flex flex-col gap-4 sm:gap-5">
         <MembersPanel />
         <DataPanel />
+        <Panel title="Historique des graphiques">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-[56ch] text-muted">
+              Repérez les points suspects, corrigez ou supprimez des jours, recalculez le point du jour ou repartez de
+              zéro.
+            </p>
+            <Link
+              to="/parametres/historique"
+              className="inline-flex min-h-10 items-center rounded-[9px] border border-line px-4 font-medium hover:border-muted"
+            >
+              Nettoyer l’historique
+            </Link>
+          </div>
+        </Panel>
         <Panel title="Apparence">
           <Segmented<ThemeChoice>
             label="Thème"

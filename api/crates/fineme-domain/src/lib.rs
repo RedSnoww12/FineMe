@@ -6,6 +6,7 @@ pub mod connection;
 pub mod error;
 pub mod fx;
 pub mod goal;
+pub mod history;
 pub mod holding;
 pub mod ids;
 pub mod loan;

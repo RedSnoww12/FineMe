@@ -13,7 +13,12 @@ import type {
   Goal,
   GoalInput,
   History,
+  HistoryCorrectionInput,
+  HistoryDeleteResult,
   HistoryRange,
+  HistoryRecomputeResult,
+  HistoryReview,
+  HistoryReviewPoint,
   Holding,
   HoldingInput,
   ImportResult,
@@ -92,6 +97,16 @@ export const api = {
   overview: (view: View) => request<Overview>('/api/overview', { query: view }),
   history: (range: HistoryRange, view: View): Promise<History> =>
     request<History>('/api/history', { query: { range, ...view } }).then(normalizeHistory),
+
+  // Nettoyage de l'historique
+  historyReview: (view: View) => request<HistoryReview>('/api/history/points', { query: view }),
+  correctHistoryPoint: (date: string, view: View, body: HistoryCorrectionInput) =>
+    request<HistoryReviewPoint>(`/api/history/points/${date}`, { method: 'PUT', query: view, body }),
+  deleteHistoryRange: (range: { from: string; to: string }) =>
+    request<HistoryDeleteResult>('/api/history/points', { method: 'DELETE', query: range }),
+  recomputeHistory: () => request<HistoryRecomputeResult>('/api/history/recompute', { method: 'POST' }),
+  resetHistory: (confirmation: string) =>
+    request<HistoryDeleteResult>('/api/history/reset', { method: 'POST', body: { confirmation } }),
 
   // Objectifs
   goals: (view: View) => request<Goal[]>('/api/goals', { query: view }),

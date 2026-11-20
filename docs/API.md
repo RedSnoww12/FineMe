@@ -224,6 +224,53 @@ Détail : seuls les comptes dont la vue détient une part figurent dans `account
 `/api/overview` au même jour. La répartition par catégorie se déduit de `kind` (mêmes catégories que `allocation`).
 Une période personnalisée se filtre côté front dans la réponse `range=all`.
 
+### Nettoyage de l'historique
+
+Routes protégées par le JWT, pour corriger les graphiques (point aberrant, journée en échec, données de test).
+
+GET `/api/history/points?member_id=&threshold=` → `HistoryReview` (tous les points de la vue, du plus ancien au plus récent)
+```ts
+type HistoryReview = {
+  threshold: number;          // seuil appliqué, fraction (0.2 = 20 %) ; défaut 0.2, accepté dans ]0, 10]
+  points: HistoryReviewPoint[];
+};
+type HistoryReviewPoint = {
+  date: string; gross_assets: number; liabilities: number; net_worth: number;
+  detailed: boolean;          // false : pas de détail par compte (instantané ancien ou corrigé)
+  corrected: boolean;         // valeur corrigée à la main
+  change: number | null;      // variation du patrimoine net depuis le point précédent, fraction de la base
+  suspicious: boolean;        // variation anormale (voir ci-dessous)
+};
+```
+Point suspect : `change` = (net − net précédent) / base, où base = max(|net précédent|, actifs bruts précédents).
+Un point est suspect si |`change`| > `threshold` **et** si l'écart absolu atteint au moins 100 €. Un point qui
+ramène la courbe au niveau d'avant un point suspect (retour à la normale, |variation depuis l'avant-dernier
+point| ≤ seuil) n'est pas signalé : seul le pic l'est. Le premier point, un point dont la base est nulle et un point
+corrigé à la main ne sont jamais suspects. Les jours sans instantané ne comptent pas : on compare deux points
+consécutifs. (400) seuil invalide ; (404) membre inconnu.
+
+PUT `/api/history/points/:date?member_id=` `{ gross_assets, liabilities }` → `HistoryReviewPoint`
+Corrige le point de ce jour pour la vue demandée seulement (foyer par défaut). `net_worth` = `gross_assets` −
+`liabilities` ; les deux montants sont finis et ≥ 0. Le détail par compte du point est retiré (il ne
+correspondrait plus aux totaux : `accounts` devient `null` dans `/api/history`) et le point est marqué `corrected`.
+(400) montant invalide, ou date du jour : le point du jour est recalculé à chaque instantané, il se corrige en
+modifiant les comptes puis en le recalculant ; (404) aucun point ce jour-là pour cette vue, ou membre inconnu.
+
+DELETE `/api/history/points?from=YYYY-MM-DD&to=YYYY-MM-DD` → `{ deleted_days: number }`
+Supprime les instantanés de ces jours (bornes incluses ; `from = to` pour un seul point) **pour toutes les vues**
+(foyer et chaque membre, relevés ensemble chaque jour). (400) date absente ou illisible, `from` après `to`. Le point du
+jour supprimé réapparaît au prochain instantané (vue d'ensemble ou tâche quotidienne).
+
+POST `/api/history/recompute` (sans corps) → `{ snapshot_date }`
+Reprend l'instantané du jour (foyer et chaque membre) à partir des données actuelles, comme la tâche quotidienne
+sans rafraîchir les cours. Limite : les jours passés ne peuvent pas
+être recalculés, car l'historique des soldes, des valeurs de biens et des positions n'est pas conservé (seuls les
+cours automatiques le sont) ; ils se corrigent ou se suppriment.
+
+POST `/api/history/reset` `{ confirmation: "EFFACER" }` → `{ deleted_days: number }`
+Supprime tout l'historique, toutes vues confondues. Action protégée : (400) si `confirmation` n'est pas exactement
+`EFFACER` (espaces de début et de fin ignorés), rien n'est supprimé.
+
 ## Tâche quotidienne
 
 POST `/api/jobs/daily`, en-tête `Authorization: Bearer <CRON_SECRET>`, sans corps →

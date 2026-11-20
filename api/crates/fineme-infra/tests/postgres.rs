@@ -11,6 +11,7 @@ use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::connection::{Connection, ConnectionStatus};
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::{Goal, GoalKind};
+use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::*;
 use fineme_domain::loan::{Loan, LoanTerms};
@@ -777,6 +778,93 @@ async fn snapshots_recorded_before_the_detail_have_no_account_breakdown() {
     assert_eq!(points.len(), 1);
     assert_eq!(points[0].totals, totals_of(1000.0));
     assert_eq!(points[0].accounts, None);
+}
+
+#[tokio::test]
+async fn correcting_a_snapshot_replaces_its_totals_and_drops_its_detail_in_one_view() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let day = date(2026, 1, 1);
+    let detailed = Snapshot {
+        totals: totals_of(1900.0),
+        accounts: vec![line("PEA", AccountKind::Investment, 2000.0, None)],
+    };
+    db.store.upsert(day, None, &detailed).await.unwrap();
+    db.store
+        .upsert(day, Some(alice.id), &detailed)
+        .await
+        .unwrap();
+    let fixed = totals_of(1500.0);
+
+    assert!(db.store.correct(day, None, fixed).await.unwrap());
+    assert!(
+        !db.store
+            .correct(date(2026, 1, 2), None, fixed)
+            .await
+            .unwrap()
+    );
+    let household = db.store.since(None, day).await.unwrap();
+    assert_eq!(household[0].totals, fixed);
+    assert_eq!(household[0].accounts, None);
+    assert!(household[0].corrected);
+    // La vue d'Alice garde son détail.
+    let member = db.store.since(Some(alice.id), day).await.unwrap();
+    assert!(!member[0].corrected);
+    assert_eq!(member[0].accounts.as_ref().map(Vec::len), Some(1));
+    assert_eq!(count(&db, "snapshot_accounts").await, 1);
+
+    // Un nouvel instantané du même jour remplace la correction.
+    db.store.upsert(day, None, &detailed).await.unwrap();
+    let household = db.store.since(None, day).await.unwrap();
+    assert!(!household[0].corrected);
+    assert_eq!(household[0].totals, totals_of(1900.0));
+}
+
+#[tokio::test]
+async fn snapshots_are_deleted_by_range_for_every_view_then_all_at_once() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let pea = line("PEA", AccountKind::Investment, 2000.0, None);
+    for day in 1..=4 {
+        let snapshot = Snapshot {
+            totals: totals_of(f64::from(day) * 100.0),
+            accounts: vec![pea.clone()],
+        };
+        db.store
+            .upsert(date(2026, 1, day), None, &snapshot)
+            .await
+            .unwrap();
+        db.store
+            .upsert(date(2026, 1, day), Some(alice.id), &snapshot)
+            .await
+            .unwrap();
+    }
+    let range = DateRange::new(date(2026, 1, 2), date(2026, 1, 3)).unwrap();
+    assert_eq!(db.store.delete_range(range).await.unwrap(), 2);
+    assert_eq!(db.store.delete_range(range).await.unwrap(), 0);
+    let days = |points: Vec<fineme_application::ports::SnapshotPoint>| {
+        points.iter().map(|p| p.date).collect::<Vec<_>>()
+    };
+    let kept = vec![date(2026, 1, 1), date(2026, 1, 4)];
+    assert_eq!(
+        days(db.store.since(None, date(1900, 1, 1)).await.unwrap()),
+        kept
+    );
+    assert_eq!(
+        days(
+            db.store
+                .since(Some(alice.id), date(1900, 1, 1))
+                .await
+                .unwrap()
+        ),
+        kept
+    );
+    assert_eq!(count(&db, "snapshot_accounts").await, 4);
+
+    assert_eq!(db.store.delete_all().await.unwrap(), 2);
+    assert_eq!(count(&db, "snapshots").await, 0);
+    assert_eq!(count(&db, "snapshot_accounts").await, 0);
+    assert_eq!(db.store.delete_all().await.unwrap(), 0);
 }
 
 #[tokio::test]

@@ -6,6 +6,7 @@ use fineme_application::commands::{
 };
 use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
+use fineme_application::history::{HistoryReview, ReviewedPoint};
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
@@ -249,6 +250,27 @@ pub fn history(points: &[SnapshotPoint]) -> Value {
         })
         .collect();
     json!({ "points": points })
+}
+
+pub fn reviewed_point(reviewed: &ReviewedPoint) -> Value {
+    let p = &reviewed.point;
+    with(
+        json!({
+            "date": p.date,
+            "detailed": p.accounts.is_some(),
+            "corrected": p.corrected,
+            "change": reviewed.change,
+            "suspicious": reviewed.suspicious,
+        }),
+        totals(&p.totals),
+    )
+}
+
+pub fn history_review(review: &HistoryReview) -> Value {
+    json!({
+        "threshold": review.threshold.value(),
+        "points": review.points.iter().map(reviewed_point).collect::<Vec<_>>(),
+    })
 }
 
 pub fn price_history(points: &[PricePoint]) -> Value {
