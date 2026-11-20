@@ -2,10 +2,13 @@ import { useMemo, useState } from 'react'
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useGoals, useOverview } from '@/shared/api/queries'
 import { AXIS_TICK, Legend, MoneyTooltip } from '@/shared/ui/charts'
-import { Button, FormError, NumberField, PageHeader, Panel, Segmented, SelectField, Stat } from '@/shared/ui/ui'
+import { Button, FormError, LoadingBlock, NumberField, PageHeader, Panel, Segmented, SelectField, Stat } from '@/shared/ui/ui'
 import { parseFrNumber } from '@/shared/lib/parse'
 import { fireTarget, monthsToReach, projectGrowth } from '../lib/projection'
-import { duration, money, moneyCompact, pct, toInput } from '@/shared/lib/format'
+import { reachProbability, toFanPoints } from '../lib/monteCarlo'
+import { useMonteCarlo } from '../hooks/useMonteCarlo'
+import { FanChart, FanTable } from '../components/FanChart'
+import { duration, money, moneyCompact, number, pct, pctFromFraction, toInput } from '@/shared/lib/format'
 
 type Mode = 'nominal' | 'real'
 
@@ -16,6 +19,10 @@ const SCENARIOS = [
 ] as const
 
 const value = (text: string) => parseFrNumber(text) ?? 0
+
+/** Nombre de trajectoires simulées : assez pour des percentiles stables, assez peu pour un téléphone. */
+const SIMULATIONS = 2000
+const FIRST_SEED = 1
 
 export default function ProjectionPage() {
   const overview = useOverview()
@@ -32,6 +39,9 @@ export default function ProjectionPage() {
   const [expenses, setExpenses] = useState('')
   const [withdrawal, setWithdrawal] = useState('4')
   const [goalId, setGoalId] = useState('')
+  const [volatility, setVolatility] = useState('15')
+  const [targetInput, setTargetInput] = useState('')
+  const [seed, setSeed] = useState(FIRST_SEED)
 
   const capitalText = capitalInput ?? (overview.data ? toInput(Math.max(0, overview.data.financial_assets), 0) : '')
   const horizon = Math.min(60, Math.max(1, Math.floor(value(years))))
@@ -73,7 +83,31 @@ export default function ProjectionPage() {
         : null,
   }))
 
-  const invalid = [capitalText, monthly, returnPct, spread, inflation, years].some(
+  const volatilityPct = Math.max(0, value(volatility))
+  const simulation = useMonteCarlo({
+    initial,
+    monthly: monthlyAmount,
+    annualReturnPct: central,
+    volatilityPct,
+    years: horizon,
+    simulations: SIMULATIONS,
+    seed,
+  })
+  const fan = useMemo(
+    () =>
+      simulation.result
+        ? toFanPoints(simulation.result.rows, { initial, monthly: monthlyAmount, inflationPct, real: mode === 'real', startYear: thisYear })
+        : [],
+    [simulation.result, initial, monthlyAmount, inflationPct, mode, thisYear],
+  )
+  const fanLast = fan.length > 0 ? fan[fan.length - 1] : null
+  const goalTarget = value(targetInput)
+  const probability =
+    simulation.result && goalTarget > 0
+      ? reachProbability(simulation.result, goalTarget, { inflationPct, real: mode === 'real' })
+      : null
+
+  const invalid = [capitalText, monthly, returnPct, spread, inflation, years, volatility, targetInput].some(
     (text) => text.trim() !== '' && parseFrNumber(text) === null,
   )
   const projects = (goals.data ?? []).filter((goal) => goal.kind === 'project')
@@ -85,6 +119,7 @@ export default function ProjectionPage() {
     if (goal.monthly_contribution !== null) setMonthly(toInput(goal.monthly_contribution, 2))
     if (goal.expected_return_pct !== null) setReturnPct(toInput(goal.expected_return_pct))
     setCapitalInput(toInput(goal.progress.current_amount, 0))
+    if (goal.target_amount !== null) setTargetInput(toInput(goal.target_amount, 0))
     if (goal.target_date) {
       const span = Number(goal.target_date.slice(0, 4)) - thisYear
       if (span >= 1) setYears(String(Math.min(60, span)))
@@ -231,6 +266,58 @@ export default function ProjectionPage() {
               ...(target !== null ? [{ label: 'Capital d’indépendance', color: 'var(--brass)' }] : []),
             ]}
           />
+        </Panel>
+
+        <Panel title="Simulation de Monte-Carlo">
+          <p className="mb-4 max-w-[68ch] text-muted">
+            {`${number(SIMULATIONS)} trajectoires tirées au hasard autour du rendement attendu, avec la volatilité choisie. La bande montre où se situent 8 trajectoires sur 10 ; la date visée est la fin de l’horizon.`}
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <NumberField
+              label="Volatilité annuelle"
+              value={volatility}
+              onChange={setVolatility}
+              suffix="%"
+              hint="Ampleur des variations d’une année à l’autre ; 0 donne la projection centrale."
+            />
+            <NumberField
+              label="Capital cible"
+              value={targetInput}
+              onChange={setTargetInput}
+              suffix="€"
+              hint={mode === 'real' ? `En euros d’aujourd’hui, atteint en ${last.year}.` : `En euros courants, atteint en ${last.year}.`}
+            />
+            <div className="flex items-end">
+              <Button onClick={() => setSeed((current) => current + 1)}>Nouveau tirage</Button>
+            </div>
+          </div>
+
+          <div aria-live="polite" aria-busy={simulation.computing} className="mt-5 border-t border-line pt-5">
+            {fanLast === null ? (
+              <LoadingBlock label="Simulation en cours…" />
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-5 md:grid-cols-4">
+                  <Stat
+                    label={goalTarget > 0 ? `Probabilité d’atteindre ${money(goalTarget)} en ${fanLast.year}` : 'Probabilité d’atteindre la cible'}
+                    value={probability === null ? '–' : pctFromFraction(probability, 0)}
+                    sub={goalTarget > 0 ? undefined : 'Saisissez un capital cible.'}
+                  />
+                  <Stat label="Défavorable (10e percentile)" value={money(fanLast.p10)} sub="1 chance sur 10 de faire moins" />
+                  <Stat label="Médian" value={money(fanLast.p50)} sub="Autant de chances au-dessus qu’en dessous" />
+                  <Stat label="Favorable (90e percentile)" value={money(fanLast.p90)} sub="1 chance sur 10 de faire mieux" />
+                </div>
+                <div className="mt-5">
+                  <FanChart
+                    points={fan}
+                    target={goalTarget > 0 ? goalTarget : null}
+                    summary={`Capital simulé de ${fan[0].year} à ${fanLast.year} : en ${fanLast.year}, ${money(fanLast.p10)} au 10e percentile, ${money(fanLast.p50)} en médiane et ${money(fanLast.p90)} au 90e percentile.`}
+                  />
+                  <FanTable points={fan} />
+                </div>
+              </>
+            )}
+          </div>
         </Panel>
 
         <Panel title="Indépendance financière">
