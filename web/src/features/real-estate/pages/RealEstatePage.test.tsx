@@ -245,10 +245,75 @@ describe('tableau d’amortissement', () => {
   })
 })
 
+describe('simulation sur l’échéancier', () => {
+  async function openSchedule() {
+    mockRealEstate()
+    mockJson('get', '/api/loans/a-pret/schedule', { loan: buildRealEstateLoan(), rows: buildScheduleRows(1200, 12) })
+    const view = await openRealEstate()
+    await view.user.click(within(propertyCard('Maison')).getByRole('button', { name: 'Échéancier' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Amortissement : Prêt maison' })
+    await within(dialog).findByRole('table')
+    return { ...view, dialog, scope: within(dialog) }
+  }
+
+  it('raccourcit l’échéancier après un remboursement anticipé partiel', async () => {
+    const { user: actor, dialog, scope } = await openSchedule()
+    await actor.click(scope.getByRole('button', { name: 'Remboursement anticipé' }))
+    await actor.type(scope.getByLabelText('Après l’échéance n°'), '2')
+    await actor.type(scope.getByLabelText('Montant remboursé'), '300')
+
+    // Après 2 échéances il reste 1 000 € ; 300 € remboursés laissent 7 mensualités de 100 €.
+    const text = pageText(dialog)
+    expect(text).toContain('Nouvelle finoct. 20263 mois plus tôt')
+    expect(text).toContain('Indemnités, plafond légal0 €300 € remboursés par anticipation')
+    expect(scope.getByRole('heading', { name: 'Échéancier simulé' })).toBeInTheDocument()
+    const years = within(scope.getByRole('table')).getAllByRole('row').slice(1)
+    expect(years.map((row) => pageText(row))).toEqual(['2026900 €900 €0 €0 €300 €0 €'])
+  })
+
+  it('baisse la mensualité en gardant la durée', async () => {
+    const { user: actor, dialog, scope } = await openSchedule()
+    await actor.click(scope.getByRole('button', { name: 'Remboursement anticipé' }))
+    await actor.type(scope.getByLabelText('Après l’échéance n°'), '2')
+    await actor.type(scope.getByLabelText('Montant remboursé'), '300')
+    await actor.selectOptions(scope.getByLabelText('Ensuite'), 'reduce_payment')
+    expect(pageText(dialog)).toContain('Nouvelle mensualité70,00 €-30,00 € par mois, hors assurance')
+    expect(pageText(dialog)).toContain('Nouvelle finjanv. 2027durée inchangée')
+  })
+
+  it('solde le prêt par un remboursement total', async () => {
+    const { user: actor, dialog, scope } = await openSchedule()
+    await actor.click(scope.getByRole('button', { name: 'Remboursement anticipé' }))
+    await actor.selectOptions(scope.getByLabelText('Remboursement'), 'total')
+    await actor.type(scope.getByLabelText('Après l’échéance n°'), '6')
+    expect(pageText(dialog)).toContain('Nouvelle mensualitéPrêt soldé')
+    await actor.click(scope.getByRole('button', { name: 'Par mois' }))
+    const months = within(scope.getByRole('table')).getAllByRole('row').slice(1)
+    expect(months).toHaveLength(6)
+    expect(pageText(months[5])).toContain('600,00 €0,00 €')
+  })
+
+  it('n’applique rien tant que l’échéance est hors du prêt', async () => {
+    const { user: actor, scope } = await openSchedule()
+    await actor.click(scope.getByRole('button', { name: 'Renégociation' }))
+    await actor.type(scope.getByLabelText('Après l’échéance n°'), '40')
+    await actor.type(scope.getByLabelText('Nouveau taux nominal'), '1')
+    expect(scope.getByRole('heading', { name: 'Échéancier' })).toBeInTheDocument()
+    expect(scope.queryByText('Gain net des frais')).not.toBeInTheDocument()
+  })
+})
+
+async function openSimulator(name: string) {
+  mockRealEstate()
+  const view = await openRealEstate()
+  await view.user.click(screen.getByRole('button', { name: 'Simulateurs' }))
+  await view.user.click(screen.getByRole('button', { name }))
+  return view
+}
+
 describe('simulateur de prêt', () => {
   it('calcule mensualité, intérêts et coût total au fil de la saisie', async () => {
-    mockRealEstate()
-    const { user: actor } = await openRealEstate()
+    const { user: actor } = await openSimulator('Prêt')
     const simulator = within(panel('Simulateur de prêt'))
     expect(pageText(panel('Simulateur de prêt'))).toContain('Renseignez le montant, le taux et la durée')
 
@@ -268,13 +333,111 @@ describe('simulateur de prêt', () => {
   })
 
   it('n’affiche aucun résultat pour une durée hors limites', async () => {
-    mockRealEstate()
-    const { user: actor } = await openRealEstate()
+    const { user: actor } = await openSimulator('Prêt')
     const simulator = within(panel('Simulateur de prêt'))
     await actor.type(simulator.getByLabelText('Montant emprunté'), '100 000')
     await actor.type(simulator.getByLabelText('Taux nominal annuel'), '3')
     await actor.type(simulator.getByLabelText('Durée'), '60')
     expect(pageText(panel('Simulateur de prêt'))).toContain('(50 ans au plus)')
     expect(pageText(panel('Simulateur de prêt'))).not.toContain('Coût total du crédit')
+  })
+})
+
+describe('onglet des simulateurs', () => {
+  it('s’ouvre depuis l’adresse et masque les actions des biens', async () => {
+    mockRealEstate()
+    renderApp('/immobilier?vue=simulateurs')
+    expect(await screen.findByRole('heading', { name: 'Investissement locatif' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Simulateurs' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: 'Ajouter un bien' })).not.toBeInTheDocument()
+  })
+})
+
+describe('simulateur d’investissement locatif', () => {
+  it('affiche rendements, cash-flow, revente et TRI', async () => {
+    const { user: actor } = await openSimulator('Investissement locatif')
+    const simulator = within(panel('Investissement locatif'))
+    expect(pageText(panel('Investissement locatif'))).toContain('Renseignez le prix, l’apport, le loyer')
+
+    await actor.type(simulator.getByLabelText('Prix d’achat'), '100 000')
+    await actor.type(simulator.getByLabelText('Frais d’acquisition'), '8 000')
+    await actor.type(simulator.getByLabelText('Travaux'), '2 000')
+    await actor.type(simulator.getByLabelText('Apport personnel'), '10 000')
+    await actor.type(simulator.getByLabelText('Taux nominal annuel'), '0')
+    await actor.type(simulator.getByLabelText('Durée du prêt'), '20')
+    await actor.type(simulator.getByLabelText('Loyer mensuel hors charges'), '800')
+    await actor.type(simulator.getByLabelText('Charges mensuelles non récupérables'), '50')
+    await actor.type(simulator.getByLabelText('Taxe foncière annuelle'), '600')
+    await actor.type(simulator.getByLabelText('Horizon de détention'), '10')
+
+    // 100 000 € sur 240 mois à taux nul : 416,67 € ; loyer net 700 € par mois.
+    const text = pageText(panel('Investissement locatif'))
+    expect(text).toContain('Rendement brut8,73 %sur 110 000 € de prix de revient')
+    expect(text).toContain('Rendement net de charges7,64 %')
+    expect(text).toContain('Cash-flow mensuel+283 €après 416,67 € de mensualité')
+    expect(text).toContain('Effort d’épargne mensuel0 €le loyer couvre tout')
+    // Revente 102 000 € moins 50 000 € restant dû ; gain -10 000 + 10 × 3 400 + 52 000.
+    expect(text).toContain('Revente nette52 000 €')
+    expect(text).toContain('Gain net sur l’horizon+76 000 €')
+    expect(text).toContain('TRI sur 10 ans')
+  })
+
+  it('mesure l’effort d’épargne d’un cash-flow négatif', async () => {
+    const { user: actor } = await openSimulator('Investissement locatif')
+    const simulator = within(panel('Investissement locatif'))
+    await actor.type(simulator.getByLabelText('Prix d’achat'), '100 000')
+    await actor.type(simulator.getByLabelText('Apport personnel'), '0')
+    await actor.type(simulator.getByLabelText('Taux nominal annuel'), '0')
+    await actor.type(simulator.getByLabelText('Durée du prêt'), '10')
+    await actor.type(simulator.getByLabelText('Loyer mensuel hors charges'), '500')
+    await actor.type(simulator.getByLabelText('Horizon de détention'), '10')
+    // Mensualité 833,33 € pour 500 € de loyer.
+    expect(pageText(panel('Investissement locatif'))).toContain('Effort d’épargne mensuel333 €à compléter chaque mois')
+  })
+
+  it('reprend les données d’un bien enregistré', async () => {
+    const { user: actor } = await openSimulator('Investissement locatif')
+    const simulator = within(panel('Investissement locatif'))
+    await actor.selectOptions(simulator.getByLabelText('Partir d’un bien enregistré'), 'a-maison')
+    // Prix 1 800 € + 100 € de frais, prêt de 1 200 € sur 12 mois : apport 700 €.
+    expect(simulator.getByLabelText('Prix d’achat')).toHaveValue('1800')
+    expect(simulator.getByLabelText('Frais d’acquisition')).toHaveValue('100')
+    expect(simulator.getByLabelText('Apport personnel')).toHaveValue('700')
+    expect(simulator.getByLabelText('Taux nominal annuel')).toHaveValue('0')
+    expect(simulator.getByLabelText('Durée du prêt')).toHaveValue('1')
+  })
+})
+
+describe('simulateur de capacité d’emprunt', () => {
+  it('calcule la capacité sous le taux d’endettement retenu', async () => {
+    const { user: actor } = await openSimulator('Capacité d’emprunt')
+    const simulator = within(panel('Capacité d’emprunt'))
+    await actor.type(simulator.getByLabelText('Revenus nets mensuels du foyer'), '4 000')
+    await actor.type(simulator.getByLabelText('Mensualités des crédits en cours'), '200')
+    await actor.type(simulator.getByLabelText('Taux d’endettement maximal'), '35')
+    await actor.type(simulator.getByLabelText('Taux nominal annuel'), '0')
+    await actor.type(simulator.getByLabelText('Durée'), '20')
+    const text = pageText(panel('Capacité d’emprunt'))
+    expect(text).toContain('Taux d’endettement actuel5,0 %')
+    expect(text).toContain('Mensualité disponible1 200,00 €')
+    expect(text).toContain('Capacité d’emprunt288 000 €')
+    expect(text).toContain('Taux d’endettement après emprunt35,0 %')
+  })
+})
+
+describe('simulateur acheter ou louer', () => {
+  it('compare les patrimoines à l’horizon', async () => {
+    const { user: actor } = await openSimulator('Acheter ou louer')
+    const simulator = within(panel('Acheter ou louer'))
+    await actor.type(simulator.getByLabelText('Prix d’achat'), '100 000')
+    await actor.type(simulator.getByLabelText('Taux nominal annuel'), '0')
+    await actor.type(simulator.getByLabelText('Durée du prêt'), '10')
+    await actor.type(simulator.getByLabelText('Loyer mensuel d’un logement équivalent'), '500')
+    await actor.type(simulator.getByLabelText('Horizon de comparaison'), '10')
+    const text = pageText(panel('Acheter ou louer'))
+    expect(text).toContain('Patrimoine en achetant100 000 €')
+    expect(text).toContain('Patrimoine en louant40 000 €')
+    expect(text).toContain('Avantage à l’achat60 000 €')
+    expect(text).toContain('Achat rentabiliséAprès 1 an')
   })
 })

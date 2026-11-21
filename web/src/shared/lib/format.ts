@@ -22,19 +22,51 @@ function currencyFormatter(currency: string, decimals: number) {
   return formatter
 }
 
-type MoneyOptions = { decimals?: number; currency?: string; signed?: boolean }
+/** Ce qui remplace les chiffres d'un montant en mode discret. */
+export const MASK = '•••••'
+
+// Mode discret : un seul interrupteur pour tous les montants de l'application, piloté par `DiscreetProvider`.
+let amountsHidden = false
+
+export function setAmountsHidden(hidden: boolean) {
+  amountsHidden = hidden
+}
+
+export function areAmountsHidden(): boolean {
+  return amountsHidden
+}
+
+/** `••••• €` : garde le symbole et sa place selon la devise, sans rien laisser deviner (ni signe, ni ordre de grandeur). */
+function maskedMoney(currency: string): string {
+  let masked = ''
+  for (const part of currencyFormatter(currency, 0).formatToParts(0)) {
+    if (part.type === 'integer') masked += MASK
+    else if (part.type === 'currency' || part.type === 'literal') masked += part.value
+  }
+  return masked
+}
+
+type MoneyOptions = {
+  decimals?: number
+  currency?: string
+  signed?: boolean
+  /** Masque le montant ; par défaut, suit le mode discret. */
+  masked?: boolean
+}
 
 /** Montant en euros par défaut, sans décimales : `12 345 €`. */
 export function money(value: number | null | undefined, options: MoneyOptions = {}): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '–'
-  const { decimals = 0, currency = 'EUR', signed = false } = options
+  const { decimals = 0, currency = 'EUR', signed = false, masked = amountsHidden } = options
+  if (masked) return maskedMoney(currency)
   const rounded = Math.abs(value) < 0.5 * Math.pow(10, -decimals) ? 0 : value
   const text = currencyFormatter(currency, decimals).format(rounded)
   return signed && rounded > 0 ? `+${text}` : text
 }
 
 /** Montant compact pour les axes de graphiques : `12 k€`, `1,2 M€`. */
-export function moneyCompact(value: number): string {
+export function moneyCompact(value: number, masked = amountsHidden): string {
+  if (masked) return maskedMoney('EUR')
   return new Intl.NumberFormat(LOCALE, {
     style: 'currency',
     currency: 'EUR',
@@ -109,6 +141,14 @@ export function duration(months: number): string {
 export function toInput(value: number | null | undefined, maxDecimals = 6): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return ''
   return new Intl.NumberFormat(LOCALE, { maximumFractionDigits: maxDecimals, useGrouping: false }).format(value)
+}
+
+/** `21/11 14:05` : horodatage court des données affichées hors ligne. */
+export function shortDateTime(timestamp: number): string {
+  // Assemblé à la main : la ponctuation entre date et heure varie selon la version d'ICU du moteur.
+  const d = new Date(timestamp)
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`
 }
 
 export function todayIso(): string {

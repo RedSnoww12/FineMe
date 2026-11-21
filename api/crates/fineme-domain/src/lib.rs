@@ -2,6 +2,7 @@
 //! Aucune E/S ici — ni SQL, ni JSON, ni réseau, ni horloge système.
 
 pub mod account;
+pub mod budget;
 pub mod connection;
 pub mod error;
 pub mod fx;
@@ -12,6 +13,7 @@ pub mod ids;
 pub mod loan;
 pub mod login;
 pub mod member;
+pub mod operation;
 pub mod ownership;
 pub mod portfolio;
 pub mod property;

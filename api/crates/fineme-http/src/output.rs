@@ -1,5 +1,6 @@
 //! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`.
 
+use fineme_application::budget::{BudgetMonth, BudgetTransaction};
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, PropertyInput,
@@ -7,14 +8,17 @@ use fineme_application::commands::{
 use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
 use fineme_application::history::{HistoryReview, ReviewedPoint};
+use fineme_application::operations::OperationView;
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
+use fineme_domain::budget::{BudgetTarget, CategoryRule, Flows};
 use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
 use fineme_domain::loan::ScheduleRow;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
+use fineme_domain::operation::YearSummary;
 use fineme_domain::portfolio::{
     AccountDetail, AccountSnapshot, AccountView, HoldingView, LoanView, Overview, RealEstateReport,
     Totals,
@@ -343,7 +347,107 @@ pub fn transaction(t: &Transaction) -> Value {
         "label": t.label,
         "amount": t.amount,
         "category": t.category,
+        "manual_category": t.manual_category,
+        "internal_transfer": t.transfer_override,
     })
+}
+
+fn flows(f: &Flows) -> Value {
+    json!({
+        "month": f.month.to_string(),
+        "income": f.income,
+        "expenses": f.expenses,
+        "savings": f.savings,
+        "savings_rate": f.savings_rate,
+    })
+}
+
+pub fn budget_month(b: &BudgetMonth) -> Value {
+    let mut value = flows(&b.flows);
+    value["categories"] = b
+        .categories
+        .iter()
+        .map(|c| json!({ "category": c.category, "amount": c.amount, "target": c.target }))
+        .collect();
+    value["trend"] = b.trend.iter().map(flows).collect();
+    value["recurring"] = b
+        .recurring
+        .iter()
+        .map(|r| {
+            json!({
+                "label": r.label,
+                "category": r.category,
+                "average_amount": r.average_amount,
+                "occurrences": r.occurrences,
+                "last_date": r.last_date,
+                "next_date": r.next_date,
+            })
+        })
+        .collect();
+    value["internal_transfers"] = json!(b.internal_transfers);
+    value
+}
+
+pub fn budget_transaction(b: &BudgetTransaction) -> Value {
+    let t = &b.transaction;
+    json!({
+        "id": t.id.as_uuid(),
+        "account_id": t.account_id.as_uuid(),
+        "account_name": b.account_name,
+        "date": t.date,
+        "label": t.label,
+        "amount": t.amount,
+        "amount_eur": b.amount_eur,
+        "category": b.category.as_ref().map(|(name, _)| name),
+        "category_source": b.category.as_ref().map(|(_, source)| source.as_str()),
+        "internal_transfer": b.internal_transfer,
+        "internal_transfer_manual": t.transfer_override.is_some(),
+    })
+}
+
+pub fn budget_rule(r: &CategoryRule) -> Value {
+    json!({ "id": r.id.as_uuid(), "pattern": r.pattern(), "category": r.category() })
+}
+
+pub fn budget_target(t: &BudgetTarget) -> Value {
+    json!({ "category": t.category(), "monthly_amount": t.monthly_amount() })
+}
+
+pub fn operation(view: &OperationView) -> Value {
+    let op = &view.operation;
+    let trade = op.movement.trade();
+    json!({
+        "id": op.id.as_uuid(),
+        "account_id": op.account_id.as_uuid(),
+        "kind": op.movement.kind().as_str(),
+        "date": op.date,
+        "holding_id": op.movement.holding().map(|id| id.as_uuid()),
+        "holding_name": view.holding_name,
+        "quantity": trade.map(|t| t.quantity()),
+        "unit_price": trade.map(|t| t.unit_price()),
+        "amount": op.movement.amount(),
+        "fees": op.movement.trade().map_or(0.0, |t| t.fees()),
+        "currency": op.currency.as_str(),
+        "note": op.note,
+        "realized_gain": view.realized_gain,
+    })
+}
+
+pub fn operations_summary(years: &[YearSummary]) -> Value {
+    let years: Vec<Value> = years
+        .iter()
+        .map(|y| {
+            json!({
+                "year": y.year,
+                "realized_gain": y.realized_gain,
+                "dividends": y.dividends,
+                "fees": y.fees,
+                "deposits": y.deposits,
+                "withdrawals": y.withdrawals,
+            })
+        })
+        .collect();
+    json!({ "currency": "EUR", "years": years })
 }
 
 pub fn connection(c: &Connection) -> Value {

@@ -118,6 +118,8 @@ pub async fn build_app(
         portfolio: store.clone(),
         fx_rates: store.clone(),
         transactions: store.clone(),
+        budget: store.clone(),
+        operations: store.clone(),
         snapshots: store.clone(),
         goals: store.clone(),
         connections: store.clone(),

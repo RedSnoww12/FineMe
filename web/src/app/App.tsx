@@ -5,11 +5,13 @@ import { EmptyState, LoadingBlock } from '@/shared/ui/ui'
 import { WakeNotice } from '@/shared/ui/WakeNotice'
 import AuthPage from '@/features/auth/pages/AuthPage'
 import { useAuth } from '@/shared/state/auth'
+import { useDiscreet } from '@/shared/state/discreet'
 
 const OverviewPage = lazy(() => import('@/features/overview/pages/OverviewPage'))
 const AnalysisPage = lazy(() => import('@/features/analysis/pages/AnalysisPage'))
 const AccountsPage = lazy(() => import('@/features/accounts/pages/AccountsPage'))
 const AccountDetailPage = lazy(() => import('@/features/accounts/pages/AccountDetailPage'))
+const BudgetPage = lazy(() => import('@/features/budget/pages/BudgetPage'))
 const RealEstatePage = lazy(() => import('@/features/real-estate/pages/RealEstatePage'))
 const GoalsPage = lazy(() => import('@/features/goals/pages/GoalsPage'))
 const ProjectionPage = lazy(() => import('@/features/projection/pages/ProjectionPage'))
@@ -34,6 +36,9 @@ function NotFound() {
 }
 
 export default function App() {
+  // Le formateur partagé lit le mode discret pendant le rendu. S'abonner ici suffit : App recrée les éléments des
+  // routes, donc chaque écran se redessine sans être remonté (une saisie en cours est conservée).
+  useDiscreet()
   return (
     <>
       <WakeNotice />
@@ -45,6 +50,7 @@ export default function App() {
             <Route path="analyse" element={<AnalysisPage />} />
             <Route path="comptes" element={<AccountsPage />} />
             <Route path="comptes/:id" element={<AccountDetailPage />} />
+            <Route path="budget" element={<BudgetPage />} />
             <Route path="immobilier" element={<RealEstatePage />} />
             <Route path="objectifs" element={<GoalsPage />} />
             <Route path="projection" element={<ProjectionPage />} />

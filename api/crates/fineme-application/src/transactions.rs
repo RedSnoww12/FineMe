@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use fineme_domain::account::AccountSource;
+use fineme_domain::budget::{CategoryRule, category_name};
 use fineme_domain::error::finite;
-use fineme_domain::ids::{AccountId, TransactionId};
+use fineme_domain::ids::{AccountId, BudgetRuleId, TransactionId};
 use fineme_domain::transaction::Transaction;
 use uuid::Uuid;
 
-use crate::commands::{TransactionInput, clean};
+use crate::commands::{TransactionInput, TransactionPatch, clean};
 use crate::error::{AppError, AppResult};
 use crate::ports::{Clock, PortfolioRepository, TransactionRepository};
 
@@ -77,6 +78,8 @@ impl TransactionService {
                 label,
                 amount: finite(input.amount, "amount")?,
                 category: clean(input.category),
+                manual_category: None,
+                transfer_override: None,
             });
         }
         if let Some(balance) = new_cash_balance {
@@ -91,6 +94,32 @@ impl TransactionService {
             inserted,
             skipped: transactions.len() as u64 - inserted,
         })
+    }
+
+    /// Choix manuels du budget. Une catégorie manuelle crée ou met à jour la règle du libellé normalisé,
+    /// appliquée ensuite aux autres mouvements de même libellé.
+    pub async fn update(&self, id: Uuid, patch: TransactionPatch) -> AppResult<Transaction> {
+        let mut transaction = self
+            .transactions
+            .by_id(TransactionId::from_uuid(id))
+            .await?
+            .ok_or(AppError::NotFound("Transaction introuvable"))?;
+        let mut rule = None;
+        if let Some(category) = patch.category {
+            transaction.manual_category = category.as_deref().map(category_name).transpose()?;
+            if let Some(category) = &transaction.manual_category {
+                // Libellé sans lettre (que des chiffres) : catégorie manuelle seule, sans règle.
+                rule =
+                    CategoryRule::new(BudgetRuleId::generate(), &transaction.label, category).ok();
+            }
+        }
+        if let Some(internal) = patch.internal_transfer {
+            transaction.transfer_override = internal;
+        }
+        self.transactions
+            .annotate(&transaction, rule.as_ref())
+            .await?;
+        Ok(transaction)
     }
 
     pub async fn delete(&self, id: Uuid) -> AppResult<()> {
@@ -245,6 +274,78 @@ mod tests {
         );
         assert!(matches!(
             t.app.transactions.list(Uuid::new_v4(), None, None).await,
+            Err(AppError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_sets_manual_choices_and_upserts_rule() {
+        let t = TestApp::household().await;
+        let id = t.checking(&[(t.alice, 1.0)], 0.0).await.as_uuid();
+        let batch = vec![tx(1, "CB BOUTIQUE 0101", -10.0), tx(2, "1234", -1.0)];
+        t.app.transactions.bulk(id, batch, None).await.unwrap();
+        let items = t.app.transactions.list(id, None, None).await.unwrap().items;
+        let (digits, shop) = (items[0].id.as_uuid(), items[1].id.as_uuid());
+        let patch = |category: Option<&str>, internal: Option<Option<bool>>| TransactionPatch {
+            category: category.map(|c| Some(c.to_string())),
+            internal_transfer: internal,
+        };
+        let updated = t
+            .app
+            .transactions
+            .update(shop, patch(Some(" Loisirs "), Some(Some(true))))
+            .await
+            .unwrap();
+        assert_eq!(updated.manual_category.as_deref(), Some("Loisirs"));
+        assert_eq!(updated.transfer_override, Some(true));
+        // Seconde recatégorisation : la règle du même motif est mise à jour, pas dupliquée.
+        t.app
+            .transactions
+            .update(shop, patch(Some("Achats"), None))
+            .await
+            .unwrap();
+        let rules = t.store.lock().rules.clone();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            (rules[0].pattern(), rules[0].category()),
+            ("cb boutique", "Achats")
+        );
+        // Retour à l'automatique ; le marquage de virement reste inchangé si absent.
+        let cleared = t
+            .app
+            .transactions
+            .update(
+                shop,
+                TransactionPatch {
+                    category: Some(None),
+                    internal_transfer: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (cleared.manual_category, cleared.transfer_override),
+            (None, Some(true))
+        );
+        // Libellé sans lettre : catégorie manuelle, aucune règle.
+        t.app
+            .transactions
+            .update(digits, patch(Some("Divers"), None))
+            .await
+            .unwrap();
+        assert_eq!(t.store.lock().rules.len(), 1);
+        assert!(matches!(
+            t.app
+                .transactions
+                .update(shop, patch(Some("  "), None))
+                .await,
+            Err(AppError::Domain(_))
+        ));
+        assert!(matches!(
+            t.app
+                .transactions
+                .update(Uuid::new_v4(), TransactionPatch::default())
+                .await,
             Err(AppError::NotFound(_))
         ));
     }

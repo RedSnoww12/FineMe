@@ -30,6 +30,9 @@ describe('en-têtes de sécurité Vercel', () => {
     const csp = header('Content-Security-Policy')
     expect(csp).toContain("connect-src 'self' https://*.onrender.com")
     expect(csp).toContain("frame-ancestors 'none'")
+    // PWA : service worker (sw.js, registerSW.js) et manifeste servis par le site lui-même.
+    expect(csp).toContain("worker-src 'self'")
+    expect(csp).toContain("manifest-src 'self'")
     expect(header('X-Frame-Options')).toBe('DENY')
     expect(header('X-Content-Type-Options')).toBe('nosniff')
     expect(header('Referrer-Policy')).toBe('strict-origin-when-cross-origin')

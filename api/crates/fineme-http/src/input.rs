@@ -3,8 +3,8 @@
 use chrono::NaiveDate;
 use fineme_application::bundle::{Bundle, BundleAccount, BundleGoal, BundleMember, BundleOwner};
 use fineme_application::commands::{
-    AccountInput, GoalInput, HoldingInput, LoanInput, OwnerInput, Patch, PropertyInput,
-    TransactionInput,
+    AccountInput, GoalInput, HoldingInput, LoanInput, OperationInput, OwnerInput, Patch,
+    PropertyInput, TransactionInput, TransactionPatch,
 };
 use serde::{Deserialize, Deserializer};
 use uuid::Uuid;
@@ -285,10 +285,66 @@ impl From<TransactionBody> for TransactionInput {
     }
 }
 
+#[derive(Default, Deserialize)]
+pub struct TransactionPatchBody {
+    #[serde(default, deserialize_with = "nullable")]
+    category: Patch<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    internal_transfer: Patch<bool>,
+}
+
+impl From<TransactionPatchBody> for TransactionPatch {
+    fn from(b: TransactionPatchBody) -> Self {
+        Self {
+            category: b.category,
+            internal_transfer: b.internal_transfer,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BudgetQuery {
+    pub month: Option<String>,
+    pub member_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+pub struct BudgetTargetBody {
+    pub category: String,
+    pub monthly_amount: Option<f64>,
+}
+
 #[derive(Deserialize)]
 pub struct TransactionsBulkBody {
     pub transactions: Vec<TransactionBody>,
     pub new_cash_balance: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub struct OperationBody {
+    kind: String,
+    date: NaiveDate,
+    holding_id: Option<Uuid>,
+    quantity: Option<f64>,
+    unit_price: Option<f64>,
+    amount: Option<f64>,
+    fees: Option<f64>,
+    note: Option<String>,
+}
+
+impl From<OperationBody> for OperationInput {
+    fn from(b: OperationBody) -> Self {
+        Self {
+            kind: b.kind,
+            date: b.date,
+            holding_id: b.holding_id,
+            quantity: b.quantity,
+            unit_price: b.unit_price,
+            amount: b.amount,
+            fees: b.fees,
+            note: b.note,
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]

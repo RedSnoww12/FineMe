@@ -166,14 +166,78 @@ type Holding = {
 
 ## Transactions (import CSV / agrégateur)
 
-`Transaction = { id, account_id, date, label, amount, category: string | null }` (amount signé, devise du compte)
+`Transaction = { id, account_id, date, label, amount, category: string | null, manual_category: string | null, internal_transfer: boolean | null }`
+(amount signé, devise du compte ; `category` = catégorie reçue à l'import ; `manual_category` et `internal_transfer` =
+choix manuels du budget, `null` = automatique, voir « Budget »)
 
 - GET `/api/accounts/:id/transactions?limit=&offset=` → `{ items: Transaction[], total: number }`
 - POST `/api/accounts/:id/transactions/bulk` `{ transactions: [{date,label,amount,category?}], new_cash_balance?: number }` → `{ inserted, skipped }`
   (dédoublonnage sur date+label+amount)
+- PUT `/api/transactions/:id` `{ category?: string | null, internal_transfer?: boolean | null }` → `Transaction`
+  (`category` : catégorie manuelle, qui crée ou met à jour la règle du libellé, voir « Budget » ; `null` la retire.
+  `internal_transfer` : `true`/`false` force le marquage de virement interne, `null` revient à la détection automatique.
+  Un champ absent n'est pas modifié.)
 - DELETE `/api/transactions/:id` → 204
 
 Le parsing du CSV et le mapping des colonnes se font côté front.
+
+## Journal d'opérations (comptes d'investissement)
+
+Achats, ventes, dividendes, frais, versements et retraits d'un compte pouvant porter des positions
+(tous sauf `real_estate` et `loan` : (400) sinon).
+
+```ts
+type OperationKind = "buy" | "sell" | "dividend" | "fee" | "deposit" | "withdrawal";
+type Operation = {
+  id: string; account_id: string;
+  kind: OperationKind;
+  date: string;                 // YYYY-MM-DD, jamais dans le futur
+  holding_id: string | null;    // requis pour buy/sell, facultatif pour dividend/fee, null pour deposit/withdrawal
+  holding_name: string | null;
+  quantity: number | null;      // buy/sell uniquement, > 0
+  unit_price: number | null;    // buy/sell uniquement, cours unitaire ≥ 0
+  amount: number;               // buy/sell : quantity × unit_price (brut, hors frais) ; sinon montant saisi > 0
+  fees: number;                 // frais de l'achat ou de la vente (≥ 0) ; 0 pour les autres types
+  currency: string;             // devise de la position concernée, sinon du compte
+  note: string | null;
+  realized_gain: number | null; // vente uniquement : plus-value réalisée nette des frais, devise `currency`
+};
+type OperationInput = {
+  kind: OperationKind; date: string; holding_id?: string;
+  quantity?: number; unit_price?: number; fees?: number; // buy/sell
+  amount?: number;                                       // dividend/fee/deposit/withdrawal
+  note?: string;
+};
+```
+
+- GET `/api/accounts/:id/operations` → `Operation[]` (du plus récent au plus ancien)
+- POST `/api/accounts/:id/operations` `OperationInput` → `Operation` (201)
+- PUT `/api/operations/:id` `OperationInput` (remplacement complet, même compte) → `Operation`
+- DELETE `/api/operations/:id` → 204
+- GET `/api/accounts/:id/operations/summary` →
+  `{ currency: "EUR", years: { year, realized_gain, dividends, fees, deposits, withdrawals }[] }` (année la plus récente
+  d'abord ; `fees` = frais des achats et ventes + opérations `fee` ; montants convertis en EUR aux taux actuels ;
+  compte entier, sans filtre de membre)
+
+Erreurs : (400) champ manquant ou invalide pour le type, date future, vente supérieure à la quantité détenue à sa date
+(y compris quand une modification ou une suppression rendrait une vente ultérieure impossible : rien n'est modifié) ;
+(404) compte, opération ou position introuvable (la position doit appartenir au compte).
+
+Calcul (PRU moyen pondéré, méthode française) : le journal est rejoué par ordre chronologique (date, puis ordre de
+saisie). Un achat recalcule le PRU = (quantité × PRU + quantité achetée × cours + frais) / nouvelle quantité. Une
+vente ne change pas le PRU et réalise `quantity × (unit_price − PRU) − fees`. Une vente totale remet la position à
+zéro (`buy_price` = null) ; le PRU repart du prochain achat. Dividendes, frais, versements et retraits ne changent
+ni la quantité ni le PRU.
+
+Cohabitation avec la saisie manuelle :
+- une position **sans achat ni vente** dans le journal garde sa quantité et son `buy_price` saisis à la main ;
+- dès son premier achat ou sa première vente, sa quantité et son `buy_price` sont **entièrement** recalculés à partir
+  du journal à chaque modification de celui-ci (la saisie manuelle antérieure est remplacée : saisir la position
+  initiale comme un achat). `PUT /api/holdings/:id` refuse alors (409) de changer `quantity` ou `buy_price`
+  (renvoyer les valeurs actuelles reste accepté) ; le cours et les autres champs restent modifiables ;
+- supprimer la dernière opération d'achat/vente d'une position la remet à zéro ;
+- le journal ne modifie jamais `cash_balance` du compte ;
+- supprimer une position supprime son journal ; l'export/import complet (`Bundle`) ne contient pas le journal.
 
 ## Immobilier et prêts
 
@@ -299,6 +363,67 @@ cours automatiques le sont) ; ils se corrigent ou se suppriment.
 POST `/api/history/reset` `{ confirmation: "EFFACER" }` → `{ deleted_days: number }`
 Supprime tout l'historique, toutes vues confondues. Action protégée : (400) si `confirmation` n'est pas exactement
 `EFFACER` (espaces de début et de fin ignorés), rien n'est supprimé.
+
+## Budget
+
+Revenus, dépenses et taux d'épargne calculés à partir des transactions de tous les comptes, convertis en EUR et
+multipliés par la part de la vue (`?member_id=` comme ailleurs : un membre ne voit que sa part des comptes qu'il détient).
+
+**Libellé normalisé** : minuscules, accents retirés, chiffres retirés, ponctuation remplacée par des espaces, espaces
+réduits (`"PRLV SEPA EDF 0423/11"` → `"prlv sepa edf"`).
+
+**Catégorie effective** d'une transaction, par ordre de priorité :
+1. `manual_category` (choisie dans le budget) — source `"manual"` ;
+2. règle utilisateur dont le motif est contenu dans le libellé normalisé (le motif le plus long l'emporte) — `"rule"` ;
+3. `category` reçue à l'import — `"import"` ;
+4. règle par défaut (mots-clés génériques : salaire, loyer, supermarchés, carburant…) — `"default"` ;
+5. sinon aucune (`null`, affichée « Non catégorisé »).
+
+Recatégoriser une transaction (`PUT /api/transactions/:id` avec `category`) crée ou met à jour la règle dont le motif est
+son libellé normalisé : les transactions de même libellé, passées et suivantes, prennent cette catégorie (sauf choix
+manuel propre).
+
+**Virements internes** (exclus des revenus et des dépenses) : deux transactions de **comptes différents** du foyer,
+de montants opposés (écart < 0,01) et datées à **3 jours ou moins** d'écart, sont appariées automatiquement (chaque
+transaction au plus une fois, l'écart de dates le plus court d'abord). `internal_transfer` sur la transaction force le
+marquage dans un sens ou dans l'autre ; une transaction marquée à la main n'est plus appariée automatiquement (marquer
+chaque jambe si besoin).
+
+**Calculs du mois** : revenus = Σ montants positifs, dépenses = Σ |montants négatifs| (hors virements internes),
+épargne = revenus − dépenses, taux d'épargne = épargne / revenus (`null` si aucun revenu).
+
+**Charges récurrentes** : dépenses de même libellé normalisé présentes sur au moins 3 mois distincts, d'intervalle
+moyen entre 25 et 35 jours et de montants à ±15 % de leur médiane (analyse des 12 derniers mois).
+
+```ts
+type BudgetCategorySource = "manual" | "rule" | "import" | "default";
+type BudgetFlows = { month: string /* YYYY-MM */; income: number; expenses: number; savings: number; savings_rate: number | null };
+type BudgetMonth = BudgetFlows & {
+  categories: { category: string | null; amount: number; target: number | null }[]; // dépenses du mois, décroissant ;
+                                    // les catégories avec cible mais sans dépense apparaissent avec amount = 0
+  trend: BudgetFlows[];             // 12 mois, du plus ancien au mois demandé inclus
+  recurring: { label: string; category: string | null; average_amount: number; occurrences: number;
+               last_date: string; next_date: string }[]; // average_amount positif (EUR, part de la vue)
+  internal_transfers: number;       // nombre de transactions du mois exclues comme virements internes
+};
+type BudgetTransaction = {
+  id: string; account_id: string; account_name: string; date: string; label: string;
+  amount: number;                   // signé, devise du compte
+  amount_eur: number;               // signé, EUR × part de la vue
+  category: string | null; category_source: BudgetCategorySource | null;
+  internal_transfer: boolean; internal_transfer_manual: boolean;
+};
+type BudgetRule = { id: string; pattern: string; category: string };
+type BudgetTarget = { category: string; monthly_amount: number };
+```
+
+- GET `/api/budget?month=YYYY-MM&member_id=` → `BudgetMonth` (`month` absent = mois courant ; 400 si mal formé)
+- GET `/api/budget/transactions?month=YYYY-MM&member_id=` → `BudgetTransaction[]` (du plus récent au plus ancien)
+- GET `/api/budget/categories` → `string[]` (catégories par défaut, des règles, des cibles et des transactions, triées)
+- GET `/api/budget/rules` → `BudgetRule[]` ; DELETE `/api/budget/rules/:id` → 204
+- GET `/api/budget/targets` → `BudgetTarget[]`
+- PUT `/api/budget/targets` `{ category, monthly_amount: number | null }` → `BudgetTarget[]` (crée ou remplace la cible
+  mensuelle de la catégorie ; `null` la supprime ; montant ≥ 0)
 
 ## Tâche quotidienne
 

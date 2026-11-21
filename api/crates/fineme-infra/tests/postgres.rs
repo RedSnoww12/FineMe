@@ -3,11 +3,13 @@
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use fineme_application::ports::{
-    AccountWrite, ConnectionRepository, Credentials, FxRateRepository, GoalRepository, ImportBatch,
-    ImportRepository, LoginJournal, PortfolioRepository, PricePoint, RepoError, SnapshotRepository,
-    TransactionRepository, UserRepository,
+    AccountWrite, BudgetRepository, ConnectionRepository, Credentials, FxRateRepository,
+    GoalRepository, ImportBatch, ImportRepository, LoginJournal, OperationChange,
+    OperationRepository, PortfolioRepository, PositionUpdate, PricePoint, RepoError,
+    SnapshotRepository, TransactionRepository, UserRepository,
 };
 use fineme_domain::account::{Account, AccountKind, AccountSource};
+use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::{Connection, ConnectionStatus};
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::{Goal, GoalKind};
@@ -17,6 +19,7 @@ use fineme_domain::ids::*;
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
+use fineme_domain::operation::{Amount, Movement, MovementFields, Operation, OperationKind, Trade};
 use fineme_domain::ownership::Ownership;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
@@ -589,6 +592,8 @@ async fn transactions_are_deduplicated_paged_and_deleted_with_their_account() {
         label: label.into(),
         amount,
         category: Some("Divers".into()),
+        manual_category: None,
+        transfer_override: None,
     };
     let batch = vec![
         tx(checking.id, 1, "Courses", -54.2),
@@ -630,6 +635,77 @@ async fn transactions_are_deduplicated_paged_and_deleted_with_their_account() {
 }
 
 #[tokio::test]
+async fn budget_annotations_rules_and_targets() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let checking = account(AccountKind::Checking, "Courant", &[(alice.id, 1.0)]);
+    save(&db, &checking).await;
+    let tx = |day: u32, label: &str, category: Option<&str>| Transaction {
+        id: TransactionId::generate(),
+        account_id: checking.id,
+        date: date(2026, 1, day),
+        label: label.into(),
+        amount: -12.0,
+        category: category.map(String::from),
+        manual_category: None,
+        transfer_override: None,
+    };
+    let batch = [
+        tx(2, "CB BOUTIQUE", Some("Achats")),
+        tx(20, "CB AUTRE", None),
+    ];
+    db.store.import(&checking, &batch).await.unwrap();
+
+    let between = db
+        .store
+        .between(date(2026, 1, 1), date(2026, 1, 10))
+        .await
+        .unwrap();
+    assert_eq!(between, vec![batch[0].clone()]);
+
+    let annotated = Transaction {
+        manual_category: Some("Loisirs".into()),
+        transfer_override: Some(false),
+        ..batch[0].clone()
+    };
+    let rule = CategoryRule::new(BudgetRuleId::generate(), "CB BOUTIQUE", "Loisirs").unwrap();
+    db.store.annotate(&annotated, Some(&rule)).await.unwrap();
+    assert_eq!(
+        db.store.by_id(batch[0].id).await.unwrap(),
+        Some(annotated.clone())
+    );
+    assert_eq!(
+        db.store.by_id(TransactionId::generate()).await.unwrap(),
+        None
+    );
+    // Même motif : la règle existante est mise à jour et garde son identifiant.
+    let again = CategoryRule::new(BudgetRuleId::generate(), "cb boutique", "Cadeaux").unwrap();
+    db.store.annotate(&annotated, Some(&again)).await.unwrap();
+    let rules = db.store.rules().await.unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!((rules[0].id, rules[0].category()), (rule.id, "Cadeaux"));
+    assert_eq!(
+        db.store.categories().await.unwrap(),
+        vec!["Achats".to_string(), "Loisirs".to_string()]
+    );
+    assert!(db.store.delete_rule(rule.id).await.unwrap());
+    assert!(!db.store.delete_rule(rule.id).await.unwrap());
+
+    db.store
+        .save_target(&BudgetTarget::new("Loisirs", 100.0).unwrap())
+        .await
+        .unwrap();
+    db.store
+        .save_target(&BudgetTarget::new("Loisirs", 150.0).unwrap())
+        .await
+        .unwrap();
+    let targets = db.store.targets().await.unwrap();
+    assert_eq!(targets, vec![BudgetTarget::new("Loisirs", 150.0).unwrap()]);
+    assert!(db.store.delete_target("Loisirs").await.unwrap());
+    assert!(db.store.targets().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn import_is_all_or_nothing() {
     let db = test_db().await;
     let (alice, _) = household(&db).await;
@@ -642,6 +718,8 @@ async fn import_is_all_or_nothing() {
         label: label.into(),
         amount: -5.0,
         category: None,
+        manual_category: None,
+        transfer_override: None,
     };
     let updated = Account {
         cash_balance: 3500.0,
@@ -1093,4 +1171,133 @@ async fn import_batch_is_applied_atomically() {
     assert_eq!(db.store.apply(&broken).await, Err(RepoError::Reference));
     let data = db.store.load().await.unwrap();
     assert_eq!((data.members.len(), data.accounts.len()), (3, 1));
+}
+
+fn operation(account: AccountId, day: u32, movement: Movement) -> Operation {
+    Operation {
+        id: OperationId::generate(),
+        account_id: account,
+        date: date(2025, 6, day),
+        movement,
+        currency: Currency::eur(),
+        note: Some("Note fictive".into()),
+        recorded_at: at(day),
+    }
+}
+
+#[tokio::test]
+async fn operations_round_trip_update_positions_and_follow_their_holding() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let pea = account(AccountKind::Investment, "PEA", &[(alice.id, 1.0)]);
+    save(&db, &pea).await;
+    let etf = holding(pea.id, "ETF");
+    db.store.save_holding(&etf, at(1)).await.unwrap();
+
+    let buy = operation(
+        pea.id,
+        2,
+        Movement::Buy(Trade::new(etf.id, 3.0, 100.0, 1.5).unwrap()),
+    );
+    let deposit = operation(
+        pea.id,
+        1,
+        Movement::new(
+            OperationKind::Deposit,
+            MovementFields {
+                amount: Some(500.0),
+                ..MovementFields::default()
+            },
+        )
+        .unwrap(),
+    );
+    let dividend = operation(
+        pea.id,
+        3,
+        Movement::Dividend {
+            holding: Some(etf.id),
+            amount: Amount::new(4.2, "amount").unwrap(),
+        },
+    );
+    let update = PositionUpdate {
+        holding: etf.id,
+        quantity: 3.0,
+        buy_price: Some(100.5),
+    };
+    db.store
+        .apply_operation(&OperationChange::Save(buy.clone()), &[update], at(5))
+        .await
+        .unwrap();
+    for op in [&deposit, &dividend] {
+        db.store
+            .apply_operation(&OperationChange::Save(op.clone()), &[], at(5))
+            .await
+            .unwrap();
+    }
+
+    // Relecture fidèle, dans l'ordre chronologique.
+    let listed = db.store.operations(pea.id).await.unwrap();
+    assert_eq!(listed, vec![deposit.clone(), buy.clone(), dividend.clone()]);
+    assert_eq!(
+        db.store.find_operation(buy.id).await.unwrap(),
+        Some(buy.clone())
+    );
+    let data = db.store.load().await.unwrap();
+    let stored = data.holdings.iter().find(|h| h.id == etf.id).unwrap();
+    assert_eq!((stored.quantity, stored.buy_price), (3.0, Some(100.5)));
+    assert_eq!(stored.current_price, etf.current_price);
+    assert_eq!(data.accounts[0].updated_at, at(5));
+
+    // Remplacement puis suppression.
+    let mut edited = buy.clone();
+    edited.movement = Movement::Buy(Trade::new(etf.id, 4.0, 90.0, 0.0).unwrap());
+    db.store
+        .apply_operation(&OperationChange::Save(edited.clone()), &[], at(6))
+        .await
+        .unwrap();
+    assert_eq!(db.store.find_operation(buy.id).await.unwrap(), Some(edited));
+    db.store
+        .apply_operation(
+            &OperationChange::Delete {
+                id: deposit.id,
+                account: pea.id,
+            },
+            &[],
+            at(6),
+        )
+        .await
+        .unwrap();
+    assert_eq!(count(&db, "investment_operations").await, 2);
+
+    // Une opération vers une position inconnue est refusée, et rien n'est écrit.
+    let orphan = operation(
+        pea.id,
+        4,
+        Movement::Buy(Trade::new(HoldingId::generate(), 1.0, 1.0, 0.0).unwrap()),
+    );
+    assert_eq!(
+        db.store
+            .apply_operation(&OperationChange::Save(orphan), &[update], at(7))
+            .await,
+        Err(RepoError::Reference)
+    );
+    assert_eq!(count(&db, "investment_operations").await, 2);
+
+    // Supprimer la position supprime son journal ; supprimer le compte, le reste.
+    db.store.delete_holding(etf.id, at(8)).await.unwrap();
+    assert_eq!(count(&db, "investment_operations").await, 0);
+    let fee = operation(
+        pea.id,
+        5,
+        Movement::Fee {
+            holding: None,
+            amount: Amount::new(2.0, "amount").unwrap(),
+        },
+    );
+    db.store
+        .apply_operation(&OperationChange::Save(fee), &[], at(8))
+        .await
+        .unwrap();
+    db.store.delete_account(pea.id).await.unwrap();
+    assert_eq!(count(&db, "investment_operations").await, 0);
 }

@@ -1,7 +1,23 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { api } from '@/shared/api/endpoints'
 import { useApiMutation } from '@/shared/api/queries'
-import type { HoldingInput, PricesRefresh, TransactionInput } from '@/shared/api/types'
+import type { HoldingInput, OperationInput, PricesRefresh, TransactionInput } from '@/shared/api/types'
+
+export function useOperations(accountId: string) {
+  return useQuery({ queryKey: ['operations', accountId], queryFn: () => api.operations(accountId) })
+}
+
+export function useOperationsSummary(accountId: string) {
+  return useQuery({ queryKey: ['operations-summary', accountId], queryFn: () => api.operationsSummary(accountId) })
+}
+
+export function useCreateOperation(accountId: string, onSuccess: () => void) {
+  return useApiMutation((input: OperationInput) => api.createOperation(accountId, input), onSuccess)
+}
+
+export function useDeleteOperation(onSuccess: () => void) {
+  return useApiMutation((id: string) => api.deleteOperation(id), onSuccess)
+}
 
 export function useTransactions(accountId: string, limit: number, offset: number) {
   return useQuery({

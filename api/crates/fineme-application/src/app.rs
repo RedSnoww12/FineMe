@@ -6,6 +6,7 @@ use fineme_domain::throttle::LoginThrottle;
 
 use crate::accounts::AccountService;
 use crate::auth::AuthService;
+use crate::budget::BudgetService;
 use crate::bundle::BundleService;
 use crate::connections::ConnectionService;
 use crate::error::AppResult;
@@ -13,11 +14,13 @@ use crate::goals::GoalService;
 use crate::history::HistoryService;
 use crate::holdings::HoldingService;
 use crate::members::MemberService;
+use crate::operations::OperationService;
 use crate::overview::OverviewService;
 use crate::ports::{
-    BankProvider, Clock, ConnectionRepository, FxProvider, FxRateRepository, GoalRepository,
-    ImportRepository, LoginJournal, PasswordHasher, PortfolioRepository, PriceProvider,
-    SnapshotRepository, TokenService, TransactionRepository, UserRepository,
+    BankProvider, BudgetRepository, Clock, ConnectionRepository, FxProvider, FxRateRepository,
+    GoalRepository, ImportRepository, LoginJournal, OperationRepository, PasswordHasher,
+    PortfolioRepository, PriceProvider, SnapshotRepository, TokenService, TransactionRepository,
+    UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -32,6 +35,8 @@ pub struct Ports {
     pub portfolio: Arc<dyn PortfolioRepository>,
     pub fx_rates: Arc<dyn FxRateRepository>,
     pub transactions: Arc<dyn TransactionRepository>,
+    pub budget: Arc<dyn BudgetRepository>,
+    pub operations: Arc<dyn OperationRepository>,
     pub snapshots: Arc<dyn SnapshotRepository>,
     pub goals: Arc<dyn GoalRepository>,
     pub connections: Arc<dyn ConnectionRepository>,
@@ -67,7 +72,9 @@ pub struct App {
     pub members: MemberService,
     pub accounts: AccountService,
     pub holdings: HoldingService,
+    pub operations: OperationService,
     pub transactions: TransactionService,
+    pub budget: BudgetService,
     pub overview: OverviewService,
     pub history: HistoryService,
     pub real_estate: RealEstateService,
@@ -84,6 +91,11 @@ impl App {
         let reader = PortfolioReader {
             repo: ports.portfolio.clone(),
             fx: ports.fx_rates.clone(),
+            clock: ports.clock.clone(),
+        };
+        let operations = OperationService {
+            reader: reader.clone(),
+            operations: ports.operations,
             clock: ports.clock.clone(),
         };
         // Hash factice calculé une fois : vérifié à la connexion quand l'e-mail est inconnu.
@@ -112,11 +124,18 @@ impl App {
                 reader: reader.clone(),
                 repo: ports.portfolio.clone(),
                 clock: ports.clock.clone(),
+                operations: operations.clone(),
             },
+            operations,
             transactions: TransactionService {
                 portfolio: ports.portfolio.clone(),
                 transactions: ports.transactions.clone(),
                 clock: ports.clock.clone(),
+            },
+            budget: BudgetService {
+                reader: reader.clone(),
+                transactions: ports.transactions.clone(),
+                budget: ports.budget,
             },
             overview: OverviewService {
                 reader: reader.clone(),

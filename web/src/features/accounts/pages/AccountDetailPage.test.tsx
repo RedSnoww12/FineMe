@@ -252,6 +252,8 @@ function buildTransaction(overrides: Partial<Transaction> = {}): Transaction {
     label: 'Boulangerie du Port',
     amount: -4.2,
     category: 'Alimentation',
+    manual_category: null,
+    internal_transfer: null,
     ...overrides,
   }
 }

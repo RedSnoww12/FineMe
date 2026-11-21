@@ -4,6 +4,7 @@
 pub mod accounts;
 pub mod app;
 pub mod auth;
+pub mod budget;
 pub mod bundle;
 pub mod commands;
 pub mod connections;
@@ -13,6 +14,7 @@ pub mod goals;
 pub mod history;
 pub mod holdings;
 pub mod members;
+pub mod operations;
 pub mod overview;
 pub mod ports;
 pub mod prices;

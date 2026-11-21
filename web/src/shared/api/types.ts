@@ -177,12 +177,56 @@ export type Transaction = {
   date: string
   label: string
   amount: number
+  /** Catégorie reçue à l'import. */
   category: string | null
+  /** Choix manuels du budget ; `null` = automatique. */
+  manual_category: string | null
+  internal_transfer: boolean | null
 }
+export type TransactionPatch = { category?: string | null; internal_transfer?: boolean | null }
 export type TransactionInput = { date: string; label: string; amount: number; category?: string | null }
 export type TransactionPage = { items: Transaction[]; total: number }
 export type TransactionsBulkInput = { transactions: TransactionInput[]; new_cash_balance?: number }
 export type TransactionsBulkResult = { inserted: number; skipped: number }
+
+export type OperationKind = 'buy' | 'sell' | 'dividend' | 'fee' | 'deposit' | 'withdrawal'
+/** Opération du journal d'un compte d'investissement. */
+export type Operation = {
+  id: string
+  account_id: string
+  kind: OperationKind
+  date: string
+  holding_id: string | null
+  holding_name: string | null
+  quantity: number | null
+  unit_price: number | null
+  /** Achat/vente : quantité × cours, hors frais. */
+  amount: number
+  fees: number
+  currency: string
+  note: string | null
+  /** Vente uniquement : plus-value réalisée nette des frais. */
+  realized_gain: number | null
+}
+export type OperationInput = {
+  kind: OperationKind
+  date: string
+  holding_id?: string
+  quantity?: number
+  unit_price?: number
+  fees?: number
+  amount?: number
+  note?: string
+}
+export type OperationYear = {
+  year: number
+  realized_gain: number
+  dividends: number
+  fees: number
+  deposits: number
+  withdrawals: number
+}
+export type OperationsSummary = { currency: 'EUR'; years: OperationYear[] }
 
 export type RealEstateLoan = Loan & { account_id: string; name: string }
 export type RealEstateItem = {
@@ -333,3 +377,44 @@ export type Bundle = {
   goals: unknown[]
 }
 export type ImportResult = { members: number; accounts: number; holdings: number; goals: number }
+
+// Budget
+export type BudgetCategorySource = 'manual' | 'rule' | 'import' | 'default'
+export type BudgetFlows = {
+  /** `YYYY-MM` */
+  month: string
+  income: number
+  expenses: number
+  savings: number
+  savings_rate: number | null
+}
+export type BudgetCategory = { category: string | null; amount: number; target: number | null }
+export type RecurringCharge = {
+  label: string
+  category: string | null
+  average_amount: number
+  occurrences: number
+  last_date: string
+  next_date: string
+}
+export type BudgetMonth = BudgetFlows & {
+  categories: BudgetCategory[]
+  trend: BudgetFlows[]
+  recurring: RecurringCharge[]
+  internal_transfers: number
+}
+export type BudgetTransaction = {
+  id: string
+  account_id: string
+  account_name: string
+  date: string
+  label: string
+  amount: number
+  amount_eur: number
+  category: string | null
+  category_source: BudgetCategorySource | null
+  internal_transfer: boolean
+  internal_transfer_manual: boolean
+}
+export type BudgetRule = { id: string; pattern: string; category: string }
+export type BudgetTarget = { category: string; monthly_amount: number }
