@@ -124,6 +124,7 @@ pub async fn build_app(
         benchmarks: store.clone(),
         goals: store.clone(),
         connections: store.clone(),
+        alerts: store.clone(),
         imports: store,
         clock: Arc::new(SystemClock),
         hasher: Arc::new(Argon2Hasher),

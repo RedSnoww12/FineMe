@@ -2,6 +2,7 @@
 //! Cette couche orchestre le domaine ; elle ne connaît ni SQL, ni HTTP, ni JSON.
 
 pub mod accounts;
+pub mod alerts;
 pub mod app;
 pub mod auth;
 pub mod budget;

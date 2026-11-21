@@ -1,5 +1,6 @@
 //! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`.
 
+use fineme_application::alerts::EvaluationReport;
 use fineme_application::budget::{BudgetMonth, BudgetTransaction};
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{
@@ -13,6 +14,7 @@ use fineme_application::performance::{BenchmarkInfo, BenchmarkResult, Performanc
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
+use fineme_domain::alert::{Alert, AlertRule};
 use fineme_domain::budget::{BudgetTarget, CategoryRule, Flows};
 use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
@@ -311,6 +313,34 @@ pub fn daily_report(report: &DailyReport) -> Value {
     json!({
         "prices": refresh_report(&report.prices),
         "snapshot_date": report.snapshot_date,
+        "alerts": evaluation_report(&report.alerts),
+    })
+}
+
+pub fn evaluation_report(report: &EvaluationReport) -> Value {
+    json!({ "created": report.created, "reopened": report.reopened, "resolved": report.resolved })
+}
+
+pub fn alert(a: &Alert) -> Value {
+    json!({
+        "id": a.id.as_uuid(),
+        "kind": a.kind.as_str(),
+        "severity": a.severity.as_str(),
+        "title": a.title,
+        "message": a.message,
+        "created_at": a.created_at,
+        "read": a.read_at.is_some(),
+        "archived": a.archived_at.is_some(),
+        "active": a.is_active(),
+    })
+}
+
+pub fn alert_rule(rule: &AlertRule) -> Value {
+    json!({
+        "kind": rule.kind().as_str(),
+        "enabled": rule.enabled(),
+        "threshold_pct": rule.threshold_pct(),
+        "ceiling": rule.ceiling(),
     })
 }
 

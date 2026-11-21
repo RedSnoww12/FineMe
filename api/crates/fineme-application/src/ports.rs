@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use fineme_domain::account::Account;
+use fineme_domain::alert::{Alert, AlertRule};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
@@ -12,8 +13,8 @@ use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
-    AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
-    UserId,
+    AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId,
+    TransactionId, UserId,
 };
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
@@ -311,6 +312,20 @@ pub trait ConnectionRepository: Send + Sync {
     async fn find(&self, id: ConnectionId) -> RepoResult<Option<Connection>>;
     async fn save(&self, connection: &Connection) -> RepoResult<()>;
     async fn delete(&self, id: ConnectionId) -> RepoResult<bool>;
+}
+
+/// Alertes enregistrées (clé de condition unique) et configuration des règles.
+#[async_trait]
+pub trait AlertRepository: Send + Sync {
+    /// Toutes les alertes, archivées et résolues comprises.
+    async fn alerts(&self) -> RepoResult<Vec<Alert>>;
+    async fn find_alert(&self, id: AlertId) -> RepoResult<Option<Alert>>;
+    /// Crée ou met à jour les alertes, toutes ou aucune.
+    async fn save_alerts(&self, alerts: &[Alert]) -> RepoResult<()>;
+    /// Règles enregistrées (celles qui manquent prennent leur valeur par défaut).
+    async fn rules(&self) -> RepoResult<Vec<AlertRule>>;
+    /// Crée ou remplace la règle de son type.
+    async fn save_rule(&self, rule: &AlertRule) -> RepoResult<()>;
 }
 
 /// Résultat d'un import de bundle, à appliquer en une seule fois.

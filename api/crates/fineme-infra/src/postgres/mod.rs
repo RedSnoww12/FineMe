@@ -1,5 +1,6 @@
 //! Adaptateur Postgres : implémente tous les ports de persistance avec sqlx (requêtes à l'exécution).
 
+mod alerts;
 mod rows;
 
 use std::collections::HashMap;

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use fineme_domain::throttle::LoginThrottle;
 
 use crate::accounts::AccountService;
+use crate::alerts::AlertService;
 use crate::auth::AuthService;
 use crate::budget::BudgetService;
 use crate::bundle::BundleService;
@@ -18,10 +19,10 @@ use crate::operations::OperationService;
 use crate::overview::OverviewService;
 use crate::performance::PerformanceService;
 use crate::ports::{
-    BankProvider, BenchmarkRepository, BudgetRepository, Clock, ConnectionRepository, FxProvider,
-    FxRateRepository, GoalRepository, ImportRepository, LoginJournal, OperationRepository,
-    PasswordHasher, PortfolioRepository, PriceProvider, SnapshotRepository, TokenService,
-    TransactionRepository, UserRepository,
+    AlertRepository, BankProvider, BenchmarkRepository, BudgetRepository, Clock,
+    ConnectionRepository, FxProvider, FxRateRepository, GoalRepository, ImportRepository,
+    LoginJournal, OperationRepository, PasswordHasher, PortfolioRepository, PriceProvider,
+    SnapshotRepository, TokenService, TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -42,6 +43,7 @@ pub struct Ports {
     pub benchmarks: Arc<dyn BenchmarkRepository>,
     pub goals: Arc<dyn GoalRepository>,
     pub connections: Arc<dyn ConnectionRepository>,
+    pub alerts: Arc<dyn AlertRepository>,
     pub imports: Arc<dyn ImportRepository>,
     pub clock: Arc<dyn Clock>,
     pub hasher: Arc<dyn PasswordHasher>,
@@ -83,6 +85,7 @@ pub struct App {
     pub real_estate: RealEstateService,
     pub goals: GoalService,
     pub connections: ConnectionService,
+    pub alerts: AlertService,
     pub bundle: BundleService,
     pub prices: PriceService,
     /// Secret de la tâche quotidienne (voir `daily`).
@@ -156,7 +159,7 @@ impl App {
                 clock: ports.clock.clone(),
             },
             history: HistoryService {
-                snapshots: ports.snapshots,
+                snapshots: ports.snapshots.clone(),
                 members: ports.portfolio.clone(),
                 clock: ports.clock.clone(),
             },
@@ -166,6 +169,14 @@ impl App {
             goals: GoalService {
                 reader: reader.clone(),
                 goals: ports.goals.clone(),
+            },
+            alerts: AlertService {
+                reader: reader.clone(),
+                goals: ports.goals.clone(),
+                snapshots: ports.snapshots.clone(),
+                connections: ports.connections.clone(),
+                alerts: ports.alerts,
+                clock: ports.clock.clone(),
             },
             connections: ConnectionService {
                 connections: ports.connections,

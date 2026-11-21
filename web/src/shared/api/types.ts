@@ -403,6 +403,39 @@ export type Connection = {
   error: string | null
 }
 export type ConnectionCreated = { id: string; redirect_url: string }
+
+// Alertes et rappels
+export type AlertRuleKind = 'goals' | 'savings_ceiling' | 'net_worth_change' | 'connections' | 'stale_prices'
+export type AlertRule = {
+  kind: AlertRuleKind
+  enabled: boolean
+  /** savings_ceiling : ]0, 100] ; net_worth_change : ]0, 1000] ; sinon null. */
+  threshold_pct: number | null
+  /** savings_ceiling seulement : plafond en EUR. */
+  ceiling: number | null
+}
+export type AlertRuleInput = Partial<Omit<AlertRule, 'kind'>>
+export type AlertKind =
+  | 'goal_reached'
+  | 'goal_overdue'
+  | 'savings_ceiling'
+  | 'net_worth_change'
+  | 'connection_expired'
+  | 'connection_error'
+  | 'stale_prices'
+export type Alert = {
+  id: string
+  kind: AlertKind
+  severity: 'info' | 'warning'
+  title: string
+  message: string
+  created_at: string
+  read: boolean
+  archived: boolean
+  /** false : la condition a disparu depuis (alerte résolue). */
+  active: boolean
+}
+export type AlertEvaluation = { created: number; reopened: number; resolved: number }
 export type SyncResult = { accounts_updated: number; transactions_inserted: number }
 
 /** Le lot d'export est renvoyé tel quel à l'import : on ne le manipule pas côté front. */

@@ -4,6 +4,11 @@ import type {
   AccountDetail,
   Account,
   AccountInput,
+  Alert,
+  AlertEvaluation,
+  AlertRule,
+  AlertRuleInput,
+  AlertRuleKind,
   AuthResult,
   AuthStatus,
   Benchmark,
@@ -165,6 +170,17 @@ export const api = {
     request<ConnectionCreated>('/api/connections', { method: 'POST', body: { provider } }),
   syncConnection: (id: string) => request<SyncResult>(`/api/connections/${id}/sync`, { method: 'POST' }),
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: 'DELETE' }),
+
+  // Alertes et rappels
+  alerts: (archived = false) =>
+    request<Alert[]>('/api/alerts', { query: archived ? { archived: 'true' } : undefined }),
+  evaluateAlerts: () => request<AlertEvaluation>('/api/alerts/evaluate', { method: 'POST' }),
+  updateAlert: (id: string, body: { read?: boolean; archived?: boolean }) =>
+    request<Alert>(`/api/alerts/${id}`, { method: 'PUT', body }),
+  readAllAlerts: () => request<{ updated: number }>('/api/alerts/read-all', { method: 'POST' }),
+  alertRules: () => request<AlertRule[]>('/api/alerts/rules'),
+  updateAlertRule: (kind: AlertRuleKind, body: AlertRuleInput) =>
+    request<AlertRule>(`/api/alerts/rules/${kind}`, { method: 'PUT', body }),
 
   // Import / export complet
   exportBundle: () => request<Bundle>('/api/export'),
