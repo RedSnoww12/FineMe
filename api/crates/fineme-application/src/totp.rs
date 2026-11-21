@@ -349,11 +349,8 @@ impl AuthService {
             .random_bytes(RECOVERY_CODE_COUNT * RECOVERY_CODE_LEN)?;
         let mut codes = Vec::with_capacity(RECOVERY_CODE_COUNT);
         let mut hashes = Vec::with_capacity(RECOVERY_CODE_COUNT);
-        for chunk in bytes.chunks_exact(RECOVERY_CODE_LEN) {
-            let chunk: [u8; RECOVERY_CODE_LEN] = chunk
-                .try_into()
-                .map_err(|_| AppError::Internal("aléa insuffisant".into()))?;
-            let code = totp::recovery_code_from_bytes(&chunk);
+        for chunk in bytes.as_chunks::<RECOVERY_CODE_LEN>().0 {
+            let code = totp::recovery_code_from_bytes(chunk);
             hashes.push(self.hasher.hash(&code).await?);
             codes.push(code);
         }
