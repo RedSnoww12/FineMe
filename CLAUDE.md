@@ -123,6 +123,7 @@ Messages de commit au format [Conventional Commits](https://www.conventionalcomm
 - Portées : `api`, `web`, `e2e`, `docs`, `deploy` (omise si le changement est transversal).
 - Un commit = un changement cohérent ; un changement incompatible porte `!` et un pied `BREAKING CHANGE:`.
 - Exemples : `feat(api): exiger un code à la première configuration`, `fix(web): corriger le total des parts`.
+- Aucune mention d'outil dans les commits, pull requests, issues et commentaires : ni pied `Co-Authored-By`, ni « Generated with Claude Code ».
 
 Une issue = une branche dédiée, créée depuis `main` avant de commencer : `<type>/<numéro>-<description-courte>`
 (type de Conventional Commits, description en minuscules sans accents, mots séparés par des tirets), par exemple
