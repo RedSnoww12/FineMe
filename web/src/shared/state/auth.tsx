@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getToken, setToken, UNAUTHORIZED_EVENT } from '@/shared/api/client'
+import { purgePersistedCache } from '@/shared/api/persistence'
 import type { AuthResult, User } from '@/shared/api/types'
 
 const USER_KEY = 'fineme.user'
@@ -51,6 +52,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTokenState(null)
     setUser(null)
     queryClient.clear()
+    // La copie hors ligne des données ne survit pas à la session.
+    purgePersistedCache()
   }, [queryClient])
 
   const renewSession = useCallback((result: AuthResult) => {
@@ -63,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(
     (result: AuthResult) => {
       queryClient.clear()
+      purgePersistedCache()
       renewSession(result)
     },
     [queryClient, renewSession],
