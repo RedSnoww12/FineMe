@@ -36,6 +36,7 @@ use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::Property;
 use fineme_domain::transaction::Transaction;
+use fineme_domain::valuation::Valuation;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
@@ -43,7 +44,7 @@ use uuid::Uuid;
 use rows::{
     AccountRow, BudgetRuleRow, BudgetTargetRow, ConnectionRow, GoalRow, HoldingRow,
     ImportProfileRow, LoanRow, MemberRow, OperationRow, OwnerRow, PropertyRow, SnapshotAccountRow,
-    TransactionRow,
+    TransactionRow, ValuationRow,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -145,9 +146,45 @@ async fn upsert_property(
     .bind(p.monthly_rent)
     .bind(p.monthly_charges)
     .bind(p.yearly_property_tax)
-    .execute(conn)
+    .execute(&mut *conn)
     .await
     .map_err(db)?;
+    save_valuations(conn, account_id, &p.valuations).await
+}
+
+/// Remplace les estimations du bien par celles fournies (identifiants conservés).
+async fn save_valuations(
+    conn: &mut PgConnection,
+    account_id: Uuid,
+    valuations: &[Valuation],
+) -> RepoResult<()> {
+    let ids: Vec<Uuid> = valuations.iter().map(|v| v.id.as_uuid()).collect();
+    sqlx::query("DELETE FROM property_valuations WHERE account_id = $1 AND id <> ALL($2)")
+        .bind(account_id)
+        .bind(&ids)
+        .execute(&mut *conn)
+        .await
+        .map_err(db)?;
+    for v in valuations {
+        sqlx::query(
+            "INSERT INTO property_valuations (id, account_id, valued_on, value, source, price_per_m2, note, \
+             recorded_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (id) DO UPDATE SET valued_on = EXCLUDED.valued_on, value = EXCLUDED.value, \
+             source = EXCLUDED.source, price_per_m2 = EXCLUDED.price_per_m2, note = EXCLUDED.note, \
+             recorded_at = EXCLUDED.recorded_at",
+        )
+        .bind(v.id.as_uuid())
+        .bind(account_id)
+        .bind(v.valued_on.date())
+        .bind(v.value.value())
+        .bind(v.source.as_str())
+        .bind(v.price_per_m2)
+        .bind(&v.note)
+        .bind(v.recorded_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(db)?;
+    }
     Ok(())
 }
 
@@ -554,6 +591,13 @@ impl PortfolioRepository for PgStore {
         .fetch_all(pool)
         .await
         .map_err(db)?;
+        let valuation_rows = sqlx::query_as::<_, ValuationRow>(
+            "SELECT id, account_id, valued_on, value, source, price_per_m2, note, recorded_at \
+             FROM property_valuations ORDER BY valued_on, recorded_at",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(db)?;
         let loan_rows = sqlx::query_as::<_, LoanRow>(
             "SELECT id, account_id, property_account_id, principal, interest_rate_pct, insurance_rate_pct, \
              duration_months, start_date FROM loans",
@@ -572,6 +616,12 @@ impl PortfolioRepository for PgStore {
         let mut properties = HashMap::new();
         for row in property_rows {
             properties.insert(row.account_id, Property::try_from(row)?);
+        }
+        for row in valuation_rows {
+            let account_id = row.account_id;
+            if let Some(property) = properties.get_mut(&account_id) {
+                property.valuations.push(Valuation::try_from(row)?);
+            }
         }
         let mut loans = HashMap::new();
         for row in loan_rows {

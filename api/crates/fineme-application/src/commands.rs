@@ -28,6 +28,16 @@ pub struct PropertyInput {
     pub yearly_property_tax: Option<f64>,
 }
 
+/// Estimation d'un bien : `value`, ou `price_per_m2` (valeur = surface du bien × prix).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ValuationInput {
+    pub value: Option<f64>,
+    pub price_per_m2: Option<f64>,
+    pub valued_on: Option<NaiveDate>,
+    pub source: Option<String>,
+    pub note: Patch<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoanInput {
     pub property_account_id: Patch<Uuid>,

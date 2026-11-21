@@ -9,7 +9,9 @@ use fineme_application::auth::Session;
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{
     HoldingInput, OperationImportInput, OperationInput, TransactionInput, TransactionPatch,
+    ValuationInput,
 };
+use fineme_domain::ids::AccountId;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -22,7 +24,7 @@ use crate::input::{
     HistoryQuery, HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody,
     ImportProfileBody, LimitQuery, LoginBody, MemberBody, OperationBody, OperationsBulkBody,
     PageQuery, PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody,
-    TransactionPatchBody, TransactionsBulkBody, ViewQuery,
+    TransactionPatchBody, TransactionsBulkBody, ValuationBody, ViewQuery,
 };
 use crate::origin::ClientOrigin;
 use crate::output;
@@ -102,6 +104,14 @@ pub fn api(app: AppState) -> Router<AppState> {
             put(operations_update).delete(operations_delete),
         )
         .route("/real-estate", get(real_estate))
+        .route(
+            "/accounts/{id}/valuations",
+            get(valuations_list).post(valuations_create),
+        )
+        .route(
+            "/valuations/{id}",
+            put(valuations_update).delete(valuations_delete),
+        )
         .route("/loans/{account_id}/schedule", get(loan_schedule))
         .route("/overview", get(overview))
         .route("/history", get(history))
@@ -601,6 +611,49 @@ async fn operations_delete(
 }
 
 // ---------------------------------------------------------------- immobilier, vue d'ensemble
+
+async fn valuations_list(State(app): State<AppState>, Path(id): Path<Uuid>) -> JsonResponse {
+    let account_id = AccountId::from_uuid(id);
+    ok(app
+        .real_estate
+        .valuations(id)
+        .await?
+        .iter()
+        .map(|v| output::valuation(account_id, v))
+        .collect())
+}
+
+async fn valuations_create(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ValuationBody>,
+) -> Created {
+    let saved = app
+        .real_estate
+        .add_valuation(id, &ValuationInput::from(body))
+        .await?;
+    created(output::valuation(saved.account_id, &saved.valuation))
+}
+
+async fn valuations_update(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ValuationBody>,
+) -> JsonResponse {
+    let saved = app
+        .real_estate
+        .update_valuation(id, &ValuationInput::from(body))
+        .await?;
+    ok(output::valuation(saved.account_id, &saved.valuation))
+}
+
+async fn valuations_delete(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    app.real_estate.delete_valuation(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 async fn real_estate(State(app): State<AppState>, Query(view): Query<ViewQuery>) -> JsonResponse {
     ok(output::real_estate(

@@ -22,5 +22,6 @@ pub mod portfolio;
 pub mod property;
 pub mod throttle;
 pub mod transaction;
+pub mod valuation;
 
 pub use error::DomainError;

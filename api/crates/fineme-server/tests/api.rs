@@ -2276,3 +2276,159 @@ async fn import_profiles_are_remembered_per_account_and_kind() {
         .await;
     assert_eq!(error_of(&missing).0, 404);
 }
+
+#[tokio::test]
+async fn property_valuations_history_drives_current_value() {
+    let (api, alice, bob) = Api::household().await;
+    let (house, loan) = api.house_with_loan(&alice, &bob).await;
+    let path = format!("/api/accounts/{house}/valuations");
+
+    // La création du bien a enregistré sa valeur comme première estimation, datée du jour.
+    let list = api.get(&path).await;
+    let first = &list[0];
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert!(close(&first["value"], 300_000.0));
+    assert_eq!(first["source"], "manual");
+    assert_eq!(first["account_id"], json!(house));
+    let today = first["valued_on"].as_str().unwrap().to_string();
+
+    // Estimation ancienne : la valeur courante ne change pas.
+    let (status, older) = api
+        .call(
+            "POST",
+            &path,
+            Some(json!({ "value": 250000, "valued_on": "2023-01-15", "source": "external", "note": "Avis fictif" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(older["note"], "Avis fictif");
+    assert!(close(
+        &api.get(&format!("/api/accounts/{house}")).await["value"],
+        300_000.0
+    ));
+
+    // Prix au m² : surface (90 m²) × prix.
+    let (status, by_m2) = api
+        .call("POST", &path, Some(json!({ "price_per_m2": 3500 })))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(close(&by_m2["value"], 315_000.0));
+    assert_eq!(by_m2["source"], "price_per_m2");
+    assert_eq!(by_m2["valued_on"], json!(today));
+    let detail = api.get(&format!("/api/accounts/{house}")).await;
+    assert!(
+        close(&detail["value"], 315_000.0)
+            && close(&detail["property"]["current_value"], 315_000.0)
+    );
+    assert!(close(
+        &api.get("/api/real-estate").await["totals"]["value"],
+        315_000.0
+    ));
+    let dates: Vec<Value> = api
+        .get(&path)
+        .await
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["valued_on"].clone())
+        .collect();
+    assert_eq!(dates, vec![json!(today), json!(today), json!("2023-01-15")]);
+
+    // Modification et suppression.
+    let by_m2_id = by_m2["id"].as_str().unwrap();
+    let (status, edited) = api
+        .call(
+            "PUT",
+            &format!("/api/valuations/{by_m2_id}"),
+            Some(json!({ "value": 320000, "note": "Revue" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (&edited["source"], &edited["note"]),
+        (&json!("manual"), &json!("Revue"))
+    );
+    assert!(close(
+        &api.get("/api/overview").await["gross_assets"],
+        320_000.0
+    ));
+    assert_eq!(
+        api.call("DELETE", &format!("/api/valuations/{by_m2_id}"), None)
+            .await,
+        (StatusCode::NO_CONTENT, Value::Null)
+    );
+    assert!(close(
+        &api.get(&format!("/api/accounts/{house}")).await["value"],
+        300_000.0
+    ));
+
+    // Erreurs : valeur nulle, date future, compte non immobilier, dernière estimation.
+    assert_eq!(
+        error_of(&api.call("POST", &path, Some(json!({ "value": 0 }))).await),
+        (400, "value doit être strictement positif")
+    );
+    assert_eq!(
+        error_of(
+            &api.call(
+                "POST",
+                &path,
+                Some(json!({ "value": 1, "valued_on": "2999-01-01" }))
+            )
+            .await
+        ),
+        (
+            400,
+            "La date d'une estimation ne peut pas être dans le futur"
+        )
+    );
+    assert_eq!(
+        error_of(
+            &api.call("GET", &format!("/api/accounts/{loan}/valuations"), None)
+                .await
+        ),
+        (404, "Bien immobilier introuvable")
+    );
+    let older_id = older["id"].as_str().unwrap();
+    assert_eq!(
+        api.call("DELETE", &format!("/api/valuations/{older_id}"), None)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let last = api.get(&path).await[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        error_of(
+            &api.call("DELETE", &format!("/api/valuations/{last}"), None)
+                .await
+        ),
+        (
+            409,
+            "La dernière estimation d'un bien ne peut pas être supprimée"
+        )
+    );
+
+    // L'ancienne route : modifier current_value ajoute une estimation manuelle.
+    let (status, _) = api
+        .call(
+            "PUT",
+            &format!("/api/accounts/{house}"),
+            Some(json!({ "property": { "current_value": 330000 } })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let list = api.get(&path).await;
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert!(close(&list[0]["value"], 330_000.0));
+
+    // L'export porte l'historique.
+    let exported = api.get("/api/export").await;
+    let entry = exported["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["kind"] == "real_estate")
+        .unwrap()
+        .clone();
+    assert_eq!(entry["valuations"].as_array().unwrap().len(), 2);
+    assert!(close(&entry["valuations"][1]["value"], 330_000.0));
+}
