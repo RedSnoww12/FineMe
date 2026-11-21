@@ -14,7 +14,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 
 ## Variables d'environnement (api)
 
-`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte), `RECOVERY_TOKEN` (optionnel : code de secours qui permet de réinitialiser un mot de passe perdu ; absent = récupération désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `CRON_SECRET` (optionnel : secret de la tâche quotidienne `/api/jobs/daily` ; absent = tâche désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `EODHD_API_KEY` (optionnel : clé du fournisseur de cours de repli EODHD ; absente = pas de repli pour les titres).
+`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte), `RECOVERY_TOKEN` (optionnel : code de secours qui permet de réinitialiser un mot de passe perdu ; absent = récupération désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `CRON_SECRET` (optionnel : secret de la tâche quotidienne `/api/jobs/daily` ; absent = tâche désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `EODHD_API_KEY` (optionnel : clé du fournisseur de cours de repli EODHD ; absente = pas de repli pour les titres), `TRUSTED_PROXY_HOPS` (optionnel, défaut 1 : nombre de proxys de confiance devant l'API, voir « Limitation des tentatives »).
 Les migrations sqlx s'exécutent au démarrage.
 
 ## Auth
@@ -29,7 +29,36 @@ Les migrations sqlx s'exécutent au démarrage.
 | PUT | `/api/auth/password` | `{ current_password, new_password }` | `{ token, user }` — refusé (403) si `current_password` est faux ; (400) si `new_password` est trop court ou identique à l'actuel. Le jeton renvoyé remplace celui de l'appareil courant. |
 | POST | `/api/auth/reset` | `{ email, recovery_token, new_password }` | `{ token, user }` — (501) si `RECOVERY_TOKEN` n'est pas défini ; (403) si `recovery_token` est absent ou différent (comparaison en temps constant, vérifiée avant tout le reste) ; (400) mot de passe trop court ; (404) aucun compte pour cet e-mail. |
 
-Mot de passe ≥ 10 caractères, hashé en argon2id. JWT valable 30 jours.
+| POST | `/api/auth/refresh` | – | `{ token, user }` — renouvellement glissant : nouveau jeton valable 7 jours, à la version de session courante. |
+| GET | `/api/auth/logins?limit=` | – | `LoginEvent[]`, du plus récent au plus ancien (`limit` défaut 50, borné à 1..200). |
+
+Mot de passe ≥ 10 caractères, hashé en argon2id. JWT valable **7 jours** ; le front appelle `/api/auth/refresh`
+au chargement puis toutes les heures dès que le jeton a plus d'un jour : une session active n'expire pas,
+un appareil oublié est déconnecté au bout de 7 jours d'inactivité.
+
+### Limitation des tentatives
+
+`/api/auth/login` et `/api/auth/reset` partagent un limiteur en mémoire. Ne comptent comme échecs que les refus
+d'identité (401, 403, 404) ; une saisie invalide (400) ne compte pas.
+
+- Par adresse IP : 5 échecs tolérés, puis un délai de 30 s, doublé à chaque nouvel échec (1 min, 2 min…), plafonné à 15 min.
+  Une connexion réussie remet le compteur de l'IP à zéro ; sans échec pendant 1 h, il est oublié.
+- Global (toutes IP) : 50 échecs tolérés, puis même progression plafonnée à 5 min.
+- Pendant le délai, la route répond **429** `{ "error": "Trop de tentatives. Réessayez dans 30 secondes." }` avec
+  l'en-tête `Retry-After: <secondes>` (exposé en CORS), sans vérifier le mot de passe.
+
+IP du client : derrière le proxy de Render, elle est lue dans `X-Forwarded-For`, à la position
+`TRUSTED_PROXY_HOPS` **depuis la droite** (défaut 1 : la dernière entrée, ajoutée par le proxy ; les entrées de
+gauche peuvent être forgées par le client et sont ignorées). `TRUSTED_PROXY_HOPS=0` ignore l'en-tête et
+utilise l'adresse TCP (sans proxy). Sans IP connue, toutes les requêtes partagent un même compteur.
+
+### Journal des connexions
+
+`LoginEvent = { at: string (RFC 3339), action: "login" | "reset", success: bool, ip: string | null, user_agent: string | null }`
+
+Chaque tentative de connexion ou de réinitialisation qui atteint la vérification est journalisée (pas les refus
+429 ni les saisies invalides). Le user-agent est tronqué à 200 caractères ; l'e-mail saisi n'est pas conservé.
+Les entrées de plus de 90 jours sont purgées à chaque connexion réussie.
 
 `GET /api/auth/status` renvoie aussi `recovery_enabled: bool` (true si `RECOVERY_TOKEN` est défini), pour
 afficher ou non le lien « Mot de passe oublié ».

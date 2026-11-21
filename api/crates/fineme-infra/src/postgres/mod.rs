@@ -10,9 +10,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use fineme_application::ports::{
     AccountWrite, BudgetRepository, ConnectionRepository, Credentials, FxRateRepository,
-    GoalRepository, ImportBatch, ImportRepository, OperationChange, OperationRepository,
-    PortfolioData, PortfolioRepository, PositionUpdate, PricePoint, RepoError, RepoResult,
-    SnapshotPoint, SnapshotRepository, TransactionRepository, UserRepository,
+    GoalRepository, ImportBatch, ImportRepository, LoginJournal, OperationChange,
+    OperationRepository, PortfolioData, PortfolioRepository, PositionUpdate, PricePoint, RepoError,
+    RepoResult, SnapshotPoint, SnapshotRepository, TransactionRepository, UserRepository,
 };
 use fineme_domain::account::Account;
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -26,6 +26,7 @@ use fineme_domain::ids::{
     UserId,
 };
 use fineme_domain::loan::Loan;
+use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
 use fineme_domain::operation::Operation;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
@@ -445,6 +446,72 @@ impl UserRepository for PgStore {
         .map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(true)
+    }
+}
+
+// ---------------------------------------------------------------- journal des connexions
+
+#[derive(sqlx::FromRow)]
+struct LoginEventRow {
+    at: DateTime<Utc>,
+    action: String,
+    success: bool,
+    ip: Option<String>,
+    user_agent: Option<String>,
+}
+
+impl LoginEventRow {
+    fn into_event(self) -> RepoResult<LoginEvent> {
+        let action = LoginAction::parse(&self.action)
+            .ok_or_else(|| RepoError::Backend(format!("action inconnue : {}", self.action)))?;
+        Ok(LoginEvent {
+            at: self.at,
+            action,
+            success: self.success,
+            origin: LoginOrigin {
+                ip: self.ip,
+                user_agent: self.user_agent,
+            },
+        })
+    }
+}
+
+#[async_trait]
+impl LoginJournal for PgStore {
+    async fn record(&self, event: &LoginEvent) -> RepoResult<()> {
+        sqlx::query(
+            "INSERT INTO login_events (at, action, success, ip, user_agent) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(event.at)
+        .bind(event.action.as_str())
+        .bind(event.success)
+        .bind(&event.origin.ip)
+        .bind(&event.origin.user_agent)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn recent(&self, limit: i64) -> RepoResult<Vec<LoginEvent>> {
+        let rows: Vec<LoginEventRow> = sqlx::query_as(
+            "SELECT at, action, success, ip, user_agent FROM login_events \
+             ORDER BY at DESC, id DESC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        rows.into_iter().map(LoginEventRow::into_event).collect()
+    }
+
+    async fn prune_before(&self, before: DateTime<Utc>) -> RepoResult<u64> {
+        Ok(sqlx::query("DELETE FROM login_events WHERE at < $1")
+            .bind(before)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?
+            .rows_affected())
     }
 }
 

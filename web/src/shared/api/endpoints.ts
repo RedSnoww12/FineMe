@@ -27,6 +27,7 @@ import type {
   HoldingInput,
   ImportResult,
   LoanSchedule,
+  LoginEvent,
   Member,
   MemberInput,
   Operation,
@@ -63,6 +64,8 @@ export const api = {
     request<AuthResult>('/api/auth/password', { method: 'PUT', body }),
   resetPassword: (body: PasswordResetInput) =>
     request<AuthResult>('/api/auth/reset', { method: 'POST', body }),
+  refreshSession: () => request<AuthResult>('/api/auth/refresh', { method: 'POST' }),
+  loginHistory: (limit?: number) => request<LoginEvent[]>('/api/auth/logins', { query: { limit } }),
 
   // Membres
   members: () => request<Member[]>('/api/members'),

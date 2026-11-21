@@ -49,6 +49,7 @@ impl Api {
             pool.clone(),
             "secret-de-test-0123456789abcdef0123",
             ORIGIN,
+            1,
             settings,
             None,
         )
@@ -103,6 +104,24 @@ impl Api {
         };
         let (status, _, body) = self.send(request.unwrap()).await;
         (status, body)
+    }
+
+    /// Connexion vue derrière le proxy : `forwarded_for` est l'en-tête `X-Forwarded-For` reçu.
+    async fn login_via_proxy(
+        &self,
+        forwarded_for: &str,
+        password: &str,
+    ) -> (StatusCode, axum::http::HeaderMap, Value) {
+        let body = json!({ "email": "alice@exemple.test", "password": password });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("x-forwarded-for", forwarded_for)
+            .header(header::USER_AGENT, "Navigateur fictif/1.0")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        self.send(request).await
     }
 
     /// Déclenche la tâche quotidienne avec ce secret (sans le jeton de session).
@@ -411,6 +430,72 @@ async fn changing_password_signs_out_every_other_device() {
             .await
         ),
         (401, "Authentification requise")
+    );
+}
+
+#[tokio::test]
+async fn repeated_login_failures_are_throttled_per_ip_and_journaled() {
+    let (mut api, _, _) = Api::household().await;
+    // Le client prétend être 1.2.3.4 ; le proxy (dernière entrée) a vu 203.0.113.9.
+    let attacker = "1.2.3.4, 203.0.113.9";
+    for _ in 0..6 {
+        let (status, _, _) = api.login_via_proxy(attacker, "mauvais-mot-de-passe").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, headers, body) = api.login_via_proxy(attacker, PASSWORD).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(headers[header::RETRY_AFTER], "30");
+    assert_eq!(
+        body["error"],
+        "Trop de tentatives. Réessayez dans 30 secondes."
+    );
+    // Changer l'entrée de tête ne contourne pas la limite.
+    let (status, _, _) = api.login_via_proxy("5.6.7.8, 203.0.113.9", PASSWORD).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    // Une autre IP réelle se connecte normalement.
+    let (status, _, session) = api.login_via_proxy("198.51.100.4", PASSWORD).await;
+    assert_eq!(status, StatusCode::OK);
+    api.token = session["token"].as_str().unwrap().to_string();
+
+    let logins = api.get("/api/auth/logins").await;
+    let logins = logins.as_array().unwrap();
+    // Setup (non journalisé), 6 échecs puis 1 succès ; les refus 429 ne sont pas journalisés.
+    assert_eq!(logins.len(), 7);
+    assert_eq!(logins[0]["success"], true);
+    assert_eq!(logins[0]["action"], "login");
+    assert_eq!(logins[0]["ip"], "198.51.100.4");
+    assert_eq!(logins[0]["user_agent"], "Navigateur fictif/1.0");
+    assert!(logins[0]["at"].as_str().unwrap().starts_with("20"));
+    assert_eq!(logins[1]["success"], false);
+    assert_eq!(logins[1]["ip"], "203.0.113.9");
+    assert_eq!(
+        api.get("/api/auth/logins?limit=2")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Le journal exige une session.
+    api.token.clear();
+    assert_eq!(
+        api.call("GET", "/api/auth/logins", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn refresh_renews_the_token_of_an_active_session() {
+    let (mut api, _, _) = Api::household().await;
+    let renewed = api.post("/api/auth/refresh", json!({})).await;
+    assert_eq!(renewed["user"]["email"], "alice@exemple.test");
+    api.token = renewed["token"].as_str().unwrap().to_string();
+    api.get("/api/auth/me").await;
+    api.token.clear();
+    assert_eq!(
+        api.call("POST", "/api/auth/refresh", None).await.0,
+        StatusCode::UNAUTHORIZED
     );
 }
 

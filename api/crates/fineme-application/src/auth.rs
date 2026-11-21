@@ -1,13 +1,22 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use chrono::Duration;
 use fineme_domain::ids::{MemberId, UserId};
+use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User, default_color};
+use fineme_domain::throttle::{LoginThrottle, retry_after_seconds};
 
 use crate::error::{AppError, AppResult};
 use crate::ports::{
-    Clock, Credentials, PasswordHasher, TokenService, TokenSubject, UserRepository,
+    Clock, Credentials, LoginJournal, PasswordHasher, TokenService, TokenSubject, UserRepository,
 };
 use crate::secret::code_matches;
+
+/// Nombre de tentatives renvoyées par défaut par le journal des connexions, et plafond.
+pub const DEFAULT_LOGIN_HISTORY: i64 = 50;
+pub const MAX_LOGIN_HISTORY: i64 = 200;
+/// Durée de conservation du journal des connexions.
+const LOGIN_HISTORY_RETENTION_DAYS: i64 = 90;
 
 pub const MIN_PASSWORD_LEN: usize = 10;
 /// Longueur minimale du code de secours : la route de réinitialisation est publique.
@@ -42,6 +51,9 @@ pub struct Session {
 
 pub struct AuthService {
     pub(crate) users: Arc<dyn UserRepository>,
+    pub(crate) journal: Arc<dyn LoginJournal>,
+    /// Échecs récents par IP et globalement (en mémoire : une seule instance de l'API).
+    pub(crate) throttle: Mutex<LoginThrottle>,
     pub(crate) hasher: Arc<dyn PasswordHasher>,
     pub(crate) tokens: Arc<dyn TokenService>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -134,8 +146,75 @@ impl AuthService {
         self.open_session(credentials)
     }
 
-    /// Connexion : même message et même coût que l'e-mail soit inconnu ou le mot de passe faux.
-    pub async fn login(&self, email: &str, password: &str) -> AppResult<Session> {
+    fn throttle(&self) -> MutexGuard<'_, LoginThrottle> {
+        // Un verrou empoisonné ne contient qu'un compteur : on continue avec son état.
+        self.throttle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Refuse (429) une tentative tant que le délai imposé à cette IP, ou à tout le serveur, court.
+    fn check_throttle(&self, origin: &LoginOrigin) -> AppResult<()> {
+        self.throttle()
+            .check(origin.throttle_key(), self.clock.now())
+            .map_err(|wait| AppError::TooManyAttempts(retry_after_seconds(wait)))
+    }
+
+    /// Met à jour le limiteur et le journal selon l'issue d'une tentative. Seuls les refus d'identité
+    /// (mauvais mot de passe, code ou e-mail) comptent comme échecs ; une saisie invalide ne compte pas.
+    async fn conclude<T>(
+        &self,
+        action: LoginAction,
+        origin: &LoginOrigin,
+        result: &AppResult<T>,
+    ) -> AppResult<()> {
+        let now = self.clock.now();
+        let success = match result {
+            Ok(_) => true,
+            Err(AppError::Unauthorized(_) | AppError::Forbidden(_) | AppError::NotFound(_)) => {
+                false
+            }
+            Err(_) => return Ok(()),
+        };
+        {
+            let mut throttle = self.throttle();
+            if success {
+                throttle.record_success(origin.throttle_key());
+            } else {
+                throttle.record_failure(origin.throttle_key(), now);
+            }
+        }
+        self.journal
+            .record(&LoginEvent {
+                at: now,
+                action,
+                success,
+                origin: origin.clone(),
+            })
+            .await?;
+        if success {
+            self.journal
+                .prune_before(now - Duration::days(LOGIN_HISTORY_RETENTION_DAYS))
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Connexion limitée en fréquence et journalisée : même message et même coût que l'e-mail soit
+    /// inconnu ou le mot de passe faux.
+    pub async fn login(
+        &self,
+        email: &str,
+        password: &str,
+        origin: &LoginOrigin,
+    ) -> AppResult<Session> {
+        self.check_throttle(origin)?;
+        let result = self.verify_login(email, password).await;
+        self.conclude(LoginAction::Login, origin, &result).await?;
+        result
+    }
+
+    async fn verify_login(&self, email: &str, password: &str) -> AppResult<Session> {
         let found = self.users.find_by_email(&normalize_email(email)).await?;
         let hash = found
             .as_ref()
@@ -162,6 +241,21 @@ impl AuthService {
 
     pub async fn me(&self, id: UserId) -> AppResult<User> {
         Ok(self.credentials(id).await?.user)
+    }
+
+    /// Renouvellement glissant : un nouveau jeton, à la version de session courante, pour l'utilisateur
+    /// déjà authentifié.
+    pub async fn refresh(&self, id: UserId) -> AppResult<Session> {
+        let credentials = self.credentials(id).await?;
+        self.open_session(credentials)
+    }
+
+    /// Dernières tentatives de connexion et de réinitialisation, de la plus récente à la plus ancienne.
+    pub async fn login_history(&self, limit: Option<i64>) -> AppResult<Vec<LoginEvent>> {
+        let limit = limit
+            .unwrap_or(DEFAULT_LOGIN_HISTORY)
+            .clamp(1, MAX_LOGIN_HISTORY);
+        Ok(self.journal.recent(limit).await?)
     }
 
     async fn credentials(&self, id: UserId) -> AppResult<Credentials> {
@@ -198,7 +292,21 @@ impl AuthService {
 
     /// Réinitialise un mot de passe perdu avec le code de secours défini côté serveur.
     /// Le code est vérifié avant tout le reste : sans lui, la route ne révèle rien (ni les e-mails connus).
+    /// Limitée en fréquence et journalisée comme la connexion.
     pub async fn reset_password(
+        &self,
+        email: &str,
+        recovery_token: Option<&str>,
+        new_password: &str,
+        origin: &LoginOrigin,
+    ) -> AppResult<Session> {
+        self.check_throttle(origin)?;
+        let result = self.verify_reset(email, recovery_token, new_password).await;
+        self.conclude(LoginAction::Reset, origin, &result).await?;
+        result
+    }
+
+    async fn verify_reset(
         &self,
         email: &str,
         recovery_token: Option<&str>,
@@ -319,7 +427,12 @@ mod tests {
             .setup("a@b.test", PASSWORD, "A", None)
             .await
             .unwrap();
-        let session = t.app.auth.login("A@B.test", PASSWORD).await.unwrap();
+        let session = t
+            .app
+            .auth
+            .login("A@B.test", PASSWORD, &LoginOrigin::default())
+            .await
+            .unwrap();
         assert_eq!(
             t.app.auth.me(session.user.id).await.unwrap().email,
             "a@b.test"
@@ -337,13 +450,13 @@ mod tests {
         let wrong_password = t
             .app
             .auth
-            .login("a@b.test", "mauvais-mot-de-passe")
+            .login("a@b.test", "mauvais-mot-de-passe", &LoginOrigin::default())
             .await
             .unwrap_err();
         let unknown_email = t
             .app
             .auth
-            .login("inconnu@b.test", PASSWORD)
+            .login("inconnu@b.test", PASSWORD, &LoginOrigin::default())
             .await
             .unwrap_err();
         assert!(matches!(wrong_password, AppError::Unauthorized(_)));
@@ -483,7 +596,12 @@ mod tests {
     async fn changing_password_closes_every_other_session() {
         let t = TestApp::empty().await;
         let first = configured(&t).await;
-        let second = t.app.auth.login("a@b.test", PASSWORD).await.unwrap();
+        let second = t
+            .app
+            .auth
+            .login("a@b.test", PASSWORD, &LoginOrigin::default())
+            .await
+            .unwrap();
 
         let renewed = t
             .app
@@ -496,8 +614,19 @@ mod tests {
         assert!(is_valid(&t, &renewed.token).await);
         assert!(!is_valid(&t, &first.token).await);
         assert!(!is_valid(&t, &second.token).await);
-        assert!(t.app.auth.login("a@b.test", PASSWORD).await.is_err());
-        let fresh = t.app.auth.login("a@b.test", NEW_PASSWORD).await.unwrap();
+        assert!(
+            t.app
+                .auth
+                .login("a@b.test", PASSWORD, &LoginOrigin::default())
+                .await
+                .is_err()
+        );
+        let fresh = t
+            .app
+            .auth
+            .login("a@b.test", NEW_PASSWORD, &LoginOrigin::default())
+            .await
+            .unwrap();
         assert!(is_valid(&t, &fresh.token).await);
         assert_eq!(
             t.store.state().users[0].password_hash,
@@ -569,7 +698,12 @@ mod tests {
         assert!(matches!(
             t.app
                 .auth
-                .reset_password("a@b.test", Some(RECOVERY), NEW_PASSWORD)
+                .reset_password(
+                    "a@b.test",
+                    Some(RECOVERY),
+                    NEW_PASSWORD,
+                    &LoginOrigin::default()
+                )
                 .await,
             Err(AppError::NotConfigured(_))
         ));
@@ -584,15 +718,30 @@ mod tests {
         let session = t
             .app
             .auth
-            .reset_password(" A@B.test ", Some(&format!("{RECOVERY}\n")), NEW_PASSWORD)
+            .reset_password(
+                " A@B.test ",
+                Some(&format!("{RECOVERY}\n")),
+                NEW_PASSWORD,
+                &LoginOrigin::default(),
+            )
             .await
             .unwrap();
 
         assert_eq!(session.user, before.user);
         assert!(is_valid(&t, &session.token).await);
         assert!(!is_valid(&t, &before.token).await);
-        assert!(t.app.auth.login("a@b.test", PASSWORD).await.is_err());
-        t.app.auth.login("a@b.test", NEW_PASSWORD).await.unwrap();
+        assert!(
+            t.app
+                .auth
+                .login("a@b.test", PASSWORD, &LoginOrigin::default())
+                .await
+                .is_err()
+        );
+        t.app
+            .auth
+            .login("a@b.test", NEW_PASSWORD, &LoginOrigin::default())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -606,10 +755,12 @@ mod tests {
             Some("code-de-secours-fictif-012"),
         ] {
             for (email, password) in [("a@b.test", NEW_PASSWORD), ("inconnu@b.test", "court")] {
+                // Un jour entre chaque essai : ce test porte sur l'ordre des vérifications, pas sur le limiteur.
+                t.clock.advance_days(1);
                 let error = t
                     .app
                     .auth
-                    .reset_password(email, provided, password)
+                    .reset_password(email, provided, password, &LoginOrigin::default())
                     .await
                     .unwrap_err();
                 assert!(matches!(error, AppError::Forbidden(_)), "{provided:?}");
@@ -627,17 +778,197 @@ mod tests {
         assert!(matches!(
             t.app
                 .auth
-                .reset_password("a@b.test", Some(RECOVERY), "court")
+                .reset_password("a@b.test", Some(RECOVERY), "court", &LoginOrigin::default())
                 .await,
             Err(AppError::Invalid(_))
         ));
         assert!(matches!(
             t.app
                 .auth
-                .reset_password("inconnu@b.test", Some(RECOVERY), NEW_PASSWORD)
+                .reset_password(
+                    "inconnu@b.test",
+                    Some(RECOVERY),
+                    NEW_PASSWORD,
+                    &LoginOrigin::default()
+                )
                 .await,
             Err(AppError::NotFound(_))
         ));
         assert_eq!(t.store.state().users[0].session_version, 0);
+    }
+
+    // ------------------------------------------------------------ limitation et journal
+
+    fn from_ip(ip: &str) -> LoginOrigin {
+        LoginOrigin::new(Some(ip), Some("Navigateur de test"))
+    }
+
+    async fn fail_login(t: &TestApp, origin: &LoginOrigin) -> AppError {
+        t.app
+            .auth
+            .login("a@b.test", "mauvais-mot-de-passe", origin)
+            .await
+            .unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn repeated_failures_from_one_ip_are_throttled_with_growing_delay() {
+        let t = TestApp::empty().await;
+        configured(&t).await;
+        let attacker = from_ip("203.0.113.9");
+        for _ in 0..5 {
+            assert!(matches!(
+                fail_login(&t, &attacker).await,
+                AppError::Unauthorized(_)
+            ));
+        }
+        // 6e échec : encore vérifié, mais il déclenche un délai de 30 s.
+        assert!(matches!(
+            fail_login(&t, &attacker).await,
+            AppError::Unauthorized(_)
+        ));
+        let verifications = t.hasher.verifications();
+        let blocked = t
+            .app
+            .auth
+            .login("a@b.test", PASSWORD, &attacker)
+            .await
+            .unwrap_err();
+        assert!(matches!(blocked, AppError::TooManyAttempts(30)));
+        // Pendant le délai, le mot de passe n'est même pas vérifié.
+        assert_eq!(t.hasher.verifications(), verifications);
+        // Une autre IP peut toujours se connecter.
+        t.app
+            .auth
+            .login("a@b.test", PASSWORD, &from_ip("198.51.100.1"))
+            .await
+            .unwrap();
+
+        t.clock.advance_seconds(30);
+        assert!(matches!(
+            fail_login(&t, &attacker).await,
+            AppError::Unauthorized(_)
+        ));
+        assert!(matches!(
+            fail_login(&t, &attacker).await,
+            AppError::TooManyAttempts(60)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_successful_login_clears_the_ip_counter() {
+        let t = TestApp::empty().await;
+        configured(&t).await;
+        let me = from_ip("192.0.2.4");
+        for _ in 0..5 {
+            fail_login(&t, &me).await;
+        }
+        t.app.auth.login("a@b.test", PASSWORD, &me).await.unwrap();
+        for _ in 0..5 {
+            assert!(matches!(
+                fail_login(&t, &me).await,
+                AppError::Unauthorized(_)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_input_does_not_count_as_a_failure() {
+        let t = TestApp::with_recovery_token(RECOVERY).await;
+        configured(&t).await;
+        let me = from_ip("192.0.2.4");
+        for _ in 0..10 {
+            assert!(matches!(
+                t.app
+                    .auth
+                    .reset_password("a@b.test", Some(RECOVERY), "court", &me)
+                    .await,
+                Err(AppError::Invalid(_))
+            ));
+        }
+        assert!(t.store.state().login_events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reset_shares_the_limit_with_login() {
+        let t = TestApp::with_recovery_token(RECOVERY).await;
+        configured(&t).await;
+        let attacker = from_ip("203.0.113.9");
+        for _ in 0..6 {
+            fail_login(&t, &attacker).await;
+        }
+        assert!(matches!(
+            t.app
+                .auth
+                .reset_password("a@b.test", Some(RECOVERY), NEW_PASSWORD, &attacker)
+                .await,
+            Err(AppError::TooManyAttempts(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn attempts_are_journaled_newest_first() {
+        let t = TestApp::with_recovery_token(RECOVERY).await;
+        configured(&t).await;
+        let origin = from_ip("192.0.2.4");
+        fail_login(&t, &origin).await;
+        t.clock.advance_seconds(5);
+        t.app
+            .auth
+            .login("a@b.test", PASSWORD, &origin)
+            .await
+            .unwrap();
+        t.clock.advance_seconds(5);
+        t.app
+            .auth
+            .reset_password("a@b.test", Some("mauvais"), NEW_PASSWORD, &origin)
+            .await
+            .unwrap_err();
+
+        let history = t.app.auth.login_history(None).await.unwrap();
+        let summary: Vec<_> = history.iter().map(|e| (e.action, e.success)).collect();
+        assert_eq!(
+            summary,
+            vec![
+                (LoginAction::Reset, false),
+                (LoginAction::Login, true),
+                (LoginAction::Login, false),
+            ]
+        );
+        assert_eq!(history[0].origin, origin);
+        assert_eq!(history[0].at, t.clock.now());
+        assert_eq!(t.app.auth.login_history(Some(1)).await.unwrap().len(), 1);
+        assert_eq!(t.app.auth.login_history(Some(0)).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_successful_login_prunes_old_journal_entries() {
+        let t = TestApp::empty().await;
+        configured(&t).await;
+        fail_login(&t, &from_ip("192.0.2.4")).await;
+        t.clock.advance_days(91);
+        t.app
+            .auth
+            .login("a@b.test", PASSWORD, &from_ip("192.0.2.4"))
+            .await
+            .unwrap();
+        let history = t.app.auth.login_history(None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].success);
+    }
+
+    #[tokio::test]
+    async fn refresh_issues_a_new_token_at_the_current_session_version() {
+        let t = TestApp::empty().await;
+        let session = configured(&t).await;
+        t.clock.advance_days(1);
+        let renewed = t.app.auth.refresh(session.user.id).await.unwrap();
+        assert_ne!(renewed.token, session.token);
+        assert!(is_valid(&t, &renewed.token).await);
+        t.store.remove_users();
+        assert!(matches!(
+            t.app.auth.refresh(session.user.id).await,
+            Err(AppError::Unauthorized(_))
+        ));
     }
 }

@@ -113,6 +113,18 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
   sauf `/api/jobs/daily` (tâche planifiée) qui exige `CRON_SECRET` et refuse le JWT.
 - Le JWT porte la version de session de l'utilisateur : changer ou réinitialiser le mot de passe l'incrémente et
   invalide tous les jetons antérieurs. La réinitialisation exige `RECOVERY_TOKEN` (code de secours côté serveur).
+- Stockage du jeton : **`localStorage` + durée courte (7 jours) + renouvellement glissant** (`POST /api/auth/refresh`
+  au chargement puis toutes les heures dès que le jeton a plus d'un jour). Un cookie httpOnly a été écarté : front
+  (Vercel) et API (Render) sont sur des domaines différents, il faudrait un cookie `SameSite=None` tiers (bloqué par
+  Safari et de plus en plus par Chrome) plus une protection CSRF, ou un proxy Vercel vers l'API. Le risque XSS du
+  `localStorage` est contenu par la CSP stricte de `web/vercel.json` (aucun script en ligne hors l'empreinte du
+  script de thème, `connect-src` limité à l'API) et par la version de session (changer le mot de passe coupe tout).
+- Connexion et réinitialisation limitées en fréquence (délai croissant par IP et global, 429 + `Retry-After`) et
+  journalisées (`GET /api/auth/logins`, visible dans Paramètres). L'IP vient de `X-Forwarded-For` lu **depuis la
+  droite** (`TRUSTED_PROXY_HOPS`, défaut 1 pour le proxy de Render) : l'entrée de gauche est forgeable par le client.
+  Le limiteur vit en mémoire, ce qui suppose une seule instance de l'API (cas de Render en offre gratuite).
+- En-têtes de sécurité du front dans `web/vercel.json` ; modifier le script en ligne de `index.html` impose de
+  recopier sa nouvelle empreinte dans la CSP (vérifié par `src/app/securityHeaders.test.ts`).
 
 ## Git
 

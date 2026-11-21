@@ -17,6 +17,7 @@ use fineme_domain::ids::{
     AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
     UserId,
 };
+use fineme_domain::login::LoginEvent;
 use fineme_domain::member::Member;
 use fineme_domain::operation::Operation;
 use fineme_domain::portfolio::{Snapshot, Totals};
@@ -47,6 +48,7 @@ pub struct State {
     pub rates: Vec<(Currency, f64)>,
     pub rates_updated_at: Option<DateTime<Utc>>,
     pub fail_price_updates: bool,
+    pub login_events: Vec<LoginEvent>,
 }
 
 impl State {
@@ -121,6 +123,26 @@ impl InMemoryStore {
             .unwrap();
         holding.current_price = price;
         holding.price_source = PriceSource::Auto;
+    }
+}
+
+#[async_trait]
+impl LoginJournal for InMemoryStore {
+    async fn record(&self, event: &LoginEvent) -> RepoResult<()> {
+        self.lock().login_events.push(event.clone());
+        Ok(())
+    }
+    async fn recent(&self, limit: i64) -> RepoResult<Vec<LoginEvent>> {
+        let mut events = self.lock().login_events.clone();
+        events.sort_by_key(|event| std::cmp::Reverse(event.at));
+        events.truncate(usize::try_from(limit).unwrap_or(0));
+        Ok(events)
+    }
+    async fn prune_before(&self, before: DateTime<Utc>) -> RepoResult<u64> {
+        let mut state = self.lock();
+        let count = state.login_events.len();
+        state.login_events.retain(|event| event.at >= before);
+        Ok((count - state.login_events.len()) as u64)
     }
 }
 
@@ -733,6 +755,10 @@ impl FixedClock {
     pub fn advance_days(&self, days: i64) {
         *self.0.lock().unwrap() += Duration::days(days);
     }
+
+    pub fn advance_seconds(&self, seconds: i64) {
+        *self.0.lock().unwrap() += Duration::seconds(seconds);
+    }
 }
 
 impl Clock for FixedClock {
@@ -959,6 +985,7 @@ impl TestApp {
         }
         let ports = Ports {
             users: store.clone(),
+            login_journal: store.clone(),
             portfolio: store.clone(),
             fx_rates: store.clone(),
             transactions: store.clone(),

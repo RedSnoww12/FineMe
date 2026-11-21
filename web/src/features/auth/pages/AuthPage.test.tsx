@@ -96,6 +96,26 @@ describe('connexion', () => {
     expect(localStorage.getItem('fineme.token')).toBeNull()
   })
 
+  it('affiche le délai d’attente et bloque l’envoi après trop de tentatives', async () => {
+    mockJson('get', '/api/auth/status', { setup_required: false })
+    server.use(
+      http.post(`${API}/api/auth/login`, () =>
+        HttpResponse.json(
+          { error: 'Trop de tentatives. Réessayez dans 30 secondes.' },
+          { status: 429, headers: { 'Retry-After': '30' } },
+        ),
+      ),
+    )
+    const { user: actor } = renderApp('/connexion', { authenticated: false })
+    await actor.type(await screen.findByLabelText('Adresse e-mail'), user.email)
+    await actor.type(screen.getByLabelText('Mot de passe'), PASSWORD)
+    await actor.click(screen.getByRole('button', { name: 'Se connecter' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Trop de tentatives. Réessayez dans 30 secondes.')
+    const button = await screen.findByRole('button', { name: /Réessayer dans (30|29) s/ })
+    expect(button).toBeDisabled()
+  })
+
   it('connecte l’utilisateur et envoie le jeton sur les requêtes suivantes', async () => {
     mockJson('get', '/api/auth/status', { setup_required: false })
     mockJson('post', '/api/auth/login', { token: 'jeton-login', user })

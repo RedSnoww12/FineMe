@@ -66,6 +66,11 @@ pub struct PageQuery {
 }
 
 #[derive(Deserialize)]
+pub struct LimitQuery {
+    pub limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
 pub struct SetupBody {
     pub email: String,
     pub password: String,

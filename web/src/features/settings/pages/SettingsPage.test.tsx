@@ -1,6 +1,6 @@
 import { waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Bundle, Member } from '@/shared/api/types'
+import type { Bundle, LoginEvent, Member } from '@/shared/api/types'
 import { camille, members, sacha, user } from '@/test/fixtures'
 import { mockShell } from '@/test/handlers'
 import { pageText, renderApp, screen } from '@/test/render'
@@ -11,6 +11,7 @@ const NEXT = 'nouveau-mot-de-passe'
 
 async function openSettings() {
   mockShell()
+  mockJson('get', '/api/auth/logins', [])
   const view = renderApp('/parametres')
   await screen.findByRole('heading', { name: 'Mot de passe' })
   return view
@@ -78,6 +79,7 @@ function serveMembers(initial: Member[] = members) {
 }
 
 async function openMembers() {
+  mockJson('get', '/api/auth/logins', [])
   const view = renderApp('/parametres')
   await screen.findByRole('heading', { name: 'Membres du foyer' })
   await screen.findByRole('button', { name: 'Modifier Sacha' })
@@ -227,6 +229,7 @@ function captureDownload() {
 
 async function openData() {
   mockShell()
+  mockJson('get', '/api/auth/logins', [])
   const view = renderApp('/parametres')
   await screen.findByRole('heading', { name: 'Vos données' })
   return view
@@ -304,5 +307,47 @@ describe('import des données', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       'Le compte « PEA Camille » référence un membre inconnu.',
     )
+  })
+})
+
+describe('connexions récentes', () => {
+  const events: LoginEvent[] = [
+    {
+      at: '2026-03-02T08:15:00Z',
+      action: 'login',
+      success: true,
+      ip: '198.51.100.4',
+      user_agent: 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0',
+    },
+    { at: '2026-03-01T22:40:00Z', action: 'reset', success: false, ip: '203.0.113.9', user_agent: null },
+  ]
+
+  async function openWith(setup: () => void) {
+    mockShell()
+    setup()
+    renderApp('/parametres')
+    await screen.findByRole('heading', { name: 'Connexions récentes' })
+  }
+
+  it('liste les tentatives avec leur issue, l’appareil et l’adresse IP', async () => {
+    await openWith(() => mockJson('get', '/api/auth/logins', events))
+    const list = await screen.findByRole('list', { name: 'Connexions récentes' })
+    const items = within(list).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(items[0]).toHaveTextContent('Connexion réussie')
+    expect(items[0]).toHaveTextContent('Firefox sur Linux · 198.51.100.4')
+    expect(items[1]).toHaveTextContent('Réinitialisation refusée')
+    expect(items[1]).toHaveTextContent('Appareil inconnu · 203.0.113.9')
+    expect(screen.getByText(/2 dernières tentatives, dont 1 refusée\./)).toBeInTheDocument()
+  })
+
+  it('indique quand le journal est vide', async () => {
+    await openWith(() => mockJson('get', '/api/auth/logins', []))
+    expect(await screen.findByText('Aucune connexion enregistrée pour le moment.')).toBeInTheDocument()
+  })
+
+  it('affiche l’erreur de chargement', async () => {
+    await openWith(() => mockApiError('get', '/api/auth/logins', 500, 'Journal indisponible.'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Journal indisponible.')
   })
 })

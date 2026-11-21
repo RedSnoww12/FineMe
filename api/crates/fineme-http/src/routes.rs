@@ -19,10 +19,11 @@ use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
     AccountBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery,
     GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody, HistoryReviewQuery,
-    HoldingBody, HoldingsBulkBody, LoginBody, MemberBody, OperationBody, PageQuery,
+    HoldingBody, HoldingsBulkBody, LimitQuery, LoginBody, MemberBody, OperationBody, PageQuery,
     PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody, TransactionPatchBody,
     TransactionsBulkBody, ViewQuery,
 };
+use crate::origin::ClientOrigin;
 use crate::output;
 
 type JsonResponse = ApiResult<axum::Json<Value>>;
@@ -49,6 +50,8 @@ pub fn api(app: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/auth/me", get(auth_me))
         .route("/auth/password", put(auth_password))
+        .route("/auth/refresh", post(auth_refresh))
+        .route("/auth/logins", get(auth_logins))
         .route("/members", get(members_list).post(members_create))
         .route("/members/{id}", put(members_update).delete(members_delete))
         .route("/accounts", get(accounts_list).post(accounts_create))
@@ -153,9 +156,30 @@ async fn auth_setup(State(app): State<AppState>, Json(body): Json<SetupBody>) ->
     created(self::session(&session))
 }
 
-async fn auth_login(State(app): State<AppState>, Json(body): Json<LoginBody>) -> JsonResponse {
-    let session = app.auth.login(&body.email, &body.password).await?;
+async fn auth_login(
+    State(app): State<AppState>,
+    ClientOrigin(origin): ClientOrigin,
+    Json(body): Json<LoginBody>,
+) -> JsonResponse {
+    let session = app.auth.login(&body.email, &body.password, &origin).await?;
     ok(self::session(&session))
+}
+
+async fn auth_refresh(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+) -> JsonResponse {
+    ok(self::session(&app.auth.refresh(id).await?))
+}
+
+async fn auth_logins(State(app): State<AppState>, Query(query): Query<LimitQuery>) -> JsonResponse {
+    ok(app
+        .auth
+        .login_history(query.limit)
+        .await?
+        .iter()
+        .map(output::login_event)
+        .collect())
 }
 
 fn session(session: &Session) -> Value {
@@ -164,6 +188,7 @@ fn session(session: &Session) -> Value {
 
 async fn auth_reset(
     State(app): State<AppState>,
+    ClientOrigin(origin): ClientOrigin,
     Json(body): Json<PasswordResetBody>,
 ) -> JsonResponse {
     let session = app
@@ -172,6 +197,7 @@ async fn auth_reset(
             &body.email,
             body.recovery_token.as_deref(),
             &body.new_password,
+            &origin,
         )
         .await?;
     ok(self::session(&session))
