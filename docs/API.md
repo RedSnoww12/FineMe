@@ -137,11 +137,17 @@ type Holding = {
 
 ## Transactions (import CSV / agrégateur)
 
-`Transaction = { id, account_id, date, label, amount, category: string | null }` (amount signé, devise du compte)
+`Transaction = { id, account_id, date, label, amount, category: string | null, manual_category: string | null, internal_transfer: boolean | null }`
+(amount signé, devise du compte ; `category` = catégorie reçue à l'import ; `manual_category` et `internal_transfer` =
+choix manuels du budget, `null` = automatique, voir « Budget »)
 
 - GET `/api/accounts/:id/transactions?limit=&offset=` → `{ items: Transaction[], total: number }`
 - POST `/api/accounts/:id/transactions/bulk` `{ transactions: [{date,label,amount,category?}], new_cash_balance?: number }` → `{ inserted, skipped }`
   (dédoublonnage sur date+label+amount)
+- PUT `/api/transactions/:id` `{ category?: string | null, internal_transfer?: boolean | null }` → `Transaction`
+  (`category` : catégorie manuelle, qui crée ou met à jour la règle du libellé, voir « Budget » ; `null` la retire.
+  `internal_transfer` : `true`/`false` force le marquage de virement interne, `null` revient à la détection automatique.
+  Un champ absent n'est pas modifié.)
 - DELETE `/api/transactions/:id` → 204
 
 Le parsing du CSV et le mapping des colonnes se font côté front.
@@ -270,6 +276,67 @@ cours automatiques le sont) ; ils se corrigent ou se suppriment.
 POST `/api/history/reset` `{ confirmation: "EFFACER" }` → `{ deleted_days: number }`
 Supprime tout l'historique, toutes vues confondues. Action protégée : (400) si `confirmation` n'est pas exactement
 `EFFACER` (espaces de début et de fin ignorés), rien n'est supprimé.
+
+## Budget
+
+Revenus, dépenses et taux d'épargne calculés à partir des transactions de tous les comptes, convertis en EUR et
+multipliés par la part de la vue (`?member_id=` comme ailleurs : un membre ne voit que sa part des comptes qu'il détient).
+
+**Libellé normalisé** : minuscules, accents retirés, chiffres retirés, ponctuation remplacée par des espaces, espaces
+réduits (`"PRLV SEPA EDF 0423/11"` → `"prlv sepa edf"`).
+
+**Catégorie effective** d'une transaction, par ordre de priorité :
+1. `manual_category` (choisie dans le budget) — source `"manual"` ;
+2. règle utilisateur dont le motif est contenu dans le libellé normalisé (le motif le plus long l'emporte) — `"rule"` ;
+3. `category` reçue à l'import — `"import"` ;
+4. règle par défaut (mots-clés génériques : salaire, loyer, supermarchés, carburant…) — `"default"` ;
+5. sinon aucune (`null`, affichée « Non catégorisé »).
+
+Recatégoriser une transaction (`PUT /api/transactions/:id` avec `category`) crée ou met à jour la règle dont le motif est
+son libellé normalisé : les transactions de même libellé, passées et suivantes, prennent cette catégorie (sauf choix
+manuel propre).
+
+**Virements internes** (exclus des revenus et des dépenses) : deux transactions de **comptes différents** du foyer,
+de montants opposés (écart < 0,01) et datées à **3 jours ou moins** d'écart, sont appariées automatiquement (chaque
+transaction au plus une fois, l'écart de dates le plus court d'abord). `internal_transfer` sur la transaction force le
+marquage dans un sens ou dans l'autre ; une transaction marquée à la main n'est plus appariée automatiquement (marquer
+chaque jambe si besoin).
+
+**Calculs du mois** : revenus = Σ montants positifs, dépenses = Σ |montants négatifs| (hors virements internes),
+épargne = revenus − dépenses, taux d'épargne = épargne / revenus (`null` si aucun revenu).
+
+**Charges récurrentes** : dépenses de même libellé normalisé présentes sur au moins 3 mois distincts, d'intervalle
+moyen entre 25 et 35 jours et de montants à ±15 % de leur médiane (analyse des 12 derniers mois).
+
+```ts
+type BudgetCategorySource = "manual" | "rule" | "import" | "default";
+type BudgetFlows = { month: string /* YYYY-MM */; income: number; expenses: number; savings: number; savings_rate: number | null };
+type BudgetMonth = BudgetFlows & {
+  categories: { category: string | null; amount: number; target: number | null }[]; // dépenses du mois, décroissant ;
+                                    // les catégories avec cible mais sans dépense apparaissent avec amount = 0
+  trend: BudgetFlows[];             // 12 mois, du plus ancien au mois demandé inclus
+  recurring: { label: string; category: string | null; average_amount: number; occurrences: number;
+               last_date: string; next_date: string }[]; // average_amount positif (EUR, part de la vue)
+  internal_transfers: number;       // nombre de transactions du mois exclues comme virements internes
+};
+type BudgetTransaction = {
+  id: string; account_id: string; account_name: string; date: string; label: string;
+  amount: number;                   // signé, devise du compte
+  amount_eur: number;               // signé, EUR × part de la vue
+  category: string | null; category_source: BudgetCategorySource | null;
+  internal_transfer: boolean; internal_transfer_manual: boolean;
+};
+type BudgetRule = { id: string; pattern: string; category: string };
+type BudgetTarget = { category: string; monthly_amount: number };
+```
+
+- GET `/api/budget?month=YYYY-MM&member_id=` → `BudgetMonth` (`month` absent = mois courant ; 400 si mal formé)
+- GET `/api/budget/transactions?month=YYYY-MM&member_id=` → `BudgetTransaction[]` (du plus récent au plus ancien)
+- GET `/api/budget/categories` → `string[]` (catégories par défaut, des règles, des cibles et des transactions, triées)
+- GET `/api/budget/rules` → `BudgetRule[]` ; DELETE `/api/budget/rules/:id` → 204
+- GET `/api/budget/targets` → `BudgetTarget[]`
+- PUT `/api/budget/targets` `{ category, monthly_amount: number | null }` → `BudgetTarget[]` (crée ou remplace la cible
+  mensuelle de la catégorie ; `null` la supprime ; montant ≥ 0)
 
 ## Tâche quotidienne
 
