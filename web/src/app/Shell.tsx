@@ -4,6 +4,7 @@ import { useMembers } from '@/shared/api/queries'
 import { DISCREET_SHORTCUT, isDiscreetShortcut, useDiscreet } from '@/shared/state/discreet'
 import { useView } from '@/shared/state/view'
 import { ErrorBoundary } from '@/shared/ui/ErrorBoundary'
+import { OfflineNotice } from '@/shared/ui/OfflineNotice'
 import { Icon, Logo, type IconName } from '@/shared/ui/Icon'
 import { cx } from '@/shared/ui/ui'
 
@@ -105,7 +106,6 @@ function navClass({ isActive }: { isActive: boolean }) {
 export function Shell() {
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
-  const { hidden } = useDiscreet()
   useDiscreetShortcut()
 
   useEffect(() => {
@@ -145,6 +145,9 @@ export function Shell() {
         </div>
       </aside>
 
+      {/* Dans la colonne de contenu : jamais sous la barre latérale. */}
+      <OfflineNotice />
+
       {/* Barre supérieure (téléphone) */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur lg:hidden">
         <NavLink to="/" className="flex items-center gap-2" aria-label="FineMe, vue d’ensemble">
@@ -158,8 +161,7 @@ export function Shell() {
       </header>
 
       <main id="contenu" className="mx-auto w-full max-w-[1180px] px-4 pt-5 pb-28 sm:px-6 lg:px-9 lg:pt-9 lg:pb-14">
-        {/* Le formateur partagé lit le mode discret au rendu : on redessine l'écran quand il change. */}
-        <ErrorBoundary key={`${location.pathname}:${hidden ? 'discret' : 'visible'}`}>
+        <ErrorBoundary key={location.pathname}>
           <Outlet />
         </ErrorBoundary>
       </main>

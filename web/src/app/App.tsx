@@ -2,10 +2,10 @@ import { lazy, Suspense } from 'react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router'
 import { Shell } from './Shell'
 import { EmptyState, LoadingBlock } from '@/shared/ui/ui'
-import { OfflineNotice } from '@/shared/ui/OfflineNotice'
 import { WakeNotice } from '@/shared/ui/WakeNotice'
 import AuthPage from '@/features/auth/pages/AuthPage'
 import { useAuth } from '@/shared/state/auth'
+import { useDiscreet } from '@/shared/state/discreet'
 
 const OverviewPage = lazy(() => import('@/features/overview/pages/OverviewPage'))
 const AnalysisPage = lazy(() => import('@/features/analysis/pages/AnalysisPage'))
@@ -35,9 +35,11 @@ function NotFound() {
 }
 
 export default function App() {
+  // Le formateur partagé lit le mode discret pendant le rendu. S'abonner ici suffit : App recrée les éléments des
+  // routes, donc chaque écran se redessine sans être remonté (une saisie en cours est conservée).
+  useDiscreet()
   return (
     <>
-      <OfflineNotice />
       <WakeNotice />
       <Suspense fallback={<div className="p-6"><LoadingBlock /></div>}>
         <Routes>

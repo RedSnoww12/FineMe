@@ -1,5 +1,5 @@
 import { onlineManager } from '@tanstack/react-query'
-import { act, waitFor } from '@testing-library/react'
+import { act, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { UNAUTHORIZED_EVENT } from '@/shared/api/client'
 import { PERSISTED_CACHE_KEY } from '@/shared/api/persistence'
@@ -45,6 +45,20 @@ describe('mode discret', () => {
     await user.keyboard('{Alt>}{Shift>}D{/Shift}{/Alt}')
     await waitFor(() => expect(pageText()).not.toContain('120 000 €'))
     expect(pageText()).toContain(`${MASK} €`)
+  })
+
+  it('conserve la saisie d’un formulaire ouvert', async () => {
+    mockShell()
+    mockJson('get', '/api/accounts', [])
+    const { user } = renderApp('/comptes')
+    await user.click(await screen.findByRole('button', { name: 'Ajouter un compte' }))
+    const dialog = within(await screen.findByRole('dialog', { name: 'Ajouter un compte' }))
+    await user.type(await dialog.findByLabelText('Nom du compte'), 'Livret Horizon')
+
+    await user.keyboard('{Alt>}{Shift>}D{/Shift}{/Alt}')
+    await waitFor(() => expect(toggles()[0]).toHaveAttribute('aria-pressed', 'true'))
+    expect(screen.getByRole('dialog', { name: 'Ajouter un compte' })).toBeInTheDocument()
+    expect(dialog.getByLabelText('Nom du compte')).toHaveValue('Livret Horizon')
   })
 
   it('reste actif au rechargement', async () => {
