@@ -5,6 +5,7 @@ import { EmptyState, LoadingBlock } from '@/shared/ui/ui'
 import { WakeNotice } from '@/shared/ui/WakeNotice'
 import AuthPage from '@/features/auth/pages/AuthPage'
 import { useAuth } from '@/shared/state/auth'
+import { useDiscreet } from '@/shared/state/discreet'
 
 const OverviewPage = lazy(() => import('@/features/overview/pages/OverviewPage'))
 const AnalysisPage = lazy(() => import('@/features/analysis/pages/AnalysisPage'))
@@ -34,6 +35,9 @@ function NotFound() {
 }
 
 export default function App() {
+  // Le formateur partagé lit le mode discret pendant le rendu. S'abonner ici suffit : App recrée les éléments des
+  // routes, donc chaque écran se redessine sans être remonté (une saisie en cours est conservée).
+  useDiscreet()
   return (
     <>
       <WakeNotice />
