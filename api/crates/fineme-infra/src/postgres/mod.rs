@@ -9,8 +9,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use fineme_application::ports::{
-    AccountWrite, BudgetRepository, ConnectionRepository, Credentials, FxRateRepository,
-    GoalRepository, ImportBatch, ImportRepository, LoginJournal, OperationChange,
+    AccountWrite, BenchmarkRepository, BudgetRepository, ConnectionRepository, Credentials,
+    FxRateRepository, GoalRepository, ImportBatch, ImportRepository, LoginJournal, OperationChange,
     OperationRepository, PortfolioData, PortfolioRepository, PositionUpdate, PricePoint, RepoError,
     RepoResult, SnapshotPoint, SnapshotRepository, TransactionRepository, UserRepository,
 };
@@ -20,7 +20,7 @@ use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
-use fineme_domain::holding::Holding;
+use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
     AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
     UserId,
@@ -29,6 +29,7 @@ use fineme_domain::loan::Loan;
 use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
 use fineme_domain::operation::Operation;
+use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::Property;
 use fineme_domain::transaction::Transaction;
@@ -1229,6 +1230,123 @@ impl SnapshotRepository for PgStore {
 }
 
 // ---------------------------------------------------------------- objectifs, connexions, import
+
+// ---------------------------------------------------------------- indice de référence
+
+type BenchmarkRow = (String, Option<String>, Option<String>, String, String);
+
+fn benchmark_from_row((name, symbol, isin, kind, currency): BenchmarkRow) -> RepoResult<Benchmark> {
+    let invalid = |error: fineme_domain::DomainError| {
+        RepoError::Backend(format!("indice de référence invalide en base : {error}"))
+    };
+    Benchmark::new(
+        &name,
+        symbol,
+        isin,
+        HoldingKind::parse(&kind).map_err(invalid)?,
+        Currency::parse(&currency).map_err(invalid)?,
+    )
+    .map_err(invalid)
+}
+
+#[async_trait]
+impl BenchmarkRepository for PgStore {
+    async fn benchmark(&self) -> RepoResult<Option<Benchmark>> {
+        let row: Option<BenchmarkRow> =
+            sqlx::query_as("SELECT name, symbol, isin, kind, currency FROM benchmark")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db)?;
+        row.map(benchmark_from_row).transpose()
+    }
+
+    async fn save_benchmark(&self, benchmark: &Benchmark, reset_prices: bool) -> RepoResult<()> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        if reset_prices {
+            sqlx::query("DELETE FROM benchmark_prices")
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        sqlx::query(
+            "INSERT INTO benchmark (singleton, name, symbol, isin, kind, currency) VALUES (TRUE, $1, $2, $3, $4, $5)
+             ON CONFLICT (singleton) DO UPDATE SET name = EXCLUDED.name, symbol = EXCLUDED.symbol,
+               isin = EXCLUDED.isin, kind = EXCLUDED.kind, currency = EXCLUDED.currency",
+        )
+        .bind(benchmark.name())
+        .bind(benchmark.symbol())
+        .bind(benchmark.isin())
+        .bind(benchmark.kind().as_str())
+        .bind(benchmark.currency().as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        tx.commit().await.map_err(db)
+    }
+
+    async fn delete_benchmark(&self) -> RepoResult<bool> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        sqlx::query("DELETE FROM benchmark_prices")
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        let deleted = sqlx::query("DELETE FROM benchmark")
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?
+            .rows_affected();
+        tx.commit().await.map_err(db)?;
+        Ok(deleted > 0)
+    }
+
+    async fn record_benchmark_price(&self, date: NaiveDate, price: f64) -> RepoResult<()> {
+        sqlx::query(
+            "INSERT INTO benchmark_prices (date, price) VALUES ($1, $2)
+             ON CONFLICT (date) DO UPDATE SET price = EXCLUDED.price",
+        )
+        .bind(date)
+        .bind(price)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn benchmark_prices(&self, from: NaiveDate) -> RepoResult<Vec<PricePoint>> {
+        let Some(benchmark) = self.benchmark().await? else {
+            return Ok(Vec::new());
+        };
+        // Un cours relevé pour l'indice l'emporte sur l'historique d'une position de même instrument.
+        let rows: Vec<(NaiveDate, f64)> = sqlx::query_as(
+            "SELECT DISTINCT ON (date) date, price FROM (
+                 SELECT date, price, 0 AS priority FROM benchmark_prices WHERE date >= $1
+                 UNION ALL
+                 SELECT ph.date, ph.price, 1 AS priority
+                 FROM price_history ph JOIN holdings h ON h.id = ph.holding_id
+                 WHERE ph.date >= $1 AND ph.currency = $2 AND h.kind = $3
+                   AND ((CAST($4 AS TEXT) IS NOT NULL AND upper(h.isin) = $4)
+                     OR (CAST($5 AS TEXT) IS NOT NULL AND upper(h.symbol) = upper($5)))
+             ) AS prices
+             ORDER BY date, priority, price",
+        )
+        .bind(from)
+        .bind(benchmark.currency().as_str())
+        .bind(benchmark.kind().as_str())
+        .bind(benchmark.isin())
+        .bind(benchmark.symbol())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows
+            .into_iter()
+            .map(|(date, price)| PricePoint {
+                date,
+                price,
+                currency: benchmark.currency().clone(),
+            })
+            .collect())
+    }
+}
 
 #[async_trait]
 impl GoalRepository for PgStore {
