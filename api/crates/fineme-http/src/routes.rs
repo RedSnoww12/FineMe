@@ -7,7 +7,9 @@ use axum::{Extension, Router, middleware};
 use chrono::NaiveDate;
 use fineme_application::auth::Session;
 use fineme_application::bundle::Bundle;
-use fineme_application::commands::{HoldingInput, TransactionInput, TransactionPatch};
+use fineme_application::commands::{
+    HoldingInput, OperationInput, TransactionInput, TransactionPatch,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -17,9 +19,9 @@ use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
     AccountBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery,
     GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody, HistoryReviewQuery,
-    HoldingBody, HoldingsBulkBody, LoginBody, MemberBody, PageQuery, PasswordChangeBody,
-    PasswordResetBody, RangeQuery, SetupBody, TransactionPatchBody, TransactionsBulkBody,
-    ViewQuery,
+    HoldingBody, HoldingsBulkBody, LoginBody, MemberBody, OperationBody, PageQuery,
+    PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody, TransactionPatchBody,
+    TransactionsBulkBody, ViewQuery,
 };
 use crate::output;
 
@@ -79,6 +81,15 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route(
             "/budget/targets",
             get(budget_targets).put(budget_target_set),
+        )
+        .route(
+            "/accounts/{id}/operations",
+            get(operations_list).post(operations_create),
+        )
+        .route("/accounts/{id}/operations/summary", get(operations_summary))
+        .route(
+            "/operations/{id}",
+            put(operations_update).delete(operations_delete),
         )
         .route("/real-estate", get(real_estate))
         .route("/loans/{account_id}/schedule", get(loan_schedule))
@@ -454,6 +465,56 @@ async fn budget_target_set(
     ok(Value::Array(
         targets.iter().map(output::budget_target).collect(),
     ))
+}
+
+// ---------------------------------------------------------------- journal d'opérations
+
+async fn operations_list(State(app): State<AppState>, Path(id): Path<Uuid>) -> JsonResponse {
+    ok(app
+        .operations
+        .list(id)
+        .await?
+        .iter()
+        .map(output::operation)
+        .collect())
+}
+
+async fn operations_summary(State(app): State<AppState>, Path(id): Path<Uuid>) -> JsonResponse {
+    ok(output::operations_summary(
+        &app.operations.summary(id).await?,
+    ))
+}
+
+async fn operations_create(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<OperationBody>,
+) -> Created {
+    created(output::operation(
+        &app.operations
+            .create(id, &OperationInput::from(body))
+            .await?,
+    ))
+}
+
+async fn operations_update(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<OperationBody>,
+) -> JsonResponse {
+    ok(output::operation(
+        &app.operations
+            .update(id, &OperationInput::from(body))
+            .await?,
+    ))
+}
+
+async fn operations_delete(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    app.operations.delete(id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------- immobilier, vue d'ensemble

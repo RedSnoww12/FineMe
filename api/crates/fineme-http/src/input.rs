@@ -3,8 +3,8 @@
 use chrono::NaiveDate;
 use fineme_application::bundle::{Bundle, BundleAccount, BundleGoal, BundleMember, BundleOwner};
 use fineme_application::commands::{
-    AccountInput, GoalInput, HoldingInput, LoanInput, OwnerInput, Patch, PropertyInput,
-    TransactionInput, TransactionPatch,
+    AccountInput, GoalInput, HoldingInput, LoanInput, OperationInput, OwnerInput, Patch,
+    PropertyInput, TransactionInput, TransactionPatch,
 };
 use serde::{Deserialize, Deserializer};
 use uuid::Uuid;
@@ -313,6 +313,33 @@ pub struct BudgetTargetBody {
 pub struct TransactionsBulkBody {
     pub transactions: Vec<TransactionBody>,
     pub new_cash_balance: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub struct OperationBody {
+    kind: String,
+    date: NaiveDate,
+    holding_id: Option<Uuid>,
+    quantity: Option<f64>,
+    unit_price: Option<f64>,
+    amount: Option<f64>,
+    fees: Option<f64>,
+    note: Option<String>,
+}
+
+impl From<OperationBody> for OperationInput {
+    fn from(b: OperationBody) -> Self {
+        Self {
+            kind: b.kind,
+            date: b.date,
+            holding_id: b.holding_id,
+            quantity: b.quantity,
+            unit_price: b.unit_price,
+            amount: b.amount,
+            fees: b.fees,
+            note: b.note,
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]

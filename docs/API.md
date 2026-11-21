@@ -152,6 +152,64 @@ choix manuels du budget, `null` = automatique, voir « Budget »)
 
 Le parsing du CSV et le mapping des colonnes se font côté front.
 
+## Journal d'opérations (comptes d'investissement)
+
+Achats, ventes, dividendes, frais, versements et retraits d'un compte pouvant porter des positions
+(tous sauf `real_estate` et `loan` : (400) sinon).
+
+```ts
+type OperationKind = "buy" | "sell" | "dividend" | "fee" | "deposit" | "withdrawal";
+type Operation = {
+  id: string; account_id: string;
+  kind: OperationKind;
+  date: string;                 // YYYY-MM-DD, jamais dans le futur
+  holding_id: string | null;    // requis pour buy/sell, facultatif pour dividend/fee, null pour deposit/withdrawal
+  holding_name: string | null;
+  quantity: number | null;      // buy/sell uniquement, > 0
+  unit_price: number | null;    // buy/sell uniquement, cours unitaire ≥ 0
+  amount: number;               // buy/sell : quantity × unit_price (brut, hors frais) ; sinon montant saisi > 0
+  fees: number;                 // frais de l'achat ou de la vente (≥ 0) ; 0 pour les autres types
+  currency: string;             // devise de la position concernée, sinon du compte
+  note: string | null;
+  realized_gain: number | null; // vente uniquement : plus-value réalisée nette des frais, devise `currency`
+};
+type OperationInput = {
+  kind: OperationKind; date: string; holding_id?: string;
+  quantity?: number; unit_price?: number; fees?: number; // buy/sell
+  amount?: number;                                       // dividend/fee/deposit/withdrawal
+  note?: string;
+};
+```
+
+- GET `/api/accounts/:id/operations` → `Operation[]` (du plus récent au plus ancien)
+- POST `/api/accounts/:id/operations` `OperationInput` → `Operation` (201)
+- PUT `/api/operations/:id` `OperationInput` (remplacement complet, même compte) → `Operation`
+- DELETE `/api/operations/:id` → 204
+- GET `/api/accounts/:id/operations/summary` →
+  `{ currency: "EUR", years: { year, realized_gain, dividends, fees, deposits, withdrawals }[] }` (année la plus récente
+  d'abord ; `fees` = frais des achats et ventes + opérations `fee` ; montants convertis en EUR aux taux actuels ;
+  compte entier, sans filtre de membre)
+
+Erreurs : (400) champ manquant ou invalide pour le type, date future, vente supérieure à la quantité détenue à sa date
+(y compris quand une modification ou une suppression rendrait une vente ultérieure impossible : rien n'est modifié) ;
+(404) compte, opération ou position introuvable (la position doit appartenir au compte).
+
+Calcul (PRU moyen pondéré, méthode française) : le journal est rejoué par ordre chronologique (date, puis ordre de
+saisie). Un achat recalcule le PRU = (quantité × PRU + quantité achetée × cours + frais) / nouvelle quantité. Une
+vente ne change pas le PRU et réalise `quantity × (unit_price − PRU) − fees`. Une vente totale remet la position à
+zéro (`buy_price` = null) ; le PRU repart du prochain achat. Dividendes, frais, versements et retraits ne changent
+ni la quantité ni le PRU.
+
+Cohabitation avec la saisie manuelle :
+- une position **sans achat ni vente** dans le journal garde sa quantité et son `buy_price` saisis à la main ;
+- dès son premier achat ou sa première vente, sa quantité et son `buy_price` sont **entièrement** recalculés à partir
+  du journal à chaque modification de celui-ci (la saisie manuelle antérieure est remplacée : saisir la position
+  initiale comme un achat). `PUT /api/holdings/:id` refuse alors (409) de changer `quantity` ou `buy_price`
+  (renvoyer les valeurs actuelles reste accepté) ; le cours et les autres champs restent modifiables ;
+- supprimer la dernière opération d'achat/vente d'une position la remet à zéro ;
+- le journal ne modifie jamais `cash_balance` du compte ;
+- supprimer une position supprime son journal ; l'export/import complet (`Bundle`) ne contient pas le journal.
+
 ## Immobilier et prêts
 
 ```ts

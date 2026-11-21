@@ -83,6 +83,19 @@ pub struct TransactionPatch {
     pub internal_transfer: Patch<bool>,
 }
 
+/// Opération du journal d'un compte d'investissement (création ou remplacement complet).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationInput {
+    pub kind: String,
+    pub date: NaiveDate,
+    pub holding_id: Option<Uuid>,
+    pub quantity: Option<f64>,
+    pub unit_price: Option<f64>,
+    pub amount: Option<f64>,
+    pub fees: Option<f64>,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GoalInput {
     pub name: Option<String>,

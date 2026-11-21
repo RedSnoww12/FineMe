@@ -15,6 +15,11 @@ pub enum DomainError {
     NotFinite(&'static str),
     #[error("{0} ne peut pas être négatif")]
     Negative(&'static str),
+    #[error("{0} doit être strictement positif")]
+    NotPositive(&'static str),
+    /// Vente supérieure à la quantité détenue à sa date.
+    #[error("Vente impossible le {date} : seulement {held} titre(s) détenu(s) à cette date")]
+    Oversold { date: chrono::NaiveDate, held: f64 },
     /// Règle métier exprimée directement par son message.
     #[error("{0}")]
     Rule(&'static str),

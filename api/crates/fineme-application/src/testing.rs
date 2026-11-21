@@ -14,9 +14,11 @@ use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
-    AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
+    AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
+    UserId,
 };
 use fineme_domain::member::Member;
+use fineme_domain::operation::Operation;
 use fineme_domain::portfolio::{Snapshot, Totals};
 use fineme_domain::transaction::Transaction;
 use uuid::Uuid;
@@ -36,6 +38,7 @@ pub struct State {
     pub transactions: Vec<Transaction>,
     pub rules: Vec<CategoryRule>,
     pub targets: Vec<BudgetTarget>,
+    pub operations: Vec<Operation>,
     /// Instantanés enregistrés, par vue (`None` = foyer).
     pub snapshots: Vec<(Option<MemberId>, SnapshotPoint)>,
     pub price_history: Vec<(HoldingId, PricePoint)>,
@@ -60,7 +63,21 @@ impl State {
             self.holdings
                 .retain(|holding| holding.account_id != write.account.id);
             self.holdings.extend(holdings.iter().cloned());
+            self.drop_orphan_operations();
         }
+    }
+
+    /// Comme la base : les opérations d'un compte ou d'une position supprimés disparaissent.
+    fn drop_orphan_operations(&mut self) {
+        let accounts: Vec<AccountId> = self.accounts.iter().map(|a| a.id).collect();
+        let holdings: Vec<HoldingId> = self.holdings.iter().map(|h| h.id).collect();
+        self.operations.retain(|operation| {
+            accounts.contains(&operation.account_id)
+                && operation
+                    .movement
+                    .holding()
+                    .is_none_or(|holding| holdings.contains(&holding))
+        });
     }
 
     fn touch(&mut self, account_id: AccountId, at: DateTime<Utc>) {
@@ -242,6 +259,7 @@ impl PortfolioRepository for InMemoryStore {
         for goal in &mut state.goals {
             goal.account_ids.retain(|account| *account != id);
         }
+        state.drop_orphan_operations();
         Ok(state.accounts.len() < before)
     }
     async fn save_holding(&self, holding: &Holding, at: DateTime<Utc>) -> RepoResult<()> {
@@ -263,6 +281,7 @@ impl PortfolioRepository for InMemoryStore {
             return Ok(false);
         };
         let removed = state.holdings.remove(index);
+        state.drop_orphan_operations();
         state.touch(removed.account_id, at);
         Ok(true)
     }
@@ -474,6 +493,56 @@ impl BudgetRepository for InMemoryStore {
         let before = state.targets.len();
         state.targets.retain(|t| t.category() != category);
         Ok(state.targets.len() < before)
+    }
+}
+
+#[async_trait]
+impl OperationRepository for InMemoryStore {
+    async fn operations(&self, account: AccountId) -> RepoResult<Vec<Operation>> {
+        Ok(self
+            .lock()
+            .operations
+            .iter()
+            .filter(|operation| operation.account_id == account)
+            .cloned()
+            .collect())
+    }
+    async fn find_operation(&self, id: OperationId) -> RepoResult<Option<Operation>> {
+        Ok(self
+            .lock()
+            .operations
+            .iter()
+            .find(|operation| operation.id == id)
+            .cloned())
+    }
+    async fn apply_operation(
+        &self,
+        change: &OperationChange,
+        positions: &[PositionUpdate],
+        at: DateTime<Utc>,
+    ) -> RepoResult<()> {
+        let mut state = self.lock();
+        let account = match change {
+            OperationChange::Save(operation) => {
+                state
+                    .operations
+                    .retain(|existing| existing.id != operation.id);
+                state.operations.push(operation.clone());
+                operation.account_id
+            }
+            OperationChange::Delete { id, account } => {
+                state.operations.retain(|existing| existing.id != *id);
+                *account
+            }
+        };
+        for update in positions {
+            if let Some(holding) = state.holdings.iter_mut().find(|h| h.id == update.holding) {
+                holding.quantity = update.quantity;
+                holding.buy_price = update.buy_price;
+            }
+        }
+        state.touch(account, at);
+        Ok(())
     }
 }
 
@@ -894,6 +963,7 @@ impl TestApp {
             fx_rates: store.clone(),
             transactions: store.clone(),
             budget: store.clone(),
+            operations: store.clone(),
             snapshots: store.clone(),
             goals: store.clone(),
             connections: store.clone(),
