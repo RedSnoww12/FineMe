@@ -3,11 +3,12 @@
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use fineme_application::ports::{
-    AccountWrite, ConnectionRepository, Credentials, FxRateRepository, GoalRepository, ImportBatch,
-    ImportRepository, PortfolioRepository, PricePoint, RepoError, SnapshotRepository,
-    TransactionRepository, UserRepository,
+    AccountWrite, BudgetRepository, ConnectionRepository, Credentials, FxRateRepository,
+    GoalRepository, ImportBatch, ImportRepository, PortfolioRepository, PricePoint, RepoError,
+    SnapshotRepository, TransactionRepository, UserRepository,
 };
 use fineme_domain::account::{Account, AccountKind, AccountSource};
+use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::{Connection, ConnectionStatus};
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::{Goal, GoalKind};
@@ -554,6 +555,8 @@ async fn transactions_are_deduplicated_paged_and_deleted_with_their_account() {
         label: label.into(),
         amount,
         category: Some("Divers".into()),
+        manual_category: None,
+        transfer_override: None,
     };
     let batch = vec![
         tx(checking.id, 1, "Courses", -54.2),
@@ -595,6 +598,77 @@ async fn transactions_are_deduplicated_paged_and_deleted_with_their_account() {
 }
 
 #[tokio::test]
+async fn budget_annotations_rules_and_targets() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let checking = account(AccountKind::Checking, "Courant", &[(alice.id, 1.0)]);
+    save(&db, &checking).await;
+    let tx = |day: u32, label: &str, category: Option<&str>| Transaction {
+        id: TransactionId::generate(),
+        account_id: checking.id,
+        date: date(2026, 1, day),
+        label: label.into(),
+        amount: -12.0,
+        category: category.map(String::from),
+        manual_category: None,
+        transfer_override: None,
+    };
+    let batch = [
+        tx(2, "CB BOUTIQUE", Some("Achats")),
+        tx(20, "CB AUTRE", None),
+    ];
+    db.store.import(&checking, &batch).await.unwrap();
+
+    let between = db
+        .store
+        .between(date(2026, 1, 1), date(2026, 1, 10))
+        .await
+        .unwrap();
+    assert_eq!(between, vec![batch[0].clone()]);
+
+    let annotated = Transaction {
+        manual_category: Some("Loisirs".into()),
+        transfer_override: Some(false),
+        ..batch[0].clone()
+    };
+    let rule = CategoryRule::new(BudgetRuleId::generate(), "CB BOUTIQUE", "Loisirs").unwrap();
+    db.store.annotate(&annotated, Some(&rule)).await.unwrap();
+    assert_eq!(
+        db.store.by_id(batch[0].id).await.unwrap(),
+        Some(annotated.clone())
+    );
+    assert_eq!(
+        db.store.by_id(TransactionId::generate()).await.unwrap(),
+        None
+    );
+    // Même motif : la règle existante est mise à jour et garde son identifiant.
+    let again = CategoryRule::new(BudgetRuleId::generate(), "cb boutique", "Cadeaux").unwrap();
+    db.store.annotate(&annotated, Some(&again)).await.unwrap();
+    let rules = db.store.rules().await.unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!((rules[0].id, rules[0].category()), (rule.id, "Cadeaux"));
+    assert_eq!(
+        db.store.categories().await.unwrap(),
+        vec!["Achats".to_string(), "Loisirs".to_string()]
+    );
+    assert!(db.store.delete_rule(rule.id).await.unwrap());
+    assert!(!db.store.delete_rule(rule.id).await.unwrap());
+
+    db.store
+        .save_target(&BudgetTarget::new("Loisirs", 100.0).unwrap())
+        .await
+        .unwrap();
+    db.store
+        .save_target(&BudgetTarget::new("Loisirs", 150.0).unwrap())
+        .await
+        .unwrap();
+    let targets = db.store.targets().await.unwrap();
+    assert_eq!(targets, vec![BudgetTarget::new("Loisirs", 150.0).unwrap()]);
+    assert!(db.store.delete_target("Loisirs").await.unwrap());
+    assert!(db.store.targets().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn import_is_all_or_nothing() {
     let db = test_db().await;
     let (alice, _) = household(&db).await;
@@ -607,6 +681,8 @@ async fn import_is_all_or_nothing() {
         label: label.into(),
         amount: -5.0,
         category: None,
+        manual_category: None,
+        transfer_override: None,
     };
     let updated = Account {
         cash_balance: 3500.0,

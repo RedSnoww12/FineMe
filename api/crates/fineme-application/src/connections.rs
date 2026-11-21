@@ -167,6 +167,8 @@ impl ConnectionService {
                     label: t.label,
                     amount: t.amount,
                     category: t.category,
+                    manual_category: None,
+                    transfer_override: None,
                 })
                 .collect();
             report.transactions_inserted +=

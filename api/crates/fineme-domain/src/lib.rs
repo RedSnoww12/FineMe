@@ -2,6 +2,7 @@
 //! Aucune E/S ici — ni SQL, ni JSON, ni réseau, ni horloge système.
 
 pub mod account;
+pub mod budget;
 pub mod connection;
 pub mod error;
 pub mod fx;

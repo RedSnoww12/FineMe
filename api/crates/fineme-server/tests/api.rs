@@ -1528,3 +1528,214 @@ async fn history_cleanup_routes_review_correct_delete_recompute_and_reset() {
         );
     }
 }
+
+#[tokio::test]
+async fn budget_flow() {
+    let (api, alice, bob) = Api::household().await;
+    let joint = json!([{ "member_id": alice, "share": 0.5 }, { "member_id": bob, "share": 0.5 }]);
+    let checking = api
+        .id_of(
+            "/api/accounts",
+            json!({ "name": "Joint", "kind": "checking", "owners": joint }),
+        )
+        .await;
+    let livret = api
+        .id_of(
+            "/api/accounts",
+            json!({ "name": "Livret", "kind": "savings",
+        "owners": [{ "member_id": alice, "share": 1 }] }),
+        )
+        .await;
+    let batch = json!([
+        { "date": "2026-01-01", "label": "VIR SALAIRE ACME", "amount": 3000 },
+        { "date": "2026-01-04", "label": "PRLV LOYER", "amount": -1000 },
+        { "date": "2026-01-10", "label": "CB LIBRAIRIE 1001", "amount": -40 },
+        { "date": "2026-01-20", "label": "VIR VERS LIVRET", "amount": -500 }
+    ]);
+    api.post(
+        &format!("/api/accounts/{checking}/transactions/bulk"),
+        json!({ "transactions": batch }),
+    )
+    .await;
+    api.post(
+        &format!("/api/accounts/{livret}/transactions/bulk"),
+        json!({ "transactions": [{ "date": "2026-01-21", "label": "VIR RECU", "amount": 500 }] }),
+    )
+    .await;
+
+    let month = api.get("/api/budget?month=2026-01").await;
+    assert_eq!(
+        (
+            &month["month"],
+            &month["income"],
+            &month["expenses"],
+            &month["savings"],
+            &month["savings_rate"]
+        ),
+        (
+            &json!("2026-01"),
+            &json!(3000.0),
+            &json!(1040.0),
+            &json!(1960.0),
+            &json!(1960.0 / 3000.0)
+        )
+    );
+    assert_eq!(month["internal_transfers"], 2);
+    assert_eq!(month["trend"].as_array().unwrap().len(), 12);
+    assert_eq!(
+        month["categories"][0],
+        json!({ "category": "Logement", "amount": 1000.0, "target": null })
+    );
+    assert_eq!(month["categories"][1]["category"], Value::Null);
+
+    // Recatégorisation manuelle : la règle s'applique aux transactions suivantes de même libellé.
+    let items = api.get("/api/budget/transactions?month=2026-01").await;
+    let librairie = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["label"] == "CB LIBRAIRIE 1001")
+        .unwrap();
+    assert_eq!(librairie["category_source"], Value::Null);
+    let id = librairie["id"].as_str().unwrap();
+    let (status, updated) = api
+        .call(
+            "PUT",
+            &format!("/api/transactions/{id}"),
+            Some(json!({ "category": "Culture" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(
+        (&updated["manual_category"], &updated["internal_transfer"]),
+        (&json!("Culture"), &Value::Null)
+    );
+    api.post(&format!("/api/accounts/{checking}/transactions/bulk"),
+        json!({ "transactions": [{ "date": "2026-01-25", "label": "CB LIBRAIRIE 2501", "amount": -10 }] })).await;
+    let items = api
+        .get(&format!(
+            "/api/budget/transactions?month=2026-01&member_id={bob}"
+        ))
+        .await;
+    let later = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["label"] == "CB LIBRAIRIE 2501")
+        .unwrap();
+    assert_eq!(
+        (
+            &later["category"],
+            &later["category_source"],
+            &later["amount_eur"]
+        ),
+        (&json!("Culture"), &json!("rule"), &json!(-5.0))
+    );
+    // Bob ne voit pas le livret d'Alice.
+    assert!(
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["account_name"] == "Joint")
+    );
+    let rules = api.get("/api/budget/rules").await;
+    assert_eq!(
+        (&rules[0]["pattern"], &rules[0]["category"]),
+        (&json!("cb librairie"), &json!("Culture"))
+    );
+    assert!(
+        api.get("/api/budget/categories")
+            .await
+            .as_array()
+            .unwrap()
+            .contains(&json!("Culture"))
+    );
+
+    // Marquage manuel d'un virement interne.
+    let loyer = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["label"] == "PRLV LOYER")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    api.call(
+        "PUT",
+        &format!("/api/transactions/{loyer}"),
+        Some(json!({ "internal_transfer": true })),
+    )
+    .await;
+    let month = api.get("/api/budget?month=2026-01").await;
+    assert_eq!(month["expenses"], json!(50.0));
+
+    // Cibles.
+    let (status, targets) = api
+        .call(
+            "PUT",
+            "/api/budget/targets",
+            Some(json!({ "category": "Culture", "monthly_amount": 30 })),
+        )
+        .await;
+    assert_eq!(
+        (status, targets),
+        (
+            StatusCode::OK,
+            json!([{ "category": "Culture", "monthly_amount": 30.0 }])
+        )
+    );
+    let month = api.get("/api/budget?month=2026-01").await;
+    assert_eq!(
+        month["categories"][0],
+        json!({ "category": "Culture", "amount": 50.0, "target": 30.0 })
+    );
+    assert_eq!(
+        api.call(
+            "PUT",
+            "/api/budget/targets",
+            Some(json!({ "category": "Culture", "monthly_amount": null }))
+        )
+        .await
+        .1,
+        json!([])
+    );
+
+    // Erreurs.
+    let response = api.call("GET", "/api/budget?month=janvier", None).await;
+    assert_eq!(
+        error_of(&response),
+        (400, "Mois invalide (format AAAA-MM attendu)")
+    );
+    let response = api
+        .call(
+            "PUT",
+            "/api/budget/targets",
+            Some(json!({ "category": "Culture", "monthly_amount": -1 })),
+        )
+        .await;
+    assert_eq!(error_of(&response).0, 400);
+    let unknown = "00000000-0000-0000-0000-000000000000";
+    let response = api
+        .call(
+            "PUT",
+            &format!("/api/transactions/{unknown}"),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(error_of(&response).0, 404);
+    let rule = rules[0]["id"].as_str().unwrap();
+    assert_eq!(
+        api.call("DELETE", &format!("/api/budget/rules/{rule}"), None)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        api.call("DELETE", &format!("/api/budget/rules/{rule}"), None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}

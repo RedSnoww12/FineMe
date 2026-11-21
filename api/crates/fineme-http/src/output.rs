@@ -1,5 +1,6 @@
 //! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`.
 
+use fineme_application::budget::{BudgetMonth, BudgetTransaction};
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, PropertyInput,
@@ -10,6 +11,7 @@ use fineme_application::history::{HistoryReview, ReviewedPoint};
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
+use fineme_domain::budget::{BudgetTarget, CategoryRule, Flows};
 use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
 use fineme_domain::loan::ScheduleRow;
@@ -332,7 +334,70 @@ pub fn transaction(t: &Transaction) -> Value {
         "label": t.label,
         "amount": t.amount,
         "category": t.category,
+        "manual_category": t.manual_category,
+        "internal_transfer": t.transfer_override,
     })
+}
+
+fn flows(f: &Flows) -> Value {
+    json!({
+        "month": f.month.to_string(),
+        "income": f.income,
+        "expenses": f.expenses,
+        "savings": f.savings,
+        "savings_rate": f.savings_rate,
+    })
+}
+
+pub fn budget_month(b: &BudgetMonth) -> Value {
+    let mut value = flows(&b.flows);
+    value["categories"] = b
+        .categories
+        .iter()
+        .map(|c| json!({ "category": c.category, "amount": c.amount, "target": c.target }))
+        .collect();
+    value["trend"] = b.trend.iter().map(flows).collect();
+    value["recurring"] = b
+        .recurring
+        .iter()
+        .map(|r| {
+            json!({
+                "label": r.label,
+                "category": r.category,
+                "average_amount": r.average_amount,
+                "occurrences": r.occurrences,
+                "last_date": r.last_date,
+                "next_date": r.next_date,
+            })
+        })
+        .collect();
+    value["internal_transfers"] = json!(b.internal_transfers);
+    value
+}
+
+pub fn budget_transaction(b: &BudgetTransaction) -> Value {
+    let t = &b.transaction;
+    json!({
+        "id": t.id.as_uuid(),
+        "account_id": t.account_id.as_uuid(),
+        "account_name": b.account_name,
+        "date": t.date,
+        "label": t.label,
+        "amount": t.amount,
+        "amount_eur": b.amount_eur,
+        "category": b.category.as_ref().map(|(name, _)| name),
+        "category_source": b.category.as_ref().map(|(_, source)| source.as_str()),
+        "internal_transfer": b.internal_transfer,
+        "internal_transfer_manual": t.transfer_override.is_some(),
+    })
+}
+
+pub fn budget_rule(r: &CategoryRule) -> Value {
+    json!({ "id": r.id.as_uuid(), "pattern": r.pattern(), "category": r.category() })
+}
+
+pub fn budget_target(t: &BudgetTarget) -> Value {
+    json!({ "category": t.category(), "monthly_amount": t.monthly_amount() })
 }
 
 pub fn connection(c: &Connection) -> Value {

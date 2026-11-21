@@ -5,13 +5,14 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use fineme_domain::account::Account;
+use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
-    AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
+    AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
 };
 use fineme_domain::member::{Member, User};
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
@@ -171,6 +172,29 @@ pub trait TransactionRepository: Send + Sync {
     /// doublons, tout ou rien ; renvoie le nombre de mouvements réellement insérés.
     async fn import(&self, account: &Account, transactions: &[Transaction]) -> RepoResult<u64>;
     async fn delete(&self, id: TransactionId) -> RepoResult<bool>;
+    /// Mouvements de tous les comptes entre deux dates incluses.
+    async fn between(&self, from: NaiveDate, to: NaiveDate) -> RepoResult<Vec<Transaction>>;
+    async fn by_id(&self, id: TransactionId) -> RepoResult<Option<Transaction>>;
+    /// Enregistre les choix manuels d'un mouvement (catégorie, virement interne) et, le cas échéant, crée ou met
+    /// à jour la règle de même motif (l'identifiant existant est conservé), tout ou rien.
+    async fn annotate(
+        &self,
+        transaction: &Transaction,
+        rule: Option<&CategoryRule>,
+    ) -> RepoResult<()>;
+    /// Catégories (importées ou manuelles) utilisées par au moins un mouvement.
+    async fn categories(&self) -> RepoResult<Vec<String>>;
+}
+
+/// Règles de catégorisation et cibles mensuelles du budget.
+#[async_trait]
+pub trait BudgetRepository: Send + Sync {
+    async fn rules(&self) -> RepoResult<Vec<CategoryRule>>;
+    async fn delete_rule(&self, id: BudgetRuleId) -> RepoResult<bool>;
+    async fn targets(&self) -> RepoResult<Vec<BudgetTarget>>;
+    /// Crée ou remplace la cible de sa catégorie.
+    async fn save_target(&self, target: &BudgetTarget) -> RepoResult<()>;
+    async fn delete_target(&self, category: &str) -> RepoResult<bool>;
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 use fineme_application::bundle::{Bundle, BundleAccount, BundleGoal, BundleMember, BundleOwner};
 use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, OwnerInput, Patch, PropertyInput,
-    TransactionInput,
+    TransactionInput, TransactionPatch,
 };
 use serde::{Deserialize, Deserializer};
 use uuid::Uuid;
@@ -278,6 +278,35 @@ impl From<TransactionBody> for TransactionInput {
             category: b.category,
         }
     }
+}
+
+#[derive(Default, Deserialize)]
+pub struct TransactionPatchBody {
+    #[serde(default, deserialize_with = "nullable")]
+    category: Patch<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    internal_transfer: Patch<bool>,
+}
+
+impl From<TransactionPatchBody> for TransactionPatch {
+    fn from(b: TransactionPatchBody) -> Self {
+        Self {
+            category: b.category,
+            internal_transfer: b.internal_transfer,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BudgetQuery {
+    pub month: Option<String>,
+    pub member_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+pub struct BudgetTargetBody {
+    pub category: String,
+    pub monthly_amount: Option<f64>,
 }
 
 #[derive(Deserialize)]

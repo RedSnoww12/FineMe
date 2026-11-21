@@ -7,7 +7,7 @@ use axum::{Extension, Router, middleware};
 use chrono::NaiveDate;
 use fineme_application::auth::Session;
 use fineme_application::bundle::Bundle;
-use fineme_application::commands::{HoldingInput, TransactionInput};
+use fineme_application::commands::{HoldingInput, TransactionInput, TransactionPatch};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -15,10 +15,11 @@ use crate::AppState;
 use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
-    AccountBody, BundleBody, ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody,
-    HistoryQuery, HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody, LoginBody,
-    MemberBody, PageQuery, PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody,
-    TransactionsBulkBody, ViewQuery,
+    AccountBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery,
+    GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody, HistoryReviewQuery,
+    HoldingBody, HoldingsBulkBody, LoginBody, MemberBody, PageQuery, PasswordChangeBody,
+    PasswordResetBody, RangeQuery, SetupBody, TransactionPatchBody, TransactionsBulkBody,
+    ViewQuery,
 };
 use crate::output;
 
@@ -66,7 +67,19 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/fx", get(fx))
         .route("/accounts/{id}/transactions", get(transactions_list))
         .route("/accounts/{id}/transactions/bulk", post(transactions_bulk))
-        .route("/transactions/{id}", delete(transactions_delete))
+        .route(
+            "/transactions/{id}",
+            put(transactions_update).delete(transactions_delete),
+        )
+        .route("/budget", get(budget_month))
+        .route("/budget/transactions", get(budget_transactions))
+        .route("/budget/categories", get(budget_categories))
+        .route("/budget/rules", get(budget_rules))
+        .route("/budget/rules/{id}", delete(budget_rule_delete))
+        .route(
+            "/budget/targets",
+            get(budget_targets).put(budget_target_set),
+        )
         .route("/real-estate", get(real_estate))
         .route("/loans/{account_id}/schedule", get(loan_schedule))
         .route("/overview", get(overview))
@@ -363,12 +376,84 @@ async fn transactions_bulk(
     ok(json!({ "inserted": result.inserted, "skipped": result.skipped }))
 }
 
+async fn transactions_update(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<TransactionPatchBody>,
+) -> JsonResponse {
+    let transaction = app
+        .transactions
+        .update(id, TransactionPatch::from(body))
+        .await?;
+    ok(output::transaction(&transaction))
+}
+
 async fn transactions_delete(
     State(app): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     app.transactions.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------- budget
+
+async fn budget_month(State(app): State<AppState>, Query(q): Query<BudgetQuery>) -> JsonResponse {
+    ok(output::budget_month(
+        &app.budget.month(q.month.as_deref(), q.member_id).await?,
+    ))
+}
+
+async fn budget_transactions(
+    State(app): State<AppState>,
+    Query(q): Query<BudgetQuery>,
+) -> JsonResponse {
+    let items = app
+        .budget
+        .transactions(q.month.as_deref(), q.member_id)
+        .await?;
+    ok(Value::Array(
+        items.iter().map(output::budget_transaction).collect(),
+    ))
+}
+
+async fn budget_categories(State(app): State<AppState>) -> JsonResponse {
+    ok(json!(app.budget.categories().await?))
+}
+
+async fn budget_rules(State(app): State<AppState>) -> JsonResponse {
+    let rules = app.budget.rules().await?;
+    ok(Value::Array(
+        rules.iter().map(output::budget_rule).collect(),
+    ))
+}
+
+async fn budget_rule_delete(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    app.budget.delete_rule(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn budget_targets(State(app): State<AppState>) -> JsonResponse {
+    let targets = app.budget.targets().await?;
+    ok(Value::Array(
+        targets.iter().map(output::budget_target).collect(),
+    ))
+}
+
+async fn budget_target_set(
+    State(app): State<AppState>,
+    Json(body): Json<BudgetTargetBody>,
+) -> JsonResponse {
+    let targets = app
+        .budget
+        .set_target(&body.category, body.monthly_amount)
+        .await?;
+    ok(Value::Array(
+        targets.iter().map(output::budget_target).collect(),
+    ))
 }
 
 // ---------------------------------------------------------------- immobilier, vue d'ensemble

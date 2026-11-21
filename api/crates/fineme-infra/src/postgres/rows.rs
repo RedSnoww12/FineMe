@@ -5,12 +5,14 @@ use chrono::{DateTime, NaiveDate, Utc};
 use fineme_application::ports::{RepoError, RepoResult};
 use fineme_domain::DomainError;
 use fineme_domain::account::{Account, AccountKind, AccountSource};
+use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::{Connection, ConnectionStatus};
 use fineme_domain::fx::Currency;
 use fineme_domain::goal::{Goal, GoalKind};
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
-    AccountId, ConnectionId, GoalId, HoldingId, LoanId, MemberId, PropertyId, TransactionId,
+    AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, LoanId, MemberId, PropertyId,
+    TransactionId,
 };
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::member::Member;
@@ -223,6 +225,8 @@ pub(super) struct TransactionRow {
     label: String,
     amount: f64,
     category: Option<String>,
+    manual_category: Option<String>,
+    transfer_override: Option<bool>,
 }
 
 impl From<TransactionRow> for Transaction {
@@ -234,6 +238,8 @@ impl From<TransactionRow> for Transaction {
             label: row.label,
             amount: row.amount,
             category: row.category,
+            manual_category: row.manual_category,
+            transfer_override: row.transfer_override,
         }
     }
 }
@@ -323,6 +329,36 @@ impl TryFrom<ConnectionRow> for Connection {
             last_sync_at: row.last_sync_at,
             error: row.error,
             external_id: row.external_id,
+        })
+    }
+}
+
+#[derive(FromRow)]
+pub(super) struct BudgetRuleRow {
+    id: Uuid,
+    pattern: String,
+    category: String,
+}
+
+impl TryFrom<BudgetRuleRow> for CategoryRule {
+    type Error = RepoError;
+    fn try_from(row: BudgetRuleRow) -> Result<Self, RepoError> {
+        CategoryRule::new(BudgetRuleId::from_uuid(row.id), &row.pattern, &row.category)
+            .map_err(corrupt("budget_rules", row.id))
+    }
+}
+
+#[derive(FromRow)]
+pub(super) struct BudgetTargetRow {
+    category: String,
+    monthly_amount: f64,
+}
+
+impl TryFrom<BudgetTargetRow> for BudgetTarget {
+    type Error = RepoError;
+    fn try_from(row: BudgetTargetRow) -> Result<Self, RepoError> {
+        BudgetTarget::new(&row.category, row.monthly_amount).map_err(|error| {
+            RepoError::Backend(format!("donnée invalide dans budget_targets : {error}"))
         })
     }
 }

@@ -76,6 +76,13 @@ pub struct TransactionInput {
     pub category: Option<String>,
 }
 
+/// Choix manuels du budget sur un mouvement.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TransactionPatch {
+    pub category: Patch<String>,
+    pub internal_transfer: Patch<bool>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GoalInput {
     pub name: Option<String>,
