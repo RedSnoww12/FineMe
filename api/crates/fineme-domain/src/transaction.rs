@@ -10,7 +10,12 @@ pub struct Transaction {
     pub date: NaiveDate,
     pub label: String,
     pub amount: f64,
+    /// Catégorie reçue à l'import (banque, CSV).
     pub category: Option<String>,
+    /// Catégorie choisie à la main dans le budget ; prioritaire sur toute règle.
+    pub manual_category: Option<String>,
+    /// Marquage manuel de virement interne ; `None` = détection automatique.
+    pub transfer_override: Option<bool>,
 }
 
 impl Transaction {

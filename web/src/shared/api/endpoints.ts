@@ -6,6 +6,10 @@ import type {
   AccountInput,
   AuthResult,
   AuthStatus,
+  BudgetMonth,
+  BudgetRule,
+  BudgetTarget,
+  BudgetTransaction,
   Bundle,
   Connection,
   ConnectionCreated,
@@ -36,7 +40,9 @@ import type {
   RealEstate,
   SetupInput,
   SyncResult,
+  Transaction,
   TransactionPage,
+  TransactionPatch,
   TransactionsBulkInput,
   TransactionsBulkResult,
   User,
@@ -89,7 +95,20 @@ export const api = {
     request<TransactionPage>(`/api/accounts/${accountId}/transactions`, { query: page }),
   bulkTransactions: (accountId: string, body: TransactionsBulkInput) =>
     request<TransactionsBulkResult>(`/api/accounts/${accountId}/transactions/bulk`, { method: 'POST', body }),
+  updateTransaction: (id: string, body: TransactionPatch) =>
+    request<Transaction>(`/api/transactions/${id}`, { method: 'PUT', body }),
   deleteTransaction: (id: string) => request<void>(`/api/transactions/${id}`, { method: 'DELETE' }),
+
+  // Budget
+  budget: (month: string, view: View) => request<BudgetMonth>('/api/budget', { query: { month, ...view } }),
+  budgetTransactions: (month: string, view: View) =>
+    request<BudgetTransaction[]>('/api/budget/transactions', { query: { month, ...view } }),
+  budgetCategories: () => request<string[]>('/api/budget/categories'),
+  budgetRules: () => request<BudgetRule[]>('/api/budget/rules'),
+  deleteBudgetRule: (id: string) => request<void>(`/api/budget/rules/${id}`, { method: 'DELETE' }),
+  budgetTargets: () => request<BudgetTarget[]>('/api/budget/targets'),
+  setBudgetTarget: (body: { category: string; monthly_amount: number | null }) =>
+    request<BudgetTarget[]>('/api/budget/targets', { method: 'PUT', body }),
 
   // Journal d'opérations (comptes d'investissement)
   operations: (accountId: string) => request<Operation[]>(`/api/accounts/${accountId}/operations`),

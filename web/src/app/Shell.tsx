@@ -14,6 +14,7 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Vue d’ensemble', short: 'Synthèse', icon: 'overview', end: true },
   { to: '/analyse', label: 'Analyse', icon: 'analysis' },
   { to: '/comptes', label: 'Comptes', icon: 'accounts' },
+  { to: '/budget', label: 'Budget', icon: 'budget' },
   { to: '/immobilier', label: 'Immobilier', icon: 'home' },
   { to: '/objectifs', label: 'Objectifs', icon: 'goal' },
   { to: '/projection', label: 'Projection', icon: 'projection' },

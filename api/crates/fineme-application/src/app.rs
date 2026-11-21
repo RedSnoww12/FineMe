@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::accounts::AccountService;
 use crate::auth::AuthService;
+use crate::budget::BudgetService;
 use crate::bundle::BundleService;
 use crate::connections::ConnectionService;
 use crate::error::AppResult;
@@ -14,9 +15,9 @@ use crate::members::MemberService;
 use crate::operations::OperationService;
 use crate::overview::OverviewService;
 use crate::ports::{
-    BankProvider, Clock, ConnectionRepository, FxProvider, FxRateRepository, GoalRepository,
-    ImportRepository, OperationRepository, PasswordHasher, PortfolioRepository, PriceProvider,
-    SnapshotRepository, TokenService, TransactionRepository, UserRepository,
+    BankProvider, BudgetRepository, Clock, ConnectionRepository, FxProvider, FxRateRepository,
+    GoalRepository, ImportRepository, OperationRepository, PasswordHasher, PortfolioRepository,
+    PriceProvider, SnapshotRepository, TokenService, TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -30,6 +31,7 @@ pub struct Ports {
     pub portfolio: Arc<dyn PortfolioRepository>,
     pub fx_rates: Arc<dyn FxRateRepository>,
     pub transactions: Arc<dyn TransactionRepository>,
+    pub budget: Arc<dyn BudgetRepository>,
     pub operations: Arc<dyn OperationRepository>,
     pub snapshots: Arc<dyn SnapshotRepository>,
     pub goals: Arc<dyn GoalRepository>,
@@ -68,6 +70,7 @@ pub struct App {
     pub holdings: HoldingService,
     pub operations: OperationService,
     pub transactions: TransactionService,
+    pub budget: BudgetService,
     pub overview: OverviewService,
     pub history: HistoryService,
     pub real_estate: RealEstateService,
@@ -122,6 +125,11 @@ impl App {
                 portfolio: ports.portfolio.clone(),
                 transactions: ports.transactions.clone(),
                 clock: ports.clock.clone(),
+            },
+            budget: BudgetService {
+                reader: reader.clone(),
+                transactions: ports.transactions.clone(),
+                budget: ports.budget,
             },
             overview: OverviewService {
                 reader: reader.clone(),

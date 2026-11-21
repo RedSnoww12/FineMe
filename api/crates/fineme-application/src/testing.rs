@@ -7,13 +7,15 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use fineme_domain::account::Account;
+use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
 use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
-    AccountId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId, UserId,
+    AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
+    UserId,
 };
 use fineme_domain::member::Member;
 use fineme_domain::operation::Operation;
@@ -34,6 +36,8 @@ pub struct State {
     pub accounts: Vec<Account>,
     pub holdings: Vec<Holding>,
     pub transactions: Vec<Transaction>,
+    pub rules: Vec<CategoryRule>,
+    pub targets: Vec<BudgetTarget>,
     pub operations: Vec<Operation>,
     /// Instantanés enregistrés, par vue (`None` = foyer).
     pub snapshots: Vec<(Option<MemberId>, SnapshotPoint)>,
@@ -91,7 +95,7 @@ impl State {
 pub struct InMemoryStore(Mutex<State>);
 
 impl InMemoryStore {
-    fn lock(&self) -> std::sync::MutexGuard<'_, State> {
+    pub fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.0.lock().unwrap()
     }
 
@@ -403,6 +407,92 @@ impl TransactionRepository for InMemoryStore {
             .transactions
             .retain(|transaction| transaction.id != id);
         Ok(state.transactions.len() < before)
+    }
+    async fn between(&self, from: NaiveDate, to: NaiveDate) -> RepoResult<Vec<Transaction>> {
+        Ok(self
+            .lock()
+            .transactions
+            .iter()
+            .filter(|t| t.date >= from && t.date <= to)
+            .cloned()
+            .collect())
+    }
+    async fn by_id(&self, id: TransactionId) -> RepoResult<Option<Transaction>> {
+        Ok(self
+            .lock()
+            .transactions
+            .iter()
+            .find(|t| t.id == id)
+            .cloned())
+    }
+    async fn annotate(
+        &self,
+        transaction: &Transaction,
+        rule: Option<&CategoryRule>,
+    ) -> RepoResult<()> {
+        let mut state = self.lock();
+        if let Some(existing) = state
+            .transactions
+            .iter_mut()
+            .find(|t| t.id == transaction.id)
+        {
+            existing.manual_category = transaction.manual_category.clone();
+            existing.transfer_override = transaction.transfer_override;
+        }
+        if let Some(rule) = rule {
+            match state
+                .rules
+                .iter_mut()
+                .find(|r| r.pattern() == rule.pattern())
+            {
+                Some(existing) => {
+                    *existing = CategoryRule::new(existing.id, existing.pattern(), rule.category())
+                        .map_err(|e| RepoError::Backend(e.to_string()))?;
+                }
+                None => state.rules.push(rule.clone()),
+            }
+        }
+        Ok(())
+    }
+    async fn categories(&self) -> RepoResult<Vec<String>> {
+        let state = self.lock();
+        let mut categories: Vec<String> = state
+            .transactions
+            .iter()
+            .flat_map(|t| [t.category.clone(), t.manual_category.clone()])
+            .flatten()
+            .collect();
+        categories.sort();
+        categories.dedup();
+        Ok(categories)
+    }
+}
+
+#[async_trait]
+impl BudgetRepository for InMemoryStore {
+    async fn rules(&self) -> RepoResult<Vec<CategoryRule>> {
+        Ok(self.lock().rules.clone())
+    }
+    async fn delete_rule(&self, id: BudgetRuleId) -> RepoResult<bool> {
+        let mut state = self.lock();
+        let before = state.rules.len();
+        state.rules.retain(|rule| rule.id != id);
+        Ok(state.rules.len() < before)
+    }
+    async fn targets(&self) -> RepoResult<Vec<BudgetTarget>> {
+        Ok(self.lock().targets.clone())
+    }
+    async fn save_target(&self, target: &BudgetTarget) -> RepoResult<()> {
+        let mut state = self.lock();
+        state.targets.retain(|t| t.category() != target.category());
+        state.targets.push(target.clone());
+        Ok(())
+    }
+    async fn delete_target(&self, category: &str) -> RepoResult<bool> {
+        let mut state = self.lock();
+        let before = state.targets.len();
+        state.targets.retain(|t| t.category() != category);
+        Ok(state.targets.len() < before)
     }
 }
 
@@ -872,6 +962,7 @@ impl TestApp {
             portfolio: store.clone(),
             fx_rates: store.clone(),
             transactions: store.clone(),
+            budget: store.clone(),
             operations: store.clone(),
             snapshots: store.clone(),
             goals: store.clone(),
@@ -952,7 +1043,7 @@ impl TestApp {
             .push((Currency::parse(code).unwrap(), rate));
     }
 
-    async fn create(&self, input: AccountInput) -> AccountId {
+    pub async fn create(&self, input: AccountInput) -> AccountId {
         self.app
             .accounts
             .create(&input)
