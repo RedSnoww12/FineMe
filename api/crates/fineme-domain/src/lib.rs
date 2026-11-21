@@ -10,6 +10,7 @@ pub mod goal;
 pub mod history;
 pub mod holding;
 pub mod ids;
+pub mod import_profile;
 pub mod loan;
 pub mod login;
 pub mod member;

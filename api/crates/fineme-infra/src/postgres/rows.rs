@@ -14,6 +14,7 @@ use fineme_domain::ids::{
     AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, LoanId, MemberId, OperationId,
     PropertyId, TransactionId,
 };
+use fineme_domain::import_profile::{ImportKind, ImportProfile};
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::member::Member;
 use fineme_domain::operation::{Movement, MovementFields, Operation, OperationKind};
@@ -287,6 +288,33 @@ impl TryFrom<OperationRow> for Operation {
             note: row.note,
             recorded_at: row.recorded_at,
         })
+    }
+}
+
+#[derive(FromRow)]
+pub(super) struct ImportProfileRow {
+    account_id: Uuid,
+    kind: String,
+    template: Option<String>,
+    fields: Vec<String>,
+    headers: Vec<String>,
+    updated_at: DateTime<Utc>,
+}
+
+impl TryFrom<ImportProfileRow> for ImportProfile {
+    type Error = RepoError;
+
+    fn try_from(row: ImportProfileRow) -> RepoResult<Self> {
+        let invalid = corrupt("import_profiles", row.account_id);
+        let kind = ImportKind::parse(&row.kind).map_err(&invalid)?;
+        ImportProfile::new(
+            AccountId::from_uuid(row.account_id),
+            kind,
+            row.template,
+            row.fields.into_iter().zip(row.headers),
+            row.updated_at,
+        )
+        .map_err(&invalid)
     }
 }
 

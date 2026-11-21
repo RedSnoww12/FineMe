@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use fineme_application::auth::Session;
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{
-    HoldingInput, OperationInput, TransactionInput, TransactionPatch,
+    HoldingInput, OperationImportInput, OperationInput, TransactionInput, TransactionPatch,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -19,9 +19,9 @@ use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
     AccountBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery,
     GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody, HistoryReviewQuery,
-    HoldingBody, HoldingsBulkBody, LimitQuery, LoginBody, MemberBody, OperationBody, PageQuery,
-    PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody, TransactionPatchBody,
-    TransactionsBulkBody, ViewQuery,
+    HoldingBody, HoldingsBulkBody, ImportProfileBody, LimitQuery, LoginBody, MemberBody,
+    OperationBody, OperationsBulkBody, PageQuery, PasswordChangeBody, PasswordResetBody,
+    RangeQuery, SetupBody, TransactionPatchBody, TransactionsBulkBody, ViewQuery,
 };
 use crate::origin::ClientOrigin;
 use crate::output;
@@ -89,7 +89,13 @@ pub fn api(app: AppState) -> Router<AppState> {
             "/accounts/{id}/operations",
             get(operations_list).post(operations_create),
         )
+        .route("/accounts/{id}/operations/bulk", post(operations_bulk))
         .route("/accounts/{id}/operations/summary", get(operations_summary))
+        .route("/accounts/{id}/import-profiles", get(import_profiles_list))
+        .route(
+            "/accounts/{id}/import-profiles/{kind}",
+            put(import_profiles_save),
+        )
         .route(
             "/operations/{id}",
             put(operations_update).delete(operations_delete),
@@ -519,6 +525,43 @@ async fn operations_create(
     created(output::operation(
         &app.operations
             .create(id, &OperationInput::from(body))
+            .await?,
+    ))
+}
+
+async fn operations_bulk(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<OperationsBulkBody>,
+) -> JsonResponse {
+    let inputs: Vec<OperationImportInput> = body
+        .operations
+        .into_iter()
+        .map(OperationImportInput::from)
+        .collect();
+    ok(output::operations_import(
+        &app.operations.import(id, &inputs).await?,
+    ))
+}
+
+async fn import_profiles_list(State(app): State<AppState>, Path(id): Path<Uuid>) -> JsonResponse {
+    ok(app
+        .import_profiles
+        .list(id)
+        .await?
+        .iter()
+        .map(output::import_profile)
+        .collect())
+}
+
+async fn import_profiles_save(
+    State(app): State<AppState>,
+    Path((id, kind)): Path<(Uuid, String)>,
+    Json(body): Json<ImportProfileBody>,
+) -> JsonResponse {
+    ok(output::import_profile(
+        &app.import_profiles
+            .save(id, &kind, body.template, body.columns)
             .await?,
     ))
 }

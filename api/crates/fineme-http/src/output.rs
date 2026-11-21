@@ -8,13 +8,14 @@ use fineme_application::commands::{
 use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
 use fineme_application::history::{HistoryReview, ReviewedPoint};
-use fineme_application::operations::OperationView;
+use fineme_application::operations::{ImportReport, OperationView};
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
 use fineme_domain::budget::{BudgetTarget, CategoryRule, Flows};
 use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
+use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::loan::ScheduleRow;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
@@ -430,6 +431,24 @@ pub fn operation(view: &OperationView) -> Value {
         "currency": op.currency.as_str(),
         "note": op.note,
         "realized_gain": view.realized_gain,
+    })
+}
+
+pub fn operations_import(report: &ImportReport) -> Value {
+    let errors: Vec<Value> = report
+        .errors
+        .iter()
+        .map(|(index, reason)| json!({ "index": index, "reason": reason }))
+        .collect();
+    json!({ "inserted": report.inserted, "skipped": report.skipped, "errors": errors })
+}
+
+pub fn import_profile(profile: &ImportProfile) -> Value {
+    json!({
+        "kind": profile.kind().as_str(),
+        "template": profile.template(),
+        "columns": profile.columns(),
+        "updated_at": profile.updated_at(),
     })
 }
 

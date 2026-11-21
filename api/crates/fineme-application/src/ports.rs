@@ -15,6 +15,7 @@ use fineme_domain::ids::{
     AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
     UserId,
 };
+use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
 use fineme_domain::operation::Operation;
@@ -219,6 +220,12 @@ pub enum OperationChange {
         id: OperationId,
         account: AccountId,
     },
+    /// Import CSV : crée les positions nouvelles puis ajoute les opérations, tout ou rien.
+    Import {
+        account: AccountId,
+        holdings: Vec<Holding>,
+        operations: Vec<Operation>,
+    },
 }
 
 /// Quantité et PRU d'une position recalculés à partir du journal.
@@ -242,6 +249,14 @@ pub trait OperationRepository: Send + Sync {
         positions: &[PositionUpdate],
         at: DateTime<Utc>,
     ) -> RepoResult<()>;
+}
+
+/// Préférences d'import CSV (correspondance des colonnes) par compte et type de contenu.
+#[async_trait]
+pub trait ImportProfileRepository: Send + Sync {
+    async fn profiles(&self, account: AccountId) -> RepoResult<Vec<ImportProfile>>;
+    /// Crée ou remplace la préférence du compte pour ce type.
+    async fn save_profile(&self, profile: &ImportProfile) -> RepoResult<()>;
 }
 
 #[derive(Debug, Clone, PartialEq)]

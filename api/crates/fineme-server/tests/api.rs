@@ -1943,3 +1943,122 @@ async fn investment_operations_drive_positions_and_yearly_summary() {
         .await;
     assert_eq!(error_of(&unknown).0, 400);
 }
+
+#[tokio::test]
+async fn operations_csv_import_reports_rows_and_ignores_a_second_import() {
+    let (api, alice, _) = Api::household().await;
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    let cto = api
+        .id_of(
+            "/api/accounts",
+            json!({ "name": "CTO", "kind": "investment", "owners": owners }),
+        )
+        .await;
+    let bulk = format!("/api/accounts/{cto}/operations/bulk");
+    let body = json!({ "operations": [
+        { "kind": "buy", "date": "2025-02-03", "security": { "name": "ETF Fictif", "isin": "fr0000000003" },
+          "quantity": 4, "unit_price": 25, "fees": 1 },
+        { "kind": "dividend", "date": "2025-05-02", "security": { "name": "etf fictif" }, "amount": 2.4 },
+        { "kind": "sell", "date": "2025-06-01", "security": { "name": "ETF Fictif" }, "quantity": 10, "unit_price": 30 },
+        { "kind": "deposit", "date": "2025-01-02", "amount": 200 }
+    ] });
+    let report = api.post(&bulk, body.clone()).await;
+    assert_eq!(
+        (&report["inserted"], &report["skipped"]),
+        (&json!(3), &json!(0))
+    );
+    assert_eq!(report["errors"][0]["index"], 2);
+    assert!(
+        report["errors"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Vente impossible")
+    );
+
+    let detail = api.get(&format!("/api/accounts/{cto}")).await;
+    let holding = &detail["holdings"][0];
+    assert_eq!(
+        (&holding["name"], &holding["isin"]),
+        (&json!("ETF Fictif"), &json!("FR0000000003"))
+    );
+    assert!(close(&holding["quantity"], 4.0) && close(&holding["buy_price"], 25.25));
+    let list = api.get(&format!("/api/accounts/{cto}/operations")).await;
+    assert_eq!(list[0]["holding_name"], "ETF Fictif");
+
+    let again = api.post(&bulk, body).await;
+    assert_eq!(
+        (&again["inserted"], &again["skipped"]),
+        (&json!(0), &json!(3))
+    );
+
+    let (missing_status, _) = api
+        .call(
+            "POST",
+            &format!(
+                "/api/accounts/{}/operations/bulk",
+                "00000000-0000-4000-8000-000000000000"
+            ),
+            Some(json!({ "operations": [] })),
+        )
+        .await;
+    assert_eq!(missing_status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn import_profiles_are_remembered_per_account_and_kind() {
+    let (api, alice, _) = Api::household().await;
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    let checking = api
+        .id_of(
+            "/api/accounts",
+            json!({ "name": "Courant", "kind": "checking", "owners": owners }),
+        )
+        .await;
+    let profiles = format!("/api/accounts/{checking}/import-profiles");
+    assert_eq!(api.get(&profiles).await, json!([]));
+    let (status, saved) = api
+        .call(
+            "PUT",
+            &format!("{profiles}/transactions"),
+            Some(json!({
+                "template": "banque-releve-debit-credit",
+                "columns": { "date": "Date opération", "label": "Libellé", "debit": "Débit", "credit": "Crédit" }
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["columns"]["debit"], "Débit");
+    let list = api.get(&profiles).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["kind"], "transactions");
+    assert_eq!(list[0]["template"], "banque-releve-debit-credit");
+    assert!(list[0]["updated_at"].is_string());
+
+    let unknown_field = api
+        .call(
+            "PUT",
+            &format!("{profiles}/holdings"),
+            Some(json!({ "columns": { "label": "Libellé" } })),
+        )
+        .await;
+    assert_eq!(error_of(&unknown_field).0, 400);
+    let unknown_kind = api
+        .call(
+            "PUT",
+            &format!("{profiles}/budget"),
+            Some(json!({ "columns": { "date": "Date" } })),
+        )
+        .await;
+    assert_eq!(error_of(&unknown_kind).0, 400);
+    let missing = api
+        .call(
+            "GET",
+            &format!(
+                "/api/accounts/{}/import-profiles",
+                "00000000-0000-4000-8000-000000000000"
+            ),
+            None,
+        )
+        .await;
+    assert_eq!(error_of(&missing).0, 404);
+}

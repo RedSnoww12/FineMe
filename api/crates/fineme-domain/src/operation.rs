@@ -212,6 +212,24 @@ impl Movement {
             _ => 0.0,
         }
     }
+
+    /// Vrai si les deux mouvements sont identiques (type, position, quantité, cours, montant, frais),
+    /// aux erreurs d'arrondi près : sert à reconnaître une ligne déjà importée.
+    pub fn same_as(&self, other: &Movement) -> bool {
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0);
+        let same_trade = match (self.trade(), other.trade()) {
+            (Some(a), Some(b)) => {
+                close(a.quantity(), b.quantity()) && close(a.unit_price(), b.unit_price())
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        self.kind() == other.kind()
+            && self.holding() == other.holding()
+            && same_trade
+            && close(self.amount(), other.amount())
+            && close(self.fees_paid(), other.fees_paid())
+    }
 }
 
 /// Opération du journal d'un compte. `currency` : devise de la position concernée, sinon du compte.
@@ -669,5 +687,27 @@ mod tests {
         .unwrap();
         assert_eq!((deposit.holding(), deposit.amount()), (None, 100.0));
         assert!(OperationKind::parse("transfer").is_err());
+    }
+
+    #[test]
+    fn same_movement_ignores_rounding_but_not_a_different_field() {
+        let h = HoldingId::generate();
+        let buy = |quantity: f64, price: f64, fees: f64| {
+            Movement::Buy(Trade::new(h, quantity, price, fees).unwrap())
+        };
+        assert!(buy(3.0, 10.1, 1.0).same_as(&buy(3.0, 10.100_000_001, 1.0)));
+        assert!(!buy(3.0, 10.1, 1.0).same_as(&buy(3.0, 10.1, 1.5)));
+        assert!(!buy(3.0, 10.1, 1.0).same_as(&buy(2.0, 10.1, 1.0)));
+        let sell = Movement::Sell(Trade::new(h, 3.0, 10.1, 1.0).unwrap());
+        assert!(!buy(3.0, 10.1, 1.0).same_as(&sell));
+        let deposit = Movement::Deposit(Amount::new(50.0, "amount").unwrap());
+        let withdrawal = Movement::Withdrawal(Amount::new(50.0, "amount").unwrap());
+        assert!(deposit.same_as(&deposit));
+        assert!(!deposit.same_as(&withdrawal));
+        let dividend = |holding| Movement::Dividend {
+            holding,
+            amount: Amount::new(4.0, "amount").unwrap(),
+        };
+        assert!(!dividend(Some(h)).same_as(&dividend(None)));
     }
 }

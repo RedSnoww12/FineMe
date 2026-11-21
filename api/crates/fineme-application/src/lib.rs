@@ -13,6 +13,7 @@ pub mod error;
 pub mod goals;
 pub mod history;
 pub mod holdings;
+pub mod import_profiles;
 pub mod members;
 pub mod operations;
 pub mod overview;
