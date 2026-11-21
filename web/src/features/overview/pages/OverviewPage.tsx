@@ -276,6 +276,16 @@ export default function OverviewPage() {
       <PageHeader
         title="Vue d’ensemble"
         description={viewName ? `Part détenue par ${viewName}.` : 'Ensemble du foyer, toutes parts confondues.'}
+        actions={
+          isEmpty ? null : (
+            <Link
+              to="/parametres/rapport"
+              className="inline-flex min-h-10 items-center rounded-[9px] border border-line px-4 font-medium hover:border-muted"
+            >
+              Rapport PDF
+            </Link>
+          )
+        }
       />
 
       {isEmpty ? (

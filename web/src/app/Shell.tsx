@@ -119,16 +119,16 @@ export function Shell() {
   const secondaryActive = secondary.some((item) => location.pathname.startsWith(item.to))
 
   return (
-    <div className="min-h-dvh lg:pl-[248px]">
+    <div className="min-h-dvh lg:pl-[248px] print:pl-0">
       <a
         href="#contenu"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-surface focus:px-3 focus:py-2"
+        className="sr-only print:hidden focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-surface focus:px-3 focus:py-2"
       >
         Aller au contenu
       </a>
 
       {/* Navigation latérale (ordinateur) */}
-      <aside className="fixed inset-y-0 left-0 hidden w-[248px] flex-col gap-5 border-r border-line bg-surface px-4 py-5 lg:flex">
+      <aside className="fixed inset-y-0 left-0 hidden w-[248px] flex-col gap-5 border-r border-line bg-surface px-4 py-5 lg:flex print:hidden">
         <div className="flex items-center justify-between gap-2">
           <NavLink to="/" className="flex items-center gap-2.5 px-1" aria-label="FineMe, vue d’ensemble">
             <Logo />
@@ -155,7 +155,7 @@ export function Shell() {
       <UnreadAnnouncer />
 
       {/* Barre supérieure (téléphone) */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur lg:hidden print:hidden">
         <NavLink to="/" className="flex items-center gap-2" aria-label="FineMe, vue d’ensemble">
           <Logo size={26} />
           <span className="font-display text-[19px] font-semibold tracking-tight">FineMe</span>
@@ -167,7 +167,7 @@ export function Shell() {
         </div>
       </header>
 
-      <main id="contenu" className="mx-auto w-full max-w-[1180px] px-4 pt-5 pb-28 sm:px-6 lg:px-9 lg:pt-9 lg:pb-14">
+      <main id="contenu" className="mx-auto w-full max-w-[1180px] px-4 pt-5 pb-28 sm:px-6 lg:px-9 lg:pt-9 lg:pb-14 print:max-w-none print:p-0">
         <ErrorBoundary key={location.pathname}>
           <Outlet />
         </ErrorBoundary>
@@ -176,7 +176,7 @@ export function Shell() {
       {/* Barre d'onglets (téléphone) */}
       <nav
         aria-label="Navigation principale"
-        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden print:hidden"
       >
         {primary.map((item) => (
           <NavLink

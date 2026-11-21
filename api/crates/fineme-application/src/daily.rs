@@ -39,6 +39,7 @@ impl App {
             return Err(AppError::Forbidden(INVALID_CRON_SECRET));
         }
         let prices = self.prices.refresh().await?;
+        self.performance.record_benchmark_price().await;
         let snapshot_date = self.overview.record_snapshots().await?;
         let alerts = self.alerts.evaluate().await?;
         Ok(DailyReport {

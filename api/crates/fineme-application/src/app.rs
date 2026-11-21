@@ -17,11 +17,12 @@ use crate::holdings::HoldingService;
 use crate::members::MemberService;
 use crate::operations::OperationService;
 use crate::overview::OverviewService;
+use crate::performance::PerformanceService;
 use crate::ports::{
-    AlertRepository, BankProvider, BudgetRepository, Clock, ConnectionRepository, FxProvider,
-    FxRateRepository, GoalRepository, ImportRepository, LoginJournal, OperationRepository,
-    PasswordHasher, PortfolioRepository, PriceProvider, SnapshotRepository, TokenService,
-    TransactionRepository, UserRepository,
+    AlertRepository, BankProvider, BenchmarkRepository, BudgetRepository, Clock,
+    ConnectionRepository, FxProvider, FxRateRepository, GoalRepository, ImportRepository,
+    LoginJournal, OperationRepository, PasswordHasher, PortfolioRepository, PriceProvider,
+    SnapshotRepository, TokenService, TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -39,6 +40,7 @@ pub struct Ports {
     pub budget: Arc<dyn BudgetRepository>,
     pub operations: Arc<dyn OperationRepository>,
     pub snapshots: Arc<dyn SnapshotRepository>,
+    pub benchmarks: Arc<dyn BenchmarkRepository>,
     pub goals: Arc<dyn GoalRepository>,
     pub connections: Arc<dyn ConnectionRepository>,
     pub alerts: Arc<dyn AlertRepository>,
@@ -79,6 +81,7 @@ pub struct App {
     pub budget: BudgetService,
     pub overview: OverviewService,
     pub history: HistoryService,
+    pub performance: PerformanceService,
     pub real_estate: RealEstateService,
     pub goals: GoalService,
     pub connections: ConnectionService,
@@ -98,7 +101,7 @@ impl App {
         };
         let operations = OperationService {
             reader: reader.clone(),
-            operations: ports.operations,
+            operations: ports.operations.clone(),
             clock: ports.clock.clone(),
         };
         // Hash factice calculé une fois : vérifié à la connexion quand l'e-mail est inconnu.
@@ -144,6 +147,15 @@ impl App {
                 reader: reader.clone(),
                 members: ports.portfolio.clone(),
                 snapshots: ports.snapshots.clone(),
+                clock: ports.clock.clone(),
+            },
+            performance: PerformanceService {
+                reader: reader.clone(),
+                snapshots: ports.snapshots.clone(),
+                operations: ports.operations.clone(),
+                benchmarks: ports.benchmarks,
+                fx_rates: ports.fx_rates.clone(),
+                price_providers: ports.price_providers.clone(),
                 clock: ports.clock.clone(),
             },
             history: HistoryService {

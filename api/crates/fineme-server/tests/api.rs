@@ -2051,3 +2051,109 @@ async fn alerts_are_evaluated_deduplicated_read_archived_and_configured() {
         .await;
     assert_eq!(error_of(&missing), (404, "Alerte introuvable"));
 }
+
+/// Instantané détaillé du foyer, `days_ago` jours avant aujourd'hui, pour un seul compte.
+async fn seed_account_snapshot(api: &Api, days_ago: i32, account: &str, value: f64) {
+    sqlx::query(
+        "INSERT INTO snapshots (date, member_id, gross_assets, liabilities, net_worth, detailed) \
+         VALUES (CURRENT_DATE - $1, NULL, $2, 0, $2, true)",
+    )
+    .bind(days_ago)
+    .bind(value)
+    .execute(&api.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO snapshot_accounts (date, member_id, account_id, name, kind, value) \
+         VALUES (CURRENT_DATE - $1, NULL, CAST($2 AS UUID), 'PEA', 'investment', $3)",
+    )
+    .bind(days_ago)
+    .bind(account)
+    .bind(value)
+    .execute(&api.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn performance_measures_twr_and_reports_a_missing_benchmark_history() {
+    let (api, alice, _) = Api::household().await;
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    let pea = api
+        .id_of(
+            "/api/accounts",
+            json!({ "name": "PEA", "kind": "investment", "owners": owners }),
+        )
+        .await;
+
+    // Aucun historique : rien à mesurer, sans erreur.
+    let empty = api.get("/api/performance").await;
+    assert_eq!(empty["portfolio"], Value::Null);
+    assert_eq!(empty["accounts"], json!([]));
+
+    // 1 000 → 2 100 (versement de 1 000 il y a 10 jours) → 2 310 : deux fois +10 %.
+    let deposit_day: String = sqlx::query_scalar("SELECT (CURRENT_DATE - 10)::text")
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+    api.post(
+        &format!("/api/accounts/{pea}/operations"),
+        json!({ "kind": "deposit", "date": deposit_day, "amount": 1000 }),
+    )
+    .await;
+    for (days_ago, value) in [(20, 1000.0), (10, 2100.0), (0, 2310.0)] {
+        seed_account_snapshot(&api, days_ago, &pea, value).await;
+    }
+    let perf = api.get("/api/performance").await;
+    let portfolio = &perf["portfolio"];
+    assert!(close(&portfolio["twr"], 0.21), "{perf}");
+    assert!(close(&portfolio["net_flows"], 1000.0));
+    assert_eq!(portfolio["twr_annualized"], Value::Null);
+    assert_eq!(portfolio["points"].as_array().unwrap().len(), 3);
+    assert!(close(&portfolio["points"][2]["value"], 121.0));
+    assert_eq!(perf["accounts"][0]["account_id"], json!(pea));
+    assert_eq!(perf["benchmark"], Value::Null);
+
+    // Indice crypto sans ticker : aucun fournisseur ne peut le coter (pas d'appel réseau),
+    // il est enregistré sans cours, et c'est dit.
+    assert_eq!(api.get("/api/performance/benchmark").await, Value::Null);
+    let (status, info) = api
+        .call(
+            "PUT",
+            "/api/performance/benchmark",
+            Some(json!({ "name": "Indice démo", "isin": "XX0000DEMO01", "kind": "crypto", "currency": "EUR" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["prices"], json!(0));
+    assert!(info["last_error"].is_string());
+    let perf = api.get("/api/performance").await;
+    assert_eq!(perf["benchmark"]["comparison"], Value::Null);
+    assert!(
+        perf["benchmark"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Aucun cours")
+    );
+
+    let (status, error) = api
+        .call(
+            "PUT",
+            "/api/performance/benchmark",
+            Some(json!({ "name": "Sans identifiant" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    let (status, _) = api
+        .call(
+            "GET",
+            "/api/performance?from=2026-02-01&to=2026-01-01",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = api.call("DELETE", "/api/performance/benchmark", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = api.call("DELETE", "/api/performance/benchmark", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

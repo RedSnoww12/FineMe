@@ -228,6 +228,42 @@ export type OperationYear = {
 }
 export type OperationsSummary = { currency: 'EUR'; years: OperationYear[] }
 
+/** Mesures de performance ; une fraction (0.05 = +5 %), null = indéfini. */
+export type Performance = {
+  from: string
+  to: string
+  start_value: number
+  end_value: number
+  net_flows: number
+  gain: number
+  twr: number | null
+  twr_annualized: number | null
+  mwr: number | null
+  mwr_annualized: number | null
+  years: { year: number; from: string; to: string; twr: number | null }[]
+  /** Courbe base 100 ; `benchmark` : indice ramené au même niveau, null hors fenêtre de comparaison. */
+  points: { date: string; value: number; benchmark: number | null }[]
+}
+export type BenchmarkKind = 'security' | 'crypto'
+export type Benchmark = {
+  name: string
+  symbol: string | null
+  isin: string | null
+  kind: BenchmarkKind
+  currency: string
+  prices: number
+  first_date: string | null
+  last_date: string | null
+  last_error: string | null
+}
+export type BenchmarkInput = { name: string; symbol?: string; isin?: string; kind: BenchmarkKind; currency: string }
+export type BenchmarkComparison = { from: string; to: string; benchmark_return: number; portfolio_return: number }
+export type PerformanceReport = {
+  portfolio: Performance | null
+  accounts: { account_id: string; name: string; kind: AccountKind; performance: Performance | null }[]
+  benchmark: (Benchmark & { comparison: BenchmarkComparison | null; message: string | null }) | null
+}
+
 export type RealEstateLoan = Loan & { account_id: string; name: string }
 export type RealEstateItem = {
   account: Account

@@ -7,6 +7,7 @@ use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, OperationInput, OwnerInput, Patch,
     PropertyInput, TransactionInput, TransactionPatch,
 };
+use fineme_application::performance::BenchmarkInput;
 use serde::{Deserialize, Deserializer};
 use uuid::Uuid;
 
@@ -23,6 +24,34 @@ where
 #[derive(Deserialize)]
 pub struct ViewQuery {
     pub member_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+pub struct PerformanceQuery {
+    pub member_id: Option<Uuid>,
+    pub from: Option<NaiveDate>,
+    pub to: Option<NaiveDate>,
+}
+
+#[derive(Deserialize)]
+pub struct BenchmarkBody {
+    name: String,
+    symbol: Option<String>,
+    isin: Option<String>,
+    kind: Option<String>,
+    currency: Option<String>,
+}
+
+impl From<BenchmarkBody> for BenchmarkInput {
+    fn from(b: BenchmarkBody) -> Self {
+        Self {
+            name: b.name,
+            symbol: b.symbol,
+            isin: b.isin,
+            kind: b.kind.unwrap_or_else(|| "security".into()),
+            currency: b.currency.unwrap_or_else(|| "EUR".into()),
+        }
+    }
 }
 
 #[derive(Deserialize)]

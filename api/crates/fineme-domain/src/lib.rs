@@ -16,6 +16,7 @@ pub mod login;
 pub mod member;
 pub mod operation;
 pub mod ownership;
+pub mod performance;
 pub mod portfolio;
 pub mod property;
 pub mod throttle;

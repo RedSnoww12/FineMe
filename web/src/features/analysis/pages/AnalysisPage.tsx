@@ -7,6 +7,7 @@ import { useView } from '@/shared/state/view'
 import { EmptyState, ErrorState, LoadingBlock, PageHeader, Segmented, SelectField, TextField } from '@/shared/ui/ui'
 import { BalancePanel, CategoryEvolutionPanel, WaterfallPanel } from '../components/HistoryPanels'
 import { GoalsPanel, RealEstatePanel } from '../components/PlanPanels'
+import { ReturnsPanel } from '../components/ReturnsPanel'
 import { BreakdownPanel, PerformancePanel } from '../components/SnapshotPanels'
 import { useHouseholdHistory, useViewHistory } from '../hooks/useAnalysisApi'
 import { periodError, rangeToFetch, withinPeriod, type Period, type PresetRange, type Unit } from '../lib/period'
@@ -160,6 +161,7 @@ export default function AnalysisPage() {
       <Controls period={period} onPeriod={setPeriod} unit={unit} onUnit={setUnit} />
       <div className="flex flex-col gap-4 sm:gap-5">
         <CategoryEvolutionPanel series={series} unit={unit} {...historyState} />
+        <ReturnsPanel period={period} />
         <div className="grid gap-4 sm:gap-5 lg:grid-cols-2">
           <BalancePanel series={series} unit={unit} {...historyState} />
           <WaterfallPanel series={series} unit={unit} {...historyState} />

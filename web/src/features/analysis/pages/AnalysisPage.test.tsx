@@ -49,6 +49,7 @@ function mockAnalysis({ points = history }: { points?: HistoryPoint[] } = {}) {
   mockJson('get', '/api/accounts', [pea, loan])
   mockJson('get', '/api/goals', [buildGoal({ account_ids: ['pea'] })])
   mockJson('get', '/api/history', { points })
+  mockJson('get', '/api/performance', { portfolio: null, accounts: [], benchmark: null })
   mockJson('get', '/api/real-estate', buildRealEstate())
   mockJson('get', '/api/loans/a-pret/schedule', { loan: buildRealEstate().properties[0].loans[0], rows: buildScheduleRows(1200, 12) })
 }

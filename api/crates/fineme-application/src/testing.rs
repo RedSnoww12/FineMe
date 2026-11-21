@@ -21,6 +21,7 @@ use fineme_domain::ids::{
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::Member;
 use fineme_domain::operation::Operation;
+use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{Snapshot, Totals};
 use fineme_domain::transaction::Transaction;
 use uuid::Uuid;
@@ -44,6 +45,8 @@ pub struct State {
     /// Instantanés enregistrés, par vue (`None` = foyer).
     pub snapshots: Vec<(Option<MemberId>, SnapshotPoint)>,
     pub price_history: Vec<(HoldingId, PricePoint)>,
+    pub benchmark: Option<Benchmark>,
+    pub benchmark_prices: Vec<(NaiveDate, f64)>,
     pub goals: Vec<Goal>,
     pub connections: Vec<Connection>,
     pub alerts: Vec<Alert>,
@@ -654,6 +657,50 @@ impl SnapshotRepository for InMemoryStore {
 }
 
 #[async_trait]
+impl BenchmarkRepository for InMemoryStore {
+    async fn benchmark(&self) -> RepoResult<Option<Benchmark>> {
+        Ok(self.lock().benchmark.clone())
+    }
+    async fn save_benchmark(&self, benchmark: &Benchmark, reset_prices: bool) -> RepoResult<()> {
+        let mut state = self.lock();
+        if reset_prices {
+            state.benchmark_prices.clear();
+        }
+        state.benchmark = Some(benchmark.clone());
+        Ok(())
+    }
+    async fn delete_benchmark(&self) -> RepoResult<bool> {
+        let mut state = self.lock();
+        state.benchmark_prices.clear();
+        Ok(state.benchmark.take().is_some())
+    }
+    async fn record_benchmark_price(&self, date: NaiveDate, price: f64) -> RepoResult<()> {
+        let mut state = self.lock();
+        state.benchmark_prices.retain(|(day, _)| *day != date);
+        state.benchmark_prices.push((date, price));
+        Ok(())
+    }
+    async fn benchmark_prices(&self, from: NaiveDate) -> RepoResult<Vec<PricePoint>> {
+        let state = self.lock();
+        let Some(benchmark) = &state.benchmark else {
+            return Ok(Vec::new());
+        };
+        let mut prices: Vec<PricePoint> = state
+            .benchmark_prices
+            .iter()
+            .filter(|(date, _)| *date >= from)
+            .map(|(date, price)| PricePoint {
+                date: *date,
+                price: *price,
+                currency: benchmark.currency().clone(),
+            })
+            .collect();
+        prices.sort_by_key(|point| point.date);
+        Ok(prices)
+    }
+}
+
+#[async_trait]
 impl GoalRepository for InMemoryStore {
     async fn list(&self) -> RepoResult<Vec<Goal>> {
         Ok(self.lock().goals.clone())
@@ -1037,6 +1084,7 @@ impl TestApp {
             budget: store.clone(),
             operations: store.clone(),
             snapshots: store.clone(),
+            benchmarks: store.clone(),
             goals: store.clone(),
             connections: store.clone(),
             alerts: store.clone(),
