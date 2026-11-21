@@ -218,6 +218,30 @@ export type OperationInput = {
   amount?: number
   note?: string
 }
+/** Ligne d'un import CSV d'opérations : le titre est désigné par son nom (et son ISIN si connu). */
+export type OperationImportInput = {
+  kind: OperationKind
+  date: string
+  security?: { name: string; isin?: string }
+  quantity?: number
+  unit_price?: number
+  fees?: number
+  amount?: number
+  note?: string
+}
+/** `index` : position de la ligne dans le tableau envoyé. */
+export type OperationsBulkResult = { inserted: number; skipped: number; errors: { index: number; reason: string }[] }
+
+export type ImportKind = 'transactions' | 'holdings' | 'operations'
+/** Correspondance des colonnes mémorisée pour un compte : champ → nom de colonne du fichier. */
+export type ImportProfile = {
+  kind: ImportKind
+  template: string | null
+  columns: Record<string, string>
+  updated_at: string
+}
+export type ImportProfileInput = { template: string | null; columns: Record<string, string> }
+
 export type OperationYear = {
   year: number
   realized_gain: number

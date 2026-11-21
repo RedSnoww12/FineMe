@@ -1,7 +1,16 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/shared/api/endpoints'
 import { useApiMutation } from '@/shared/api/queries'
-import type { HoldingInput, OperationInput, PricesRefresh, TransactionInput } from '@/shared/api/types'
+import type {
+  HoldingInput,
+  ImportKind,
+  ImportProfileInput,
+  OperationImportInput,
+  OperationInput,
+  OperationsBulkResult,
+  PricesRefresh,
+  TransactionInput,
+} from '@/shared/api/types'
 
 export function useOperations(accountId: string) {
   return useQuery({ queryKey: ['operations', accountId], queryFn: () => api.operations(accountId) })
@@ -66,4 +75,26 @@ export function useImportHoldings(accountId: string, onSuccess: (imported: numbe
     (input: { holdings: HoldingInput[]; replace: boolean }) => api.bulkHoldings(accountId, input),
     (holdings) => onSuccess(holdings.length),
   )
+}
+
+export function useImportOperations(accountId: string, onSuccess: (result: OperationsBulkResult) => void) {
+  return useApiMutation(
+    (operations: OperationImportInput[]) => api.bulkOperations(accountId, { operations }),
+    onSuccess,
+  )
+}
+
+/** Correspondances de colonnes mémorisées pour ce compte (une par type de contenu). */
+export function useImportProfiles(accountId: string) {
+  return useQuery({ queryKey: ['import-profiles', accountId], queryFn: () => api.importProfiles(accountId) })
+}
+
+/** Mémorise la correspondance utilisée, sans rafraîchir le reste de l'application. */
+export function useSaveImportProfile(accountId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ kind, ...body }: ImportProfileInput & { kind: ImportKind }) =>
+      api.saveImportProfile(accountId, kind, body),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['import-profiles', accountId] }),
+  })
 }

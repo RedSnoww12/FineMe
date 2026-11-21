@@ -17,6 +17,9 @@ import type {
   Goal,
   GoalInput,
   History,
+  ImportKind,
+  ImportProfile,
+  ImportProfileInput,
   HistoryCorrectionInput,
   HistoryDeleteResult,
   HistoryRange,
@@ -31,7 +34,9 @@ import type {
   Member,
   MemberInput,
   Operation,
+  OperationImportInput,
   OperationInput,
+  OperationsBulkResult,
   OperationsSummary,
   Overview,
   PasswordChangeInput,
@@ -120,6 +125,13 @@ export const api = {
   createOperation: (accountId: string, body: OperationInput) =>
     request<Operation>(`/api/accounts/${accountId}/operations`, { method: 'POST', body }),
   deleteOperation: (id: string) => request<void>(`/api/operations/${id}`, { method: 'DELETE' }),
+  bulkOperations: (accountId: string, body: { operations: OperationImportInput[] }) =>
+    request<OperationsBulkResult>(`/api/accounts/${accountId}/operations/bulk`, { method: 'POST', body }),
+
+  // Préférences d'import CSV
+  importProfiles: (accountId: string) => request<ImportProfile[]>(`/api/accounts/${accountId}/import-profiles`),
+  saveImportProfile: (accountId: string, kind: ImportKind, body: ImportProfileInput) =>
+    request<ImportProfile>(`/api/accounts/${accountId}/import-profiles/${kind}`, { method: 'PUT', body }),
 
   // Immobilier et prêts
   realEstate: (view: View) => request<RealEstate>('/api/real-estate', { query: view }),
