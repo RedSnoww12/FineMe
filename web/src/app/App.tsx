@@ -10,6 +10,7 @@ const OverviewPage = lazy(() => import('@/features/overview/pages/OverviewPage')
 const AnalysisPage = lazy(() => import('@/features/analysis/pages/AnalysisPage'))
 const AccountsPage = lazy(() => import('@/features/accounts/pages/AccountsPage'))
 const AccountDetailPage = lazy(() => import('@/features/accounts/pages/AccountDetailPage'))
+const BudgetPage = lazy(() => import('@/features/budget/pages/BudgetPage'))
 const RealEstatePage = lazy(() => import('@/features/real-estate/pages/RealEstatePage'))
 const GoalsPage = lazy(() => import('@/features/goals/pages/GoalsPage'))
 const ProjectionPage = lazy(() => import('@/features/projection/pages/ProjectionPage'))
@@ -45,6 +46,7 @@ export default function App() {
             <Route path="analyse" element={<AnalysisPage />} />
             <Route path="comptes" element={<AccountsPage />} />
             <Route path="comptes/:id" element={<AccountDetailPage />} />
+            <Route path="budget" element={<BudgetPage />} />
             <Route path="immobilier" element={<RealEstatePage />} />
             <Route path="objectifs" element={<GoalsPage />} />
             <Route path="projection" element={<ProjectionPage />} />
