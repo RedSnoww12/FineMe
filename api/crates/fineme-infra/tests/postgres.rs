@@ -26,6 +26,7 @@ use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
 use fineme_domain::transaction::Transaction;
+use fineme_domain::valuation::{EstimatedValue, Valuation, ValuationDate, ValuationSource};
 use fineme_infra::postgres::{self, PgStore};
 use sqlx::PgPool;
 use testcontainers_modules::postgres::Postgres;
@@ -118,9 +119,22 @@ fn property() -> Property {
         purchase_fees: 20_000.0,
         purchased_at: Some(date(2022, 3, 1)),
         current_value: 300_000.0,
+        valuations: vec![valuation(date(2022, 3, 1), 300_000.0, 1)],
         monthly_rent: 1200.0,
         monthly_charges: 100.0,
         yearly_property_tax: 1200.0,
+    }
+}
+
+fn valuation(on: NaiveDate, value: f64, recorded_day: u32) -> Valuation {
+    Valuation {
+        id: ValuationId::generate(),
+        valued_on: ValuationDate::restore(on),
+        value: EstimatedValue::new(value).unwrap(),
+        source: ValuationSource::Manual,
+        price_per_m2: None,
+        note: None,
+        recorded_at: at(recorded_day),
     }
 }
 
@@ -428,7 +442,79 @@ async fn changing_kind_removes_property_and_loan_rows() {
     };
     save(&db, &plain).await;
     assert_eq!(count(&db, "properties").await, 0);
+    assert_eq!(count(&db, "property_valuations").await, 0);
     assert_eq!(db.store.load().await.unwrap().accounts, vec![plain]);
+}
+
+#[tokio::test]
+async fn valuations_are_added_updated_removed_and_deleted_with_their_property() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let mut house = account(AccountKind::RealEstate, "Maison", &[(alice.id, 1.0)]);
+    house.property = Some(property());
+    save(&db, &house).await;
+    assert_eq!(count(&db, "property_valuations").await, 1);
+
+    let first = house.property.as_ref().unwrap().valuations[0].id;
+    if let Some(p) = &mut house.property {
+        let mut by_m2 = valuation(date(2024, 6, 1), 320_000.0, 2);
+        by_m2.source = ValuationSource::PricePerM2;
+        by_m2.price_per_m2 = Some(3555.5);
+        by_m2.note = Some("Estimation fictive".into());
+        p.valuations.push(by_m2);
+        p.valuations[0].value = EstimatedValue::new(290_000.0).unwrap();
+    }
+    save(&db, &house).await;
+    let reloaded = |data: fineme_application::ports::PortfolioData| {
+        data.accounts
+            .into_iter()
+            .find(|a| a.id == house.id)
+            .unwrap()
+    };
+    let stored = reloaded(db.store.load().await.unwrap());
+    assert_eq!(stored, house);
+
+    // Une estimation retirée du bien disparaît de la table.
+    if let Some(p) = &mut house.property {
+        p.valuations.retain(|v| v.id != first);
+    }
+    save(&db, &house).await;
+    assert_eq!(count(&db, "property_valuations").await, 1);
+    assert_eq!(reloaded(db.store.load().await.unwrap()), house);
+
+    // Valeur non positive refusée par la base elle-même.
+    let rejected = sqlx::query(
+        "INSERT INTO property_valuations (id, account_id, valued_on, value, source, recorded_at) \
+         VALUES (gen_random_uuid(), $1, '2024-01-01', 0, 'manual', now())",
+    )
+    .bind(house.id.as_uuid())
+    .execute(&db.pool)
+    .await;
+    assert!(rejected.is_err());
+
+    assert!(db.store.delete_account(house.id).await.unwrap());
+    assert_eq!(count(&db, "property_valuations").await, 0);
+}
+
+#[tokio::test]
+async fn migration_turns_current_values_into_first_valuations() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let mut house = account(AccountKind::RealEstate, "Maison", &[(alice.id, 1.0)]);
+    house.property = Some(Property {
+        valuations: Vec::new(),
+        ..property()
+    });
+    save(&db, &house).await;
+    // Rejoue la reprise de la migration 0013 sur un bien sans estimation.
+    let migration = include_str!("../migrations/0013_property_valuations.sql");
+    let backfill = &migration[migration.find("INSERT INTO").unwrap()..];
+    sqlx::query(backfill).execute(&db.pool).await.unwrap();
+    let data = db.store.load().await.unwrap();
+    let valuations = &data.accounts[0].property.as_ref().unwrap().valuations;
+    assert_eq!(valuations.len(), 1);
+    assert_eq!(valuations[0].value.value(), 300_000.0);
+    assert_eq!(valuations[0].source, ValuationSource::Manual);
 }
 
 #[tokio::test]

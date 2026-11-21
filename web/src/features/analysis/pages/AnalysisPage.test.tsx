@@ -52,6 +52,9 @@ function mockAnalysis({ points = history }: { points?: HistoryPoint[] } = {}) {
   mockJson('get', '/api/performance', { portfolio: null, accounts: [], benchmark: null })
   mockJson('get', '/api/real-estate', buildRealEstate())
   mockJson('get', '/api/loans/a-pret/schedule', { loan: buildRealEstate().properties[0].loans[0], rows: buildScheduleRows(1200, 12) })
+  mockJson('get', '/api/accounts/a-maison/valuations', [
+    { id: 'v-1', account_id: 'a-maison', valued_on: '2025-01-01', value: 2000, source: 'manual', price_per_m2: null, note: null, recorded_at: '2025-01-01T10:00:00Z' },
+  ])
 }
 
 async function panel(title: string) {

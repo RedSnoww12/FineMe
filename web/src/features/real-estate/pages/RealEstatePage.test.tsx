@@ -1,6 +1,7 @@
 import { waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import type { Account } from '@/shared/api/types'
+import type { Account, Valuation } from '@/shared/api/types'
+import { todayIso } from '@/shared/lib/format'
 import {
   buildAccount,
   buildRealEstate,
@@ -439,5 +440,130 @@ describe('simulateur acheter ou louer', () => {
     expect(text).toContain('Patrimoine en louant40 000 €')
     expect(text).toContain('Avantage à l’achat60 000 €')
     expect(text).toContain('Achat rentabiliséAprès 1 an')
+  })
+})
+
+describe('historique des estimations d’un bien', () => {
+  const valuation = (overrides: Partial<Valuation>): Valuation => ({
+    id: 'v-1',
+    account_id: 'a-maison',
+    valued_on: '2024-03-01',
+    value: 1800,
+    source: 'manual',
+    price_per_m2: null,
+    note: null,
+    recorded_at: '2024-03-01T10:00:00Z',
+    ...overrides,
+  })
+  const history = [
+    valuation({ id: 'v-1' }),
+    valuation({ id: 'v-2', valued_on: '2025-06-01', value: 2000, source: 'price_per_m2', price_per_m2: 40, note: 'Agence fictive', recorded_at: '2025-06-01T10:00:00Z' }),
+  ]
+
+  function mockHistory(valuations: Valuation[], item = house) {
+    mockShell()
+    mockJson('get', '/api/real-estate', buildRealEstate([item]))
+    mockJson('get', '/api/accounts', [item.account, loanAccount])
+    mockJson('get', '/api/loans/a-pret/schedule', { loan: buildRealEstateLoan(), rows: buildScheduleRows(1200, 12) })
+    mockJson('get', '/api/accounts/a-maison/valuations', valuations)
+  }
+
+  async function openHistory() {
+    const view = await openRealEstate()
+    await view.user.click(within(propertyCard('Maison')).getByRole('button', { name: 'Voir l’historique' }))
+    return view
+  }
+
+  it('liste les estimations, la courbe en tableau et supprime une estimation', async () => {
+    mockHistory(history)
+    let deleted = ''
+    server.use(
+      http.delete(`${API}/api/valuations/:id`, ({ params }) => {
+        deleted = String(params.id)
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const view = await openHistory()
+    const card = propertyCard('Maison')
+    const list = await within(card).findByRole('table', { name: /Estimations de Maison/ })
+    const rows = within(list).getAllByRole('row')
+    expect(pageText(rows[1])).toContain('01/06/2025(en vigueur)2 000 €Prix au m² · 40 €/m²Agence fictive')
+    expect(pageText(rows[2])).toContain('01/03/20241 800 €Saisie–')
+
+    const curve = within(card).getByRole('table', { name: /Valeur, capital restant dû et valeur nette/ })
+    // Avant la première échéance, tout le capital (1 200 €) reste dû.
+    expect(pageText(curve)).toContain('01/03/20241 800 €1 200 €600 €')
+    expect(pageText(curve)).toContain('01/06/20252 000 €1 200 €800 €')
+
+    await view.user.click(within(card).getByRole('button', { name: 'Supprimer l’estimation du 01/06/2025' }))
+    const dialog = within(await screen.findByRole('dialog', { name: 'Supprimer cette estimation ?' }))
+    await view.user.click(dialog.getByRole('button', { name: 'Supprimer l’estimation' }))
+    await waitFor(() => expect(deleted).toBe('v-2'))
+  })
+
+  it('aide à estimer au prix du m² puis enregistre l’estimation', async () => {
+    const withSurface = buildRealEstateItem({ property: { ...house.property, surface_m2: 50 } })
+    mockHistory([history[0]], withSurface)
+    let received: unknown
+    server.use(
+      http.post(`${API}/api/accounts/a-maison/valuations`, async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json(valuation({ id: 'v-3', value: 200_000 }), { status: 201 })
+      }),
+    )
+    const view = await openHistory()
+    const card = propertyCard('Maison')
+    // Une seule estimation : elle ne peut pas être supprimée.
+    expect(await within(card).findByRole('button', { name: 'Supprimer l’estimation du 01/03/2024' })).toBeDisabled()
+    expect(pageText(card)).toContain('La dernière estimation d’un bien ne peut pas être supprimée.')
+
+    await view.user.click(within(card).getByRole('button', { name: 'Ajouter une estimation' }))
+    const form = within(within(card).getByRole('form', { name: 'Nouvelle estimation' }))
+    await view.user.click(form.getByRole('button', { name: 'Prix au m²' }))
+    await view.user.type(form.getByLabelText('Prix au m²'), '4 000')
+    expect(pageText(card)).toContain('50 m² × 4 000 € = 200 000 €')
+    await view.user.type(form.getByLabelText('Note (facultative)'), 'Annonces du quartier')
+    await view.user.click(form.getByRole('button', { name: 'Enregistrer l’estimation' }))
+    await waitFor(() =>
+      expect(received).toEqual({ price_per_m2: 4000, valued_on: todayIso(), note: 'Annonces du quartier' }),
+    )
+  })
+
+  it('refuse une valeur nulle sans appeler l’API et affiche l’erreur du serveur', async () => {
+    mockHistory([history[0]])
+    const view = await openHistory()
+    const card = propertyCard('Maison')
+    await view.user.click(await within(card).findByRole('button', { name: 'Ajouter une estimation' }))
+    const form = within(within(card).getByRole('form', { name: 'Nouvelle estimation' }))
+    // Sans surface, le prix au m² n'est pas disponible.
+    await view.user.click(form.getByRole('button', { name: 'Prix au m²' }))
+    expect(form.getByLabelText('Prix au m²')).toBeDisabled()
+    expect(pageText(card)).toContain('Renseignez la surface du bien pour estimer au prix du m².')
+    await view.user.click(form.getByRole('button', { name: 'Montant' }))
+
+    const calls = spyOn('post', '/api/accounts/a-maison/valuations')
+    await view.user.type(form.getByLabelText('Valeur estimée'), '0')
+    await view.user.click(form.getByRole('button', { name: 'Enregistrer l’estimation' }))
+    expect(form.getByRole('alert')).toHaveTextContent('Indiquez une valeur strictement positive.')
+    expect(calls.count).toBe(0)
+
+    mockApiError('post', '/api/accounts/a-maison/valuations', 400, 'La date d’une estimation ne peut pas être dans le futur')
+    await view.user.clear(form.getByLabelText('Valeur estimée'))
+    await view.user.type(form.getByLabelText('Valeur estimée'), '2 100')
+    await view.user.click(form.getByRole('button', { name: 'Enregistrer l’estimation' }))
+    expect(await form.findByText('La date d’une estimation ne peut pas être dans le futur')).toBeInTheDocument()
+  })
+
+  it('gère l’absence d’estimation et l’échec du chargement', async () => {
+    mockHistory([])
+    await openHistory()
+    expect(await within(propertyCard('Maison')).findByText('Aucune estimation')).toBeInTheDocument()
+  })
+
+  it('signale une erreur de chargement de l’historique', async () => {
+    mockHistory(history)
+    mockApiError('get', '/api/accounts/a-maison/valuations', 500, 'Erreur interne')
+    await openHistory()
+    expect(await within(propertyCard('Maison')).findByText('Chargement impossible')).toBeInTheDocument()
   })
 })

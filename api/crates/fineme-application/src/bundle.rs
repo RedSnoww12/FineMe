@@ -2,12 +2,17 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, NaiveDate, Utc};
+use fineme_domain::DomainError;
 use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::goal::Goal;
 use fineme_domain::holding::Holding;
-use fineme_domain::ids::MemberId;
+use fineme_domain::ids::{MemberId, ValuationId};
 use fineme_domain::member::{Member, default_color};
 use fineme_domain::portfolio::Portfolio;
+use fineme_domain::valuation::{
+    EstimatedValue, Valuation, ValuationDate, ValuationSource, newest_first,
+};
 
 use crate::accounts::{Origin, build_account};
 use crate::commands::{
@@ -43,6 +48,54 @@ pub struct BundleAccount {
     pub holdings: Option<Vec<HoldingInput>>,
     /// Pour un prêt : compte immobilier financé, désigné par son `external_id`.
     pub property_external_id: Option<String>,
+    /// Pour un bien : historique des estimations ; non vide, il remplace celui du bien.
+    pub valuations: Option<Vec<BundleValuation>>,
+}
+
+/// Estimation d'un bien telle qu'exportée (valeur conservée telle quelle, même au prix du m²).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundleValuation {
+    pub valued_on: NaiveDate,
+    pub value: f64,
+    pub source: Option<String>,
+    pub price_per_m2: Option<f64>,
+    pub note: Option<String>,
+}
+
+fn export_valuation(valuation: &Valuation) -> BundleValuation {
+    BundleValuation {
+        valued_on: valuation.valued_on.date(),
+        value: valuation.value.value(),
+        source: Some(valuation.source.as_str().to_string()),
+        price_per_m2: valuation.price_per_m2,
+        note: valuation.note.clone(),
+    }
+}
+
+fn import_valuation(entry: &BundleValuation, now: DateTime<Utc>) -> AppResult<Valuation> {
+    let source = entry
+        .source
+        .as_deref()
+        .map(ValuationSource::parse)
+        .transpose()?
+        .unwrap_or(ValuationSource::Manual);
+    let price_per_m2 = match entry.price_per_m2 {
+        Some(price) => Some(
+            EstimatedValue::new(price)
+                .map_err(|_| DomainError::NotPositive("price_per_m2"))?
+                .value(),
+        ),
+        None => None,
+    };
+    Ok(Valuation {
+        id: ValuationId::generate(),
+        valued_on: ValuationDate::new(entry.valued_on, now.date_naive())?,
+        value: EstimatedValue::new(entry.value)?,
+        source,
+        price_per_m2,
+        note: clean(entry.note.clone()),
+        recorded_at: now,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +216,11 @@ fn export_account(account: &Account, portfolio: &Portfolio) -> BundleAccount {
             .and_then(|id| portfolio.account(id))
             .map(external_id),
         holdings,
+        valuations: account.property.as_ref().map(|p| {
+            let mut valuations = p.valuations.clone();
+            newest_first(&mut valuations);
+            valuations.iter().rev().map(export_valuation).collect()
+        }),
         account: AccountInput {
             name: Some(account.name.clone()),
             institution: Some(account.institution.clone()),
@@ -328,7 +386,7 @@ impl BundleService {
                 source: AccountSource::Import,
                 external_id: Some(external),
             };
-            let account = build_account(
+            let mut account = build_account(
                 existing.map(|i| &portfolio.accounts[i]),
                 &input,
                 origin,
@@ -336,6 +394,16 @@ impl BundleService {
                 &portfolio.accounts,
                 now,
             )?;
+            if let (Some(property), Some(entries)) = (
+                account.property.as_mut(),
+                entry.valuations.as_ref().filter(|v| !v.is_empty()),
+            ) {
+                property.valuations = entries
+                    .iter()
+                    .map(|v| import_valuation(v, now))
+                    .collect::<AppResult<_>>()?;
+                property.refresh_current_value(now.date_naive());
+            }
             let holdings = match &entry.holdings {
                 Some(inputs) if account.kind.can_hold_positions() => {
                     counts.holdings += inputs.len();
@@ -454,6 +522,7 @@ mod tests {
                 .collect(),
             holdings: None,
             property_external_id: None,
+            valuations: None,
         }
     }
 
@@ -754,5 +823,99 @@ mod tests {
         let goals = t.app.goals.list().await.unwrap();
         assert_eq!(goals.len(), 1);
         assert_eq!(goals[0].goal.coverage_months, Some(12.0));
+    }
+
+    #[tokio::test]
+    async fn valuations_round_trip_through_the_bundle() {
+        use crate::commands::ValuationInput;
+        let source = TestApp::household().await;
+        source.app.bundle.import(sample()).await.unwrap();
+        let house = source
+            .app
+            .accounts
+            .list(None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|a| a.account.external_id.as_deref() == Some("maison-1"))
+            .unwrap()
+            .account
+            .id;
+        let re = &source.app.real_estate;
+        re.add_valuation(
+            house.as_uuid(),
+            &ValuationInput {
+                value: Some(240_000.0),
+                valued_on: Some(date(2023, 5, 1)),
+                source: Some("external".into()),
+                note: Some(Some("Avis fictif".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        source.clock.advance_days(1);
+        re.add_valuation(
+            house.as_uuid(),
+            &ValuationInput {
+                price_per_m2: Some(3600.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let exported = source.app.bundle.export().await.unwrap();
+        let entry = exported
+            .accounts
+            .iter()
+            .find(|a| a.external_id == "maison-1")
+            .unwrap();
+        let valuations = entry.valuations.as_ref().unwrap();
+        assert_eq!(valuations.len(), 3);
+        assert_eq!(valuations[0].valued_on, date(2023, 5, 1));
+        assert_eq!(valuations[2].price_per_m2, Some(3600.0));
+        assert!(
+            exported
+                .accounts
+                .iter()
+                .filter(|a| a.external_id != "maison-1")
+                .all(|a| a.valuations.is_none())
+        );
+
+        let target = TestApp::empty().await;
+        target.clock.advance_days(1);
+        target.app.bundle.import(exported.clone()).await.unwrap();
+        assert_eq!(target.app.bundle.export().await.unwrap(), exported);
+        assert_eq!(
+            target
+                .app
+                .real_estate
+                .report(None)
+                .await
+                .unwrap()
+                .totals
+                .value,
+            324_000.0
+        );
+        // Ré-importer ne duplique pas l'historique.
+        target.app.bundle.import(exported.clone()).await.unwrap();
+        assert_eq!(target.app.bundle.export().await.unwrap(), exported);
+
+        let mut future = exported.clone();
+        if let Some(entry) = future
+            .accounts
+            .iter_mut()
+            .find(|a| a.external_id == "maison-1")
+        {
+            entry.valuations = Some(vec![BundleValuation {
+                valued_on: date(2030, 1, 1),
+                value: 1.0,
+                source: None,
+                price_per_m2: None,
+                note: None,
+            }]);
+        }
+        assert!(target.app.bundle.import(future).await.is_err());
     }
 }

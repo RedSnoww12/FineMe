@@ -1,5 +1,6 @@
 // Immobilier dans le temps : capital remboursé et restant dû des prêts liés, valeur nette des biens.
-import type { RealEstateItem, RealEstateLoan, ScheduleRow } from '@/shared/api/types'
+import type { RealEstateItem, RealEstateLoan, ScheduleRow, Valuation } from '@/shared/api/types'
+import { valuationOn } from '@/shared/lib/valuation'
 import { share, type Unit } from './period'
 
 /** Tableau d'amortissement d'un prêt et part de ce prêt détenue par la vue. */
@@ -35,12 +36,30 @@ function remainingAt(timeline: LoanTimeline, month: string, byMonth: ReadonlyMap
 }
 
 /**
- * Série mensuelle, du mois précédant la première échéance à la dernière échéance des prêts liés aux biens.
- * La valeur des biens est leur valeur actuelle détenue (supposée constante) ; les montants des prêts sont
- * pondérés par la part détenue de chaque prêt. En pourcentage, tout est rapporté à la valeur des biens.
+ * Valeur détenue des biens à la fin d'un mois : estimation en vigueur de chaque bien, convertie et pondérée comme
+ * sa valeur actuelle détenue ; un bien sans estimation à cette date compte pour sa valeur actuelle.
  */
-export function equitySeries(items: readonly RealEstateItem[], timelines: readonly LoanTimeline[], unit: Unit): EquityRow[] {
-  const value = items.reduce((sum, item) => sum + item.account.owned_value, 0)
+function valueAt(items: readonly RealEstateItem[], valuations: ReadonlyMap<string, readonly Valuation[]>, month: string): number {
+  return items.reduce((sum, item) => {
+    const estimate = valuationOn(valuations.get(item.account.id) ?? [], `${month}-31`)
+    const current = item.property.current_value
+    if (!estimate || current <= 0) return sum + item.account.owned_value
+    return sum + (estimate.value * item.account.owned_value) / current
+  }, 0)
+}
+
+/**
+ * Série mensuelle, du mois précédant la première échéance à la dernière échéance des prêts liés aux biens.
+ * La valeur des biens suit leurs estimations datées (la plus récente au-delà, la valeur actuelle faute
+ * d'estimation) ; les montants des prêts sont pondérés par la part détenue de chaque prêt. En pourcentage,
+ * tout est rapporté à la valeur des biens du mois.
+ */
+export function equitySeries(
+  items: readonly RealEstateItem[],
+  timelines: readonly LoanTimeline[],
+  unit: Unit,
+  valuations: ReadonlyMap<string, readonly Valuation[]> = new Map(),
+): EquityRow[] {
   const active = timelines.filter((timeline) => timeline.fraction > 0 && timeline.rows.length > 0)
   if (active.length === 0) return []
 
@@ -52,9 +71,10 @@ export function equitySeries(items: readonly RealEstateItem[], timelines: readon
     byMonth: new Map(timeline.rows.map((row) => [monthOf(row.date), row.remaining])),
   }))
 
-  const scale = (amount: number) => (unit === 'eur' ? amount : share(amount, value))
   const rows: EquityRow[] = []
   for (let month = start; month <= end; month = addMonths(month, 1)) {
+    const value = valueAt(items, valuations, month)
+    const scale = (amount: number) => (unit === 'eur' ? amount : share(amount, value))
     let remaining = 0
     let repaid = 0
     for (const { timeline, byMonth } of indexed) {

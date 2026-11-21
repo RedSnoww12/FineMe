@@ -2,7 +2,7 @@
 
 use fineme_application::alerts::EvaluationReport;
 use fineme_application::budget::{BudgetMonth, BudgetTransaction};
-use fineme_application::bundle::Bundle;
+use fineme_application::bundle::{Bundle, BundleValuation};
 use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, PropertyInput,
 };
@@ -30,6 +30,7 @@ use fineme_domain::portfolio::{
 };
 use fineme_domain::property::Property;
 use fineme_domain::transaction::Transaction;
+use fineme_domain::valuation::Valuation;
 use serde_json::{Map, Value, json};
 
 pub fn user(user: &User) -> Value {
@@ -117,6 +118,19 @@ pub fn property(account_id: AccountId, p: &Property) -> Value {
         "monthly_rent": p.monthly_rent,
         "monthly_charges": p.monthly_charges,
         "yearly_property_tax": p.yearly_property_tax,
+    })
+}
+
+pub fn valuation(account_id: AccountId, v: &Valuation) -> Value {
+    json!({
+        "id": v.id.as_uuid(),
+        "account_id": account_id.as_uuid(),
+        "valued_on": v.valued_on.date(),
+        "value": v.value.value(),
+        "source": v.source.as_str(),
+        "price_per_m2": v.price_per_m2,
+        "note": v.note,
+        "recorded_at": v.recorded_at,
     })
 }
 
@@ -540,6 +554,16 @@ fn bundle_property(p: &PropertyInput) -> Value {
     })))
 }
 
+fn bundle_valuation(v: &BundleValuation) -> Value {
+    Value::Object(compact(json!({
+        "valued_on": v.valued_on,
+        "value": v.value,
+        "source": v.source,
+        "price_per_m2": v.price_per_m2,
+        "note": v.note,
+    })))
+}
+
 fn bundle_loan(l: &LoanInput, property_external_id: Option<&str>) -> Value {
     Value::Object(compact(json!({
         "principal": l.principal,
@@ -615,6 +639,12 @@ pub fn bundle(bundle: &Bundle) -> Value {
             }
             if let Some(property) = &entry.account.property {
                 fields.insert("property".into(), bundle_property(property));
+            }
+            if let Some(valuations) = &entry.valuations {
+                fields.insert(
+                    "valuations".into(),
+                    Value::Array(valuations.iter().map(bundle_valuation).collect()),
+                );
             }
             if let Some(loan) = &entry.account.loan {
                 fields.insert(
@@ -793,6 +823,7 @@ mod tests {
                 }],
                 holdings: None,
                 property_external_id: Some("maison-1".into()),
+                valuations: None,
             }],
             goals: vec![],
         };

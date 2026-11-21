@@ -114,6 +114,27 @@ export type Property = {
   yearly_property_tax: number
 }
 
+export type ValuationSource = 'manual' | 'price_per_m2' | 'external'
+/** Estimation datée de la valeur d'un bien (compte immobilier). */
+export type Valuation = {
+  id: string
+  account_id: string
+  valued_on: string
+  value: number
+  source: ValuationSource
+  price_per_m2: number | null
+  note: string | null
+  recorded_at: string
+}
+/** `value` ou `price_per_m2` (valeur = surface du bien × prix). */
+export type ValuationInput = {
+  value?: number
+  price_per_m2?: number
+  valued_on?: string
+  source?: 'manual' | 'external'
+  note?: string | null
+}
+
 /** Non détaillé dans le contrat : Property sans id ni account_id. */
 export type PropertyInput = Omit<Property, 'id' | 'account_id'>
 
