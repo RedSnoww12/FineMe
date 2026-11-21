@@ -8,7 +8,9 @@ import {
   useImportBundle,
   useSaveMember,
 } from '../hooks/useSettingsApi'
+import { ExportPanel } from '../components/ExportPanel'
 import { LoginHistoryPanel } from '../components/LoginHistoryPanel'
+import { downloadFile } from '../lib/download'
 import type { Bundle, ImportResult, Member } from '@/shared/api/types'
 import {
   Badge,
@@ -185,16 +187,9 @@ function DataPanel() {
   const [fileError, setFileError] = useState('')
   const [imported, setImported] = useState<ImportResult | null>(null)
 
-  const exportData = useExportBundle((bundle) => {
-      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `fineme-export-${todayIso()}.json`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
-  })
+  const exportData = useExportBundle((bundle) =>
+    downloadFile(JSON.stringify(bundle, null, 2), `fineme-export-${todayIso()}.json`, 'application/json'),
+  )
   const importData = useImportBundle((result) => {
     setImported(result)
     setPending(null)
@@ -369,6 +364,7 @@ export default function SettingsPage() {
       <PageHeader title="Paramètres" />
       <div className="flex flex-col gap-4 sm:gap-5">
         <MembersPanel />
+        <ExportPanel />
         <DataPanel />
         <Panel title="Historique des graphiques">
           <div className="flex flex-wrap items-center justify-between gap-3">
