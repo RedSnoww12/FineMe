@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
+import { NotificationCenter, UnreadAnnouncer } from '@/features/alerts/components/NotificationCenter'
 import { useMembers } from '@/shared/api/queries'
 import { DISCREET_SHORTCUT, isDiscreetShortcut, useDiscreet } from '@/shared/state/discreet'
 import { useView } from '@/shared/state/view'
@@ -128,10 +129,13 @@ export function Shell() {
 
       {/* Navigation latérale (ordinateur) */}
       <aside className="fixed inset-y-0 left-0 hidden w-[248px] flex-col gap-5 border-r border-line bg-surface px-4 py-5 lg:flex">
-        <NavLink to="/" className="flex items-center gap-2.5 px-1" aria-label="FineMe, vue d’ensemble">
-          <Logo />
-          <span className="font-display text-[21px] font-semibold tracking-tight">FineMe</span>
-        </NavLink>
+        <div className="flex items-center justify-between gap-2">
+          <NavLink to="/" className="flex items-center gap-2.5 px-1" aria-label="FineMe, vue d’ensemble">
+            <Logo />
+            <span className="font-display text-[21px] font-semibold tracking-tight">FineMe</span>
+          </NavLink>
+          <NotificationCenter />
+        </div>
         <ViewSwitcher />
         <nav aria-label="Navigation principale" className="flex flex-col gap-0.5">
           {NAV.map((item) => (
@@ -148,6 +152,7 @@ export function Shell() {
 
       {/* Dans la colonne de contenu : jamais sous la barre latérale. */}
       <OfflineNotice />
+      <UnreadAnnouncer />
 
       {/* Barre supérieure (téléphone) */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur lg:hidden">
@@ -156,6 +161,7 @@ export function Shell() {
           <span className="font-display text-[19px] font-semibold tracking-tight">FineMe</span>
         </NavLink>
         <div className="flex items-center gap-1">
+          <NotificationCenter />
           <DiscreetToggle />
           <ViewSwitcher compact />
         </div>

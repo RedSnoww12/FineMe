@@ -5,6 +5,7 @@ import { mockJson } from './server'
 /** Requêtes émises par le shell sur tous les écrans connectés. */
 export function mockShell() {
   mockJson('get', '/api/members', members)
+  mockJson('get', '/api/alerts', [])
 }
 
 /** Requêtes de la vue d'ensemble, sans historique. */

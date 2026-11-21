@@ -12,6 +12,7 @@ const NEXT = 'nouveau-mot-de-passe'
 async function openSettings() {
   mockShell()
   mockJson('get', '/api/auth/logins', [])
+  mockJson('get', '/api/alerts/rules', [])
   const view = renderApp('/parametres')
   await screen.findByRole('heading', { name: 'Mot de passe' })
   return view
@@ -230,6 +231,7 @@ function captureDownload() {
 async function openData() {
   mockShell()
   mockJson('get', '/api/auth/logins', [])
+  mockJson('get', '/api/alerts/rules', [])
   const view = renderApp('/parametres')
   await screen.findByRole('heading', { name: 'Vos données' })
   return view

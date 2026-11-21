@@ -8,6 +8,7 @@ import {
   useImportBundle,
   useSaveMember,
 } from '../hooks/useSettingsApi'
+import { AlertRulesPanel } from '../components/AlertRulesPanel'
 import { LoginHistoryPanel } from '../components/LoginHistoryPanel'
 import type { Bundle, ImportResult, Member } from '@/shared/api/types'
 import {
@@ -396,6 +397,7 @@ export default function SettingsPage() {
             ]}
           />
         </Panel>
+        <AlertRulesPanel />
         <PasswordPanel />
         <LoginHistoryPanel />
         <Panel title="Session">
