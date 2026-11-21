@@ -111,6 +111,14 @@ export function toInput(value: number | null | undefined, maxDecimals = 6): stri
   return new Intl.NumberFormat(LOCALE, { maximumFractionDigits: maxDecimals, useGrouping: false }).format(value)
 }
 
+/** `21/11 14:05` : horodatage court des données affichées hors ligne. */
+export function shortDateTime(timestamp: number): string {
+  // Assemblé à la main : la ponctuation entre date et heure varie selon la version d'ICU du moteur.
+  const d = new Date(timestamp)
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`
+}
+
 export function todayIso(): string {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`

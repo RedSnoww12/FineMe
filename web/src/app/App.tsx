@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router'
 import { Shell } from './Shell'
 import { EmptyState, LoadingBlock } from '@/shared/ui/ui'
+import { OfflineNotice } from '@/shared/ui/OfflineNotice'
 import { WakeNotice } from '@/shared/ui/WakeNotice'
 import AuthPage from '@/features/auth/pages/AuthPage'
 import { useAuth } from '@/shared/state/auth'
@@ -36,6 +37,7 @@ function NotFound() {
 export default function App() {
   return (
     <>
+      <OfflineNotice />
       <WakeNotice />
       <Suspense fallback={<div className="p-6"><LoadingBlock /></div>}>
         <Routes>
