@@ -637,6 +637,11 @@ async fn daily_job_requires_its_secret_and_records_todays_snapshot() {
     let (status, report) = api.daily(Some(CRON)).await;
     assert_eq!(status, StatusCode::OK, "{report}");
     assert_eq!(report["prices"], json!({ "updated": 0, "failed": [] }));
+    // Les alertes sont évaluées après l'instantané (livret loin de son plafond : aucune).
+    assert_eq!(
+        report["alerts"],
+        json!({ "created": 0, "reopened": 0, "resolved": 0 })
+    );
     let points = api.get("/api/history").await["points"].clone();
     assert_eq!(points.as_array().unwrap().len(), 1);
     assert_eq!(points[0]["date"], report["snapshot_date"]);
@@ -1942,6 +1947,215 @@ async fn investment_operations_drive_positions_and_yearly_summary() {
         )
         .await;
     assert_eq!(error_of(&unknown).0, 400);
+}
+
+#[tokio::test]
+async fn alerts_are_evaluated_deduplicated_read_archived_and_configured() {
+    let (api, alice, _) = Api::household().await;
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    api.post(
+        "/api/accounts",
+        json!({ "name": "Livret Fictif", "kind": "savings", "cash_balance": 950, "owners": owners }),
+    )
+    .await;
+    assert_eq!(api.get("/api/alerts").await, json!([]));
+
+    // Plafond abaissé à 1 000 € : le livret à 950 € dépasse le seuil de 90 %.
+    let (status, rule) = api
+        .call(
+            "PUT",
+            "/api/alerts/rules/savings_ceiling",
+            Some(json!({ "ceiling": 1000 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rule}");
+    assert_eq!(
+        rule,
+        json!({ "kind": "savings_ceiling", "enabled": true, "threshold_pct": 90.0, "ceiling": 1000.0 })
+    );
+    let report = api.post("/api/alerts/evaluate", json!({})).await;
+    assert_eq!(
+        report,
+        json!({ "created": 1, "reopened": 0, "resolved": 0 })
+    );
+    // Réévaluée, la même condition ne crée pas de seconde alerte.
+    assert_eq!(
+        api.post("/api/alerts/evaluate", json!({})).await["created"],
+        0
+    );
+    let alerts = api.get("/api/alerts").await;
+    assert_eq!(alerts.as_array().unwrap().len(), 1);
+    let alert = &alerts[0];
+    assert_eq!(alert["kind"], "savings_ceiling");
+    assert_eq!(alert["severity"], "warning");
+    assert_eq!(
+        (&alert["read"], &alert["archived"], &alert["active"]),
+        (&json!(false), &json!(false), &json!(true))
+    );
+    assert!(alert["message"].as_str().unwrap().contains("95 %"));
+
+    let path = format!("/api/alerts/{}", alert["id"].as_str().unwrap());
+    let (status, read) = api.call("PUT", &path, Some(json!({ "read": true }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["read"], true);
+    assert_eq!(
+        api.post("/api/alerts/read-all", json!({})).await,
+        json!({ "updated": 0 })
+    );
+    api.call("PUT", &path, Some(json!({ "archived": true })))
+        .await;
+    assert_eq!(api.get("/api/alerts").await, json!([]));
+    assert_eq!(
+        api.get("/api/alerts?archived=true").await[0]["archived"],
+        true
+    );
+
+    // Désactivée, la règle n'observe plus la condition : l'alerte est résolue.
+    api.call(
+        "PUT",
+        "/api/alerts/rules/savings_ceiling",
+        Some(json!({ "enabled": false })),
+    )
+    .await;
+    assert_eq!(
+        api.post("/api/alerts/evaluate", json!({})).await["resolved"],
+        1
+    );
+    let rules = api.get("/api/alerts/rules").await;
+    let rules = rules.as_array().unwrap();
+    assert_eq!(rules.len(), 5);
+    assert!(
+        rules
+            .iter()
+            .any(|rule| rule["kind"] == "savings_ceiling" && rule["enabled"] == false)
+    );
+
+    let invalid = api
+        .call(
+            "PUT",
+            "/api/alerts/rules/savings_ceiling",
+            Some(json!({ "threshold_pct": 0 })),
+        )
+        .await;
+    assert_eq!(error_of(&invalid).0, 400);
+    let unknown = api
+        .call("PUT", "/api/alerts/rules/inconnue", Some(json!({})))
+        .await;
+    assert_eq!(error_of(&unknown).0, 404);
+    let missing = api
+        .call(
+            "PUT",
+            "/api/alerts/00000000-0000-0000-0000-000000000000",
+            Some(json!({ "read": true })),
+        )
+        .await;
+    assert_eq!(error_of(&missing), (404, "Alerte introuvable"));
+}
+
+/// Instantané détaillé du foyer, `days_ago` jours avant aujourd'hui, pour un seul compte.
+async fn seed_account_snapshot(api: &Api, days_ago: i32, account: &str, value: f64) {
+    sqlx::query(
+        "INSERT INTO snapshots (date, member_id, gross_assets, liabilities, net_worth, detailed) \
+         VALUES (CURRENT_DATE - $1, NULL, $2, 0, $2, true)",
+    )
+    .bind(days_ago)
+    .bind(value)
+    .execute(&api.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO snapshot_accounts (date, member_id, account_id, name, kind, value) \
+         VALUES (CURRENT_DATE - $1, NULL, CAST($2 AS UUID), 'PEA', 'investment', $3)",
+    )
+    .bind(days_ago)
+    .bind(account)
+    .bind(value)
+    .execute(&api.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn performance_measures_twr_and_reports_a_missing_benchmark_history() {
+    let (api, alice, _) = Api::household().await;
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    let pea = api
+        .id_of(
+            "/api/accounts",
+            json!({ "name": "PEA", "kind": "investment", "owners": owners }),
+        )
+        .await;
+
+    // Aucun historique : rien à mesurer, sans erreur.
+    let empty = api.get("/api/performance").await;
+    assert_eq!(empty["portfolio"], Value::Null);
+    assert_eq!(empty["accounts"], json!([]));
+
+    // 1 000 → 2 100 (versement de 1 000 il y a 10 jours) → 2 310 : deux fois +10 %.
+    let deposit_day: String = sqlx::query_scalar("SELECT (CURRENT_DATE - 10)::text")
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+    api.post(
+        &format!("/api/accounts/{pea}/operations"),
+        json!({ "kind": "deposit", "date": deposit_day, "amount": 1000 }),
+    )
+    .await;
+    for (days_ago, value) in [(20, 1000.0), (10, 2100.0), (0, 2310.0)] {
+        seed_account_snapshot(&api, days_ago, &pea, value).await;
+    }
+    let perf = api.get("/api/performance").await;
+    let portfolio = &perf["portfolio"];
+    assert!(close(&portfolio["twr"], 0.21), "{perf}");
+    assert!(close(&portfolio["net_flows"], 1000.0));
+    assert_eq!(portfolio["twr_annualized"], Value::Null);
+    assert_eq!(portfolio["points"].as_array().unwrap().len(), 3);
+    assert!(close(&portfolio["points"][2]["value"], 121.0));
+    assert_eq!(perf["accounts"][0]["account_id"], json!(pea));
+    assert_eq!(perf["benchmark"], Value::Null);
+
+    // Indice crypto sans ticker : aucun fournisseur ne peut le coter (pas d'appel réseau),
+    // il est enregistré sans cours, et c'est dit.
+    assert_eq!(api.get("/api/performance/benchmark").await, Value::Null);
+    let (status, info) = api
+        .call(
+            "PUT",
+            "/api/performance/benchmark",
+            Some(json!({ "name": "Indice démo", "isin": "XX0000DEMO01", "kind": "crypto", "currency": "EUR" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["prices"], json!(0));
+    assert!(info["last_error"].is_string());
+    let perf = api.get("/api/performance").await;
+    assert_eq!(perf["benchmark"]["comparison"], Value::Null);
+    assert!(
+        perf["benchmark"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Aucun cours")
+    );
+
+    let (status, error) = api
+        .call(
+            "PUT",
+            "/api/performance/benchmark",
+            Some(json!({ "name": "Sans identifiant" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    let (status, _) = api
+        .call(
+            "GET",
+            "/api/performance?from=2026-02-01&to=2026-01-01",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = api.call("DELETE", "/api/performance/benchmark", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = api.call("DELETE", "/api/performance/benchmark", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

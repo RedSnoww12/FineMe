@@ -404,7 +404,51 @@
                   "@/features/goals/**",
                   "@/features/projection/**",
                   "@/features/fees/**",
-                  "@/features/connections/**"
+                  "@/features/connections/**",
+                  "@/features/alerts/**"
+                ],
+                "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
+              },
+              {
+                "group": [
+                  "@/app/**"
+                ],
+                "message": "Une feature ne dépend pas de app/."
+              },
+              {
+                "group": [
+                  "../../*",
+                  "../../**"
+                ],
+                "message": "Hors de la feature, importez via l'alias @/shared/…"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/features/alerts/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/features/auth/**",
+                  "@/features/overview/**",
+                  "@/features/analysis/**",
+                  "@/features/accounts/**",
+                  "@/features/real-estate/**",
+                  "@/features/goals/**",
+                  "@/features/projection/**",
+                  "@/features/fees/**",
+                  "@/features/connections/**",
+                  "@/features/budget/**",
+                  "@/features/settings/**"
                 ],
                 "message": "Une feature n'importe jamais une autre feature : ce qui est partagé va dans shared/."
               },

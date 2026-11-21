@@ -3,6 +3,7 @@
 
 use chrono::NaiveDate;
 
+use crate::alerts::EvaluationReport;
 use crate::app::App;
 use crate::error::{AppError, AppResult};
 use crate::prices::RefreshReport;
@@ -17,6 +18,7 @@ const INVALID_CRON_SECRET: &str = "Secret de la tâche quotidienne invalide ou m
 pub struct DailyReport {
     pub prices: RefreshReport,
     pub snapshot_date: NaiveDate,
+    pub alerts: EvaluationReport,
 }
 
 impl App {
@@ -26,7 +28,8 @@ impl App {
     }
 
     /// Vérifie le secret, rafraîchit les taux et les cours, puis enregistre l'instantané du jour
-    /// (qui valorise donc le patrimoine aux cours tout juste récupérés). Idempotente sur une journée.
+    /// (qui valorise donc le patrimoine aux cours tout juste récupérés), et évalue enfin les alertes
+    /// sur cet instantané. Idempotente sur une journée.
     pub async fn run_daily(&self, provided_secret: Option<&str>) -> AppResult<DailyReport> {
         let expected = self
             .cron_secret
@@ -36,10 +39,13 @@ impl App {
             return Err(AppError::Forbidden(INVALID_CRON_SECRET));
         }
         let prices = self.prices.refresh().await?;
+        self.performance.record_benchmark_price().await;
         let snapshot_date = self.overview.record_snapshots().await?;
+        let alerts = self.alerts.evaluate().await?;
         Ok(DailyReport {
             prices,
             snapshot_date,
+            alerts,
         })
     }
 }
@@ -47,9 +53,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::HoldingInput;
+    use crate::commands::{AccountInput, HoldingInput};
     use crate::ports::Clock;
-    use crate::testing::{TestApp, holding_input};
+    use crate::testing::{TestApp, holding_input, owners};
 
     const SECRET: &str = "secret-quotidien-fictif";
 
@@ -77,6 +83,25 @@ mod tests {
         // Rejouée le même jour, la tâche remplace l'instantané au lieu d'en ajouter un.
         t.app.run_daily(Some(SECRET)).await.unwrap();
         assert_eq!(t.store.state().snapshots.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn daily_run_evaluates_alerts_once_per_condition() {
+        let t = TestApp::with_cron_secret(SECRET).await;
+        let input = AccountInput {
+            name: Some("Livret A".into()),
+            kind: Some("savings".into()),
+            cash_balance: Some(30_000.0),
+            owners: Some(owners(&[(t.alice, 1.0)])),
+            ..AccountInput::default()
+        };
+        t.create(input).await;
+        let report = t.app.run_daily(Some(SECRET)).await.unwrap();
+        assert_eq!(report.alerts.created, 1);
+        t.clock.advance_days(1);
+        let report = t.app.run_daily(Some(SECRET)).await.unwrap();
+        assert_eq!(report.alerts.created, 0);
+        assert_eq!(t.store.state().alerts.len(), 1);
     }
 
     #[tokio::test]

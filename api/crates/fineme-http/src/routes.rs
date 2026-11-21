@@ -17,11 +17,12 @@ use crate::AppState;
 use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
-    AccountBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery,
-    GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody, HistoryReviewQuery,
-    HoldingBody, HoldingsBulkBody, ImportProfileBody, LimitQuery, LoginBody, MemberBody,
-    OperationBody, OperationsBulkBody, PageQuery, PasswordChangeBody, PasswordResetBody,
-    RangeQuery, SetupBody, TransactionPatchBody, TransactionsBulkBody, ViewQuery,
+    AccountBody, AlertPatchBody, AlertRuleBody, AlertsQuery, BenchmarkBody, BudgetQuery,
+    BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody,
+    HistoryQuery, HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody,
+    ImportProfileBody, LimitQuery, LoginBody, MemberBody, OperationBody, OperationsBulkBody,
+    PageQuery, PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody,
+    TransactionPatchBody, TransactionsBulkBody, ViewQuery,
 };
 use crate::origin::ClientOrigin;
 use crate::output;
@@ -111,8 +112,21 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/history/points/{date}", put(history_correct))
         .route("/history/recompute", post(history_recompute))
         .route("/history/reset", post(history_reset))
+        .route("/performance", get(performance))
+        .route(
+            "/performance/benchmark",
+            get(benchmark_get)
+                .put(benchmark_put)
+                .delete(benchmark_delete),
+        )
         .route("/goals", get(goals_list).post(goals_create))
         .route("/goals/{id}", put(goals_update).delete(goals_delete))
+        .route("/alerts", get(alerts_list))
+        .route("/alerts/evaluate", post(alerts_evaluate))
+        .route("/alerts/read-all", post(alerts_read_all))
+        .route("/alerts/rules", get(alert_rules))
+        .route("/alerts/rules/{kind}", put(alert_rule_update))
+        .route("/alerts/{id}", put(alerts_update))
         .route("/connections/providers", get(connection_providers))
         .route(
             "/connections",
@@ -664,7 +678,84 @@ async fn history_reset(
     ok(json!({ "deleted_days": deleted_days }))
 }
 
+// ---------------------------------------------------------------- performance
+
+async fn performance(
+    State(app): State<AppState>,
+    Query(query): Query<PerformanceQuery>,
+) -> JsonResponse {
+    ok(output::performance(
+        &app.performance
+            .performance(query.member_id, query.from, query.to)
+            .await?,
+    ))
+}
+
+async fn benchmark_get(State(app): State<AppState>) -> JsonResponse {
+    ok(app
+        .performance
+        .benchmark()
+        .await?
+        .as_ref()
+        .map_or(Value::Null, output::benchmark_info))
+}
+
+async fn benchmark_put(
+    State(app): State<AppState>,
+    Json(body): Json<BenchmarkBody>,
+) -> JsonResponse {
+    ok(output::benchmark_info(
+        &app.performance.set_benchmark(&body.into()).await?,
+    ))
+}
+
+async fn benchmark_delete(State(app): State<AppState>) -> ApiResult<StatusCode> {
+    app.performance.delete_benchmark().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ---------------------------------------------------------------- objectifs
+
+// ---------------------------------------------------------------- alertes
+
+async fn alerts_list(
+    State(app): State<AppState>,
+    Query(query): Query<AlertsQuery>,
+) -> JsonResponse {
+    let alerts = app.alerts.list(query.archived).await?;
+    ok(Value::Array(alerts.iter().map(output::alert).collect()))
+}
+
+async fn alerts_evaluate(State(app): State<AppState>) -> JsonResponse {
+    ok(output::evaluation_report(&app.alerts.evaluate().await?))
+}
+
+async fn alerts_read_all(State(app): State<AppState>) -> JsonResponse {
+    ok(json!({ "updated": app.alerts.read_all().await? }))
+}
+
+async fn alerts_update(
+    State(app): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AlertPatchBody>,
+) -> JsonResponse {
+    ok(output::alert(&app.alerts.update(id, body.into()).await?))
+}
+
+async fn alert_rules(State(app): State<AppState>) -> JsonResponse {
+    let rules = app.alerts.rules().await?;
+    ok(Value::Array(rules.iter().map(output::alert_rule).collect()))
+}
+
+async fn alert_rule_update(
+    State(app): State<AppState>,
+    Path(kind): Path<String>,
+    Json(body): Json<AlertRuleBody>,
+) -> JsonResponse {
+    ok(output::alert_rule(
+        &app.alerts.update_rule(&kind, body.into()).await?,
+    ))
+}
 
 async fn goals_list(State(app): State<AppState>) -> JsonResponse {
     ok(app.goals.list().await?.iter().map(output::goal).collect())

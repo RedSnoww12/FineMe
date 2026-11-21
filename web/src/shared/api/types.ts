@@ -252,6 +252,42 @@ export type OperationYear = {
 }
 export type OperationsSummary = { currency: 'EUR'; years: OperationYear[] }
 
+/** Mesures de performance ; une fraction (0.05 = +5 %), null = indéfini. */
+export type Performance = {
+  from: string
+  to: string
+  start_value: number
+  end_value: number
+  net_flows: number
+  gain: number
+  twr: number | null
+  twr_annualized: number | null
+  mwr: number | null
+  mwr_annualized: number | null
+  years: { year: number; from: string; to: string; twr: number | null }[]
+  /** Courbe base 100 ; `benchmark` : indice ramené au même niveau, null hors fenêtre de comparaison. */
+  points: { date: string; value: number; benchmark: number | null }[]
+}
+export type BenchmarkKind = 'security' | 'crypto'
+export type Benchmark = {
+  name: string
+  symbol: string | null
+  isin: string | null
+  kind: BenchmarkKind
+  currency: string
+  prices: number
+  first_date: string | null
+  last_date: string | null
+  last_error: string | null
+}
+export type BenchmarkInput = { name: string; symbol?: string; isin?: string; kind: BenchmarkKind; currency: string }
+export type BenchmarkComparison = { from: string; to: string; benchmark_return: number; portfolio_return: number }
+export type PerformanceReport = {
+  portfolio: Performance | null
+  accounts: { account_id: string; name: string; kind: AccountKind; performance: Performance | null }[]
+  benchmark: (Benchmark & { comparison: BenchmarkComparison | null; message: string | null }) | null
+}
+
 export type RealEstateLoan = Loan & { account_id: string; name: string }
 export type RealEstateItem = {
   account: Account
@@ -391,6 +427,39 @@ export type Connection = {
   error: string | null
 }
 export type ConnectionCreated = { id: string; redirect_url: string }
+
+// Alertes et rappels
+export type AlertRuleKind = 'goals' | 'savings_ceiling' | 'net_worth_change' | 'connections' | 'stale_prices'
+export type AlertRule = {
+  kind: AlertRuleKind
+  enabled: boolean
+  /** savings_ceiling : ]0, 100] ; net_worth_change : ]0, 1000] ; sinon null. */
+  threshold_pct: number | null
+  /** savings_ceiling seulement : plafond en EUR. */
+  ceiling: number | null
+}
+export type AlertRuleInput = Partial<Omit<AlertRule, 'kind'>>
+export type AlertKind =
+  | 'goal_reached'
+  | 'goal_overdue'
+  | 'savings_ceiling'
+  | 'net_worth_change'
+  | 'connection_expired'
+  | 'connection_error'
+  | 'stale_prices'
+export type Alert = {
+  id: string
+  kind: AlertKind
+  severity: 'info' | 'warning'
+  title: string
+  message: string
+  created_at: string
+  read: boolean
+  archived: boolean
+  /** false : la condition a disparu depuis (alerte résolue). */
+  active: boolean
+}
+export type AlertEvaluation = { created: number; reopened: number; resolved: number }
 export type SyncResult = { accounts_updated: number; transactions_inserted: number }
 
 /** Le lot d'export est renvoyé tel quel à l'import : on ne le manipule pas côté front. */

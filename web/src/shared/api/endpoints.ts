@@ -4,8 +4,15 @@ import type {
   AccountDetail,
   Account,
   AccountInput,
+  Alert,
+  AlertEvaluation,
+  AlertRule,
+  AlertRuleInput,
+  AlertRuleKind,
   AuthResult,
   AuthStatus,
+  Benchmark,
+  BenchmarkInput,
   BudgetMonth,
   BudgetRule,
   BudgetTarget,
@@ -41,6 +48,7 @@ import type {
   Overview,
   PasswordChangeInput,
   PasswordResetInput,
+  PerformanceReport,
   PricesRefresh,
   Provider,
   RealEstate,
@@ -143,6 +151,14 @@ export const api = {
   history: (range: HistoryRange, view: View): Promise<History> =>
     request<History>('/api/history', { query: { range, ...view } }).then(normalizeHistory),
 
+  // Performance et indice de référence
+  performance: (period: { from?: string; to?: string }, view: View) =>
+    request<PerformanceReport>('/api/performance', { query: { ...period, ...view } }),
+  benchmark: () => request<Benchmark | null>('/api/performance/benchmark'),
+  setBenchmark: (body: BenchmarkInput) =>
+    request<Benchmark>('/api/performance/benchmark', { method: 'PUT', body }),
+  deleteBenchmark: () => request<void>('/api/performance/benchmark', { method: 'DELETE' }),
+
   // Nettoyage de l'historique
   historyReview: (view: View) => request<HistoryReview>('/api/history/points', { query: view }),
   correctHistoryPoint: (date: string, view: View, body: HistoryCorrectionInput) =>
@@ -166,6 +182,17 @@ export const api = {
     request<ConnectionCreated>('/api/connections', { method: 'POST', body: { provider } }),
   syncConnection: (id: string) => request<SyncResult>(`/api/connections/${id}/sync`, { method: 'POST' }),
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: 'DELETE' }),
+
+  // Alertes et rappels
+  alerts: (archived = false) =>
+    request<Alert[]>('/api/alerts', { query: archived ? { archived: 'true' } : undefined }),
+  evaluateAlerts: () => request<AlertEvaluation>('/api/alerts/evaluate', { method: 'POST' }),
+  updateAlert: (id: string, body: { read?: boolean; archived?: boolean }) =>
+    request<Alert>(`/api/alerts/${id}`, { method: 'PUT', body }),
+  readAllAlerts: () => request<{ updated: number }>('/api/alerts/read-all', { method: 'POST' }),
+  alertRules: () => request<AlertRule[]>('/api/alerts/rules'),
+  updateAlertRule: (kind: AlertRuleKind, body: AlertRuleInput) =>
+    request<AlertRule>(`/api/alerts/rules/${kind}`, { method: 'PUT', body }),
 
   // Import / export complet
   exportBundle: () => request<Bundle>('/api/export'),

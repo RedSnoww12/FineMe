@@ -3,10 +3,10 @@
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use fineme_application::ports::{
-    AccountWrite, BudgetRepository, ConnectionRepository, Credentials, FxRateRepository,
-    GoalRepository, ImportBatch, ImportProfileRepository, ImportRepository, LoginJournal,
-    OperationChange, OperationRepository, PortfolioRepository, PositionUpdate, PricePoint,
-    RepoError, SnapshotRepository, TransactionRepository, UserRepository,
+    AccountWrite, BenchmarkRepository, BudgetRepository, ConnectionRepository, Credentials,
+    FxRateRepository, GoalRepository, ImportBatch, ImportProfileRepository, ImportRepository,
+    LoginJournal, OperationChange, OperationRepository, PortfolioRepository, PositionUpdate,
+    PricePoint, RepoError, SnapshotRepository, TransactionRepository, UserRepository,
 };
 use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -22,6 +22,7 @@ use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
 use fineme_domain::operation::{Amount, Movement, MovementFields, Operation, OperationKind, Trade};
 use fineme_domain::ownership::Ownership;
+use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
 use fineme_domain::transaction::Transaction;
@@ -1301,6 +1302,89 @@ async fn operations_round_trip_update_positions_and_follow_their_holding() {
         .unwrap();
     db.store.delete_account(pea.id).await.unwrap();
     assert_eq!(count(&db, "investment_operations").await, 0);
+}
+
+#[tokio::test]
+async fn benchmark_prices_merge_recorded_quotes_with_matching_holding_history() {
+    let db = test_db().await;
+    assert!(db.store.benchmark().await.unwrap().is_none());
+    let (alice, _) = household(&db).await;
+    let pea = account(AccountKind::Investment, "PEA", &[(alice.id, 1.0)]);
+    save(&db, &pea).await;
+    // Position de même ISIN (en USD) avec deux cours, et une autre sans rapport.
+    let etf = holding(pea.id, "ETF Monde démo");
+    db.store.save_holding(&etf, at(2)).await.unwrap();
+    db.store
+        .update_prices(&[(etf.id, 30.0)], at(5))
+        .await
+        .unwrap();
+    db.store
+        .update_prices(&[(etf.id, 31.0)], at(6))
+        .await
+        .unwrap();
+
+    let usd = Currency::parse("USD").unwrap();
+    let benchmark = Benchmark::new(
+        "Monde",
+        None,
+        Some("fr0000000001".into()),
+        HoldingKind::Security,
+        usd.clone(),
+    )
+    .unwrap();
+    db.store.save_benchmark(&benchmark, true).await.unwrap();
+    assert_eq!(db.store.benchmark().await.unwrap(), Some(benchmark.clone()));
+    // Le cours relevé le 6 l'emporte sur celui de la position.
+    db.store
+        .record_benchmark_price(date(2026, 1, 6), 40.0)
+        .await
+        .unwrap();
+    db.store
+        .record_benchmark_price(date(2026, 1, 7), 41.0)
+        .await
+        .unwrap();
+    db.store
+        .record_benchmark_price(date(2026, 1, 7), 42.0)
+        .await
+        .unwrap();
+    let prices: Vec<(NaiveDate, f64)> = db
+        .store
+        .benchmark_prices(date(2026, 1, 1))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.date, p.price))
+        .collect();
+    assert_eq!(
+        prices,
+        vec![
+            (date(2026, 1, 5), 30.0),
+            (date(2026, 1, 6), 40.0),
+            (date(2026, 1, 7), 42.0)
+        ]
+    );
+
+    // Même instrument dans une autre devise : l'historique de la position n'est plus repris.
+    let eur = Benchmark::new(
+        "Monde",
+        None,
+        Some("FR0000000001".into()),
+        HoldingKind::Security,
+        Currency::eur(),
+    )
+    .unwrap();
+    db.store.save_benchmark(&eur, true).await.unwrap();
+    assert!(
+        db.store
+            .benchmark_prices(date(2026, 1, 1))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    assert!(db.store.delete_benchmark().await.unwrap());
+    assert!(!db.store.delete_benchmark().await.unwrap());
+    assert_eq!(count(&db, "benchmark_prices").await, 0);
 }
 
 #[tokio::test]

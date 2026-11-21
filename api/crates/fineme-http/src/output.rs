@@ -1,5 +1,6 @@
 //! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`.
 
+use fineme_application::alerts::EvaluationReport;
 use fineme_application::budget::{BudgetMonth, BudgetTransaction};
 use fineme_application::bundle::Bundle;
 use fineme_application::commands::{
@@ -9,9 +10,11 @@ use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
 use fineme_application::history::{HistoryReview, ReviewedPoint};
 use fineme_application::operations::{ImportReport, OperationView};
+use fineme_application::performance::{BenchmarkInfo, BenchmarkResult, PerformanceView};
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
+use fineme_domain::alert::{Alert, AlertRule};
 use fineme_domain::budget::{BudgetTarget, CategoryRule, Flows};
 use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
@@ -20,6 +23,7 @@ use fineme_domain::loan::ScheduleRow;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
 use fineme_domain::operation::YearSummary;
+use fineme_domain::performance::PerformanceReport;
 use fineme_domain::portfolio::{
     AccountDetail, AccountSnapshot, AccountView, HoldingView, LoanView, Overview, RealEstateReport,
     Totals,
@@ -310,6 +314,34 @@ pub fn daily_report(report: &DailyReport) -> Value {
     json!({
         "prices": refresh_report(&report.prices),
         "snapshot_date": report.snapshot_date,
+        "alerts": evaluation_report(&report.alerts),
+    })
+}
+
+pub fn evaluation_report(report: &EvaluationReport) -> Value {
+    json!({ "created": report.created, "reopened": report.reopened, "resolved": report.resolved })
+}
+
+pub fn alert(a: &Alert) -> Value {
+    json!({
+        "id": a.id.as_uuid(),
+        "kind": a.kind.as_str(),
+        "severity": a.severity.as_str(),
+        "title": a.title,
+        "message": a.message,
+        "created_at": a.created_at,
+        "read": a.read_at.is_some(),
+        "archived": a.archived_at.is_some(),
+        "active": a.is_active(),
+    })
+}
+
+pub fn alert_rule(rule: &AlertRule) -> Value {
+    json!({
+        "kind": rule.kind().as_str(),
+        "enabled": rule.enabled(),
+        "threshold_pct": rule.threshold_pct(),
+        "ceiling": rule.ceiling(),
     })
 }
 
@@ -613,6 +645,101 @@ pub fn bundle(bundle: &Bundle) -> Value {
         })))).collect::<Vec<_>>(),
         "accounts": accounts,
         "goals": goals,
+    })
+}
+
+// ---------------------------------------------------------------- performance
+
+fn performance_report(report: &PerformanceReport, benchmark: Option<&[Option<f64>]>) -> Value {
+    let points: Vec<Value> = report
+        .index
+        .iter()
+        .enumerate()
+        .map(|(i, point)| {
+            json!({
+                "date": point.date,
+                "value": point.value,
+                "benchmark": benchmark.and_then(|levels| levels.get(i).copied().flatten()),
+            })
+        })
+        .collect();
+    let years: Vec<Value> = report
+        .years
+        .iter()
+        .map(|y| json!({ "year": y.year, "from": y.from, "to": y.to, "twr": y.twr }))
+        .collect();
+    json!({
+        "from": report.from,
+        "to": report.to,
+        "start_value": report.start_value,
+        "end_value": report.end_value,
+        "net_flows": report.net_flows,
+        "gain": report.gain,
+        "twr": report.twr,
+        "twr_annualized": report.twr_annualized,
+        "mwr": report.mwr,
+        "mwr_annualized": report.mwr_annualized,
+        "years": years,
+        "points": points,
+    })
+}
+
+pub fn benchmark_info(info: &BenchmarkInfo) -> Value {
+    let b = &info.benchmark;
+    json!({
+        "name": b.name(),
+        "symbol": b.symbol(),
+        "isin": b.isin(),
+        "kind": b.kind().as_str(),
+        "currency": b.currency().as_str(),
+        "prices": info.prices,
+        "first_date": info.first_date,
+        "last_date": info.last_date,
+        "last_error": info.last_error,
+    })
+}
+
+fn benchmark_result(result: &BenchmarkResult) -> Value {
+    let mut value = benchmark_info(&result.info);
+    if let Value::Object(map) = &mut value {
+        map.insert(
+            "comparison".into(),
+            result.comparison.as_ref().map_or(Value::Null, |c| {
+                json!({
+                    "from": c.from,
+                    "to": c.to,
+                    "benchmark_return": c.benchmark_return,
+                    "portfolio_return": c.portfolio_return,
+                })
+            }),
+        );
+        map.insert("message".into(), json!(result.message));
+    }
+    value
+}
+
+pub fn performance(view: &PerformanceView) -> Value {
+    let levels = view
+        .benchmark
+        .as_ref()
+        .and_then(|b| b.comparison.as_ref())
+        .map(|c| c.points.as_slice());
+    let accounts: Vec<Value> = view
+        .accounts
+        .iter()
+        .map(|a| {
+            json!({
+                "account_id": a.account_id.as_uuid(),
+                "name": a.name,
+                "kind": a.kind.as_str(),
+                "performance": a.report.as_ref().map(|r| performance_report(r, None)),
+            })
+        })
+        .collect();
+    json!({
+        "portfolio": view.portfolio.as_ref().map(|r| performance_report(r, levels)),
+        "accounts": accounts,
+        "benchmark": view.benchmark.as_ref().map(benchmark_result),
     })
 }
 
