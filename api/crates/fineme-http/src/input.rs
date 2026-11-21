@@ -1,11 +1,13 @@
 //! DTO d'entrée (JSON → commandes des cas d'usage). Un champ nullable distingue « absent » de `null`.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use fineme_application::alerts::{AlertPatch, RulePatch};
 use fineme_application::bundle::{Bundle, BundleAccount, BundleGoal, BundleMember, BundleOwner};
 use fineme_application::commands::{
-    AccountInput, GoalInput, HoldingInput, LoanInput, OperationInput, OwnerInput, Patch,
-    PropertyInput, TransactionInput, TransactionPatch,
+    AccountInput, GoalInput, HoldingInput, LoanInput, OperationImportInput, OperationInput,
+    OwnerInput, Patch, PropertyInput, SecurityRef, TransactionInput, TransactionPatch,
 };
 use fineme_application::performance::BenchmarkInput;
 use serde::{Deserialize, Deserializer};
@@ -413,6 +415,54 @@ impl From<OperationBody> for OperationInput {
             note: b.note,
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct SecurityBody {
+    name: String,
+    isin: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct OperationImportBody {
+    kind: String,
+    date: NaiveDate,
+    security: Option<SecurityBody>,
+    quantity: Option<f64>,
+    unit_price: Option<f64>,
+    amount: Option<f64>,
+    fees: Option<f64>,
+    note: Option<String>,
+}
+
+impl From<OperationImportBody> for OperationImportInput {
+    fn from(b: OperationImportBody) -> Self {
+        Self {
+            kind: b.kind,
+            date: b.date,
+            security: b.security.map(|s| SecurityRef {
+                name: s.name,
+                isin: s.isin,
+            }),
+            quantity: b.quantity,
+            unit_price: b.unit_price,
+            amount: b.amount,
+            fees: b.fees,
+            note: b.note,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct OperationsBulkBody {
+    pub operations: Vec<OperationImportBody>,
+}
+
+#[derive(Deserialize)]
+pub struct ImportProfileBody {
+    #[serde(default)]
+    pub template: Option<String>,
+    pub columns: BTreeMap<String, String>,
 }
 
 #[derive(Default, Deserialize)]

@@ -181,6 +181,35 @@ choix manuels du budget, `null` = automatique, voir « Budget »)
 
 Le parsing du CSV et le mapping des colonnes se font côté front.
 
+## Modèles d'import CSV (préférence par compte)
+
+La correspondance des colonnes choisie lors d'un import est mémorisée par compte et par type de contenu, pour que
+l'import suivant du même établissement ne demande aucun réglage (quel que soit l'appareil). Les colonnes sont
+désignées par leur **nom d'en-tête**, pas par leur position. Les modèles prêts à l'emploi (formats courants de banques
+et courtiers) sont des données du front ; `template` mémorise seulement l'identifiant de celui qui a servi.
+
+```ts
+type ImportKind = "transactions" | "holdings" | "operations";
+type ImportProfile = {
+  kind: ImportKind;
+  template: string | null;          // identifiant du modèle prêt à l'emploi utilisé, sinon null
+  columns: Record<string, string>;  // champ → nom exact de la colonne dans le fichier
+  updated_at: string;               // ISO datetime
+};
+```
+
+Champs connus par type (les autres sont refusés) :
+- `transactions` : `date`, `label`, `amount`, `debit`, `credit`, `category` ;
+- `holdings` : `name`, `isin`, `quantity`, `buy_price`, `current_price` ;
+- `operations` : `date`, `kind`, `name`, `isin`, `quantity`, `unit_price`, `amount`, `debit`, `credit`, `fees`, `note`.
+
+- GET `/api/accounts/:id/import-profiles` → `ImportProfile[]`
+- PUT `/api/accounts/:id/import-profiles/:kind` `{ template?: string | null, columns: Record<string, string> }` →
+  `ImportProfile` (remplace la préférence de ce type ; au moins une colonne, noms non vides de 200 caractères au plus,
+  `template` de 64 caractères au plus)
+- Erreurs : (400) type ou champ inconnu, colonne vide ; (404) compte introuvable. Supprimer le compte supprime ses
+  préférences ; l'export complet (`Bundle`) ne les contient pas.
+
 ## Journal d'opérations (comptes d'investissement)
 
 Achats, ventes, dividendes, frais, versements et retraits d'un compte pouvant porter des positions
@@ -214,6 +243,8 @@ type OperationInput = {
 - POST `/api/accounts/:id/operations` `OperationInput` → `Operation` (201)
 - PUT `/api/operations/:id` `OperationInput` (remplacement complet, même compte) → `Operation`
 - DELETE `/api/operations/:id` → 204
+- POST `/api/accounts/:id/operations/bulk` `{ operations: OperationImportInput[] }` → `{ inserted, skipped, errors: { index, reason }[] }`
+  (import CSV, voir ci-dessous)
 - GET `/api/accounts/:id/operations/summary` →
   `{ currency: "EUR", years: { year, realized_gain, dividends, fees, deposits, withdrawals }[] }` (année la plus récente
   d'abord ; `fees` = frais des achats et ventes + opérations `fee` ; montants convertis en EUR aux taux actuels ;
@@ -238,6 +269,32 @@ Cohabitation avec la saisie manuelle :
 - supprimer la dernière opération d'achat/vente d'une position la remet à zéro ;
 - le journal ne modifie jamais `cash_balance` du compte ;
 - supprimer une position supprime son journal ; l'export/import complet (`Bundle`) ne contient pas le journal.
+
+### Import d'opérations (CSV)
+
+```ts
+type OperationImportInput = {
+  kind: OperationKind; date: string;
+  security?: { name: string; isin?: string }; // titre concerné, désigné par son nom (et son ISIN si connu)
+  quantity?: number; unit_price?: number; fees?: number; // buy/sell
+  amount?: number;                                       // dividend/fee/deposit/withdrawal
+  note?: string;
+};
+```
+
+- Les lignes sont traitées dans l'ordre chronologique (date, puis ordre du fichier) ; `index` désigne la position de
+  la ligne dans le tableau envoyé (à partir de 0).
+- `security` est rapproché d'une position du compte par ISIN, sinon par nom (casse et espaces ignorés). Un achat d'un
+  titre inconnu crée la position (`kind = security`, quantité 0, cours = cours de l'achat, devise du compte) ; une
+  vente d'un titre inconnu est en erreur ; un dividende ou des frais d'un titre inconnu sont importés sans position.
+  `security` est ignoré pour un versement ou un retrait.
+- Doublon : une opération déjà présente dans le journal avec les mêmes type, date, position, quantité, cours, montant
+  et frais est comptée dans `skipped` (chaque opération existante n'absorbe qu'une ligne du fichier ; ré-importer le
+  même fichier n'ajoute rien).
+- Une ligne invalide (champ manquant, date future, vente supérieure à la quantité détenue…) est rapportée dans
+  `errors` avec sa raison et n'empêche pas l'import des autres. Les lignes acceptées et les positions créées sont
+  enregistrées en une fois, et les positions concernées recalculées comme pour une saisie.
+- (400) plus de 5 000 lignes ou compte immobilier/prêt ; (404) compte introuvable.
 
 ## Immobilier et prêts
 

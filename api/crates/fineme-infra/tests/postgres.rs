@@ -4,9 +4,9 @@
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use fineme_application::ports::{
     AccountWrite, BenchmarkRepository, BudgetRepository, ConnectionRepository, Credentials,
-    FxRateRepository, GoalRepository, ImportBatch, ImportRepository, LoginJournal, OperationChange,
-    OperationRepository, PortfolioRepository, PositionUpdate, PricePoint, RepoError,
-    SnapshotRepository, TransactionRepository, UserRepository,
+    FxRateRepository, GoalRepository, ImportBatch, ImportProfileRepository, ImportRepository,
+    LoginJournal, OperationChange, OperationRepository, PortfolioRepository, PositionUpdate,
+    PricePoint, RepoError, SnapshotRepository, TransactionRepository, UserRepository,
 };
 use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -16,6 +16,7 @@ use fineme_domain::goal::{Goal, GoalKind};
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::*;
+use fineme_domain::import_profile::{ImportKind, ImportProfile};
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
@@ -1384,4 +1385,117 @@ async fn benchmark_prices_merge_recorded_quotes_with_matching_holding_history() 
     assert!(db.store.delete_benchmark().await.unwrap());
     assert!(!db.store.delete_benchmark().await.unwrap());
     assert_eq!(count(&db, "benchmark_prices").await, 0);
+}
+
+#[tokio::test]
+async fn operation_import_creates_holdings_and_operations_all_or_nothing() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let pea = account(AccountKind::Investment, "PEA", &[(alice.id, 1.0)]);
+    save(&db, &pea).await;
+    let new_etf = Holding {
+        quantity: 0.0,
+        buy_price: None,
+        ..holding(pea.id, "ETF importé")
+    };
+    let buy = operation(
+        pea.id,
+        2,
+        Movement::Buy(Trade::new(new_etf.id, 2.0, 50.0, 1.0).unwrap()),
+    );
+    let deposit = operation(
+        pea.id,
+        1,
+        Movement::Deposit(Amount::new(100.0, "amount").unwrap()),
+    );
+    let update = PositionUpdate {
+        holding: new_etf.id,
+        quantity: 2.0,
+        buy_price: Some(50.5),
+    };
+    let change = OperationChange::Import {
+        account: pea.id,
+        holdings: vec![new_etf.clone()],
+        operations: vec![deposit.clone(), buy.clone()],
+    };
+    db.store
+        .apply_operation(&change, &[update], at(4))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.store.operations(pea.id).await.unwrap(),
+        vec![deposit, buy]
+    );
+    let data = db.store.load().await.unwrap();
+    let stored = data.holdings.iter().find(|h| h.id == new_etf.id).unwrap();
+    assert_eq!((stored.quantity, stored.buy_price), (2.0, Some(50.5)));
+    assert_eq!(data.accounts[0].updated_at, at(4));
+
+    // Une opération orpheline annule tout l'import, positions créées comprises.
+    let other = holding(pea.id, "Autre ETF");
+    let orphan = operation(
+        pea.id,
+        3,
+        Movement::Buy(Trade::new(HoldingId::generate(), 1.0, 1.0, 0.0).unwrap()),
+    );
+    let refused = OperationChange::Import {
+        account: pea.id,
+        holdings: vec![other],
+        operations: vec![orphan],
+    };
+    assert_eq!(
+        db.store.apply_operation(&refused, &[], at(5)).await,
+        Err(RepoError::Reference)
+    );
+    assert_eq!(count(&db, "holdings").await, 1);
+    assert_eq!(count(&db, "investment_operations").await, 2);
+}
+
+#[tokio::test]
+async fn import_profiles_are_upserted_per_kind_and_deleted_with_their_account() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let checking = account(AccountKind::Checking, "Courant", &[(alice.id, 1.0)]);
+    save(&db, &checking).await;
+    let profile = |template: Option<&str>, header: &str, day: u32| {
+        ImportProfile::new(
+            checking.id,
+            ImportKind::Transactions,
+            template.map(Into::into),
+            [
+                ("date".to_string(), "Date opération".to_string()),
+                ("label".to_string(), header.to_string()),
+            ],
+            at(day),
+        )
+        .unwrap()
+    };
+    db.store
+        .save_profile(&profile(None, "Libellé", 1))
+        .await
+        .unwrap();
+    let replaced = profile(Some("banque-generique"), "Libellé simplifié", 2);
+    db.store.save_profile(&replaced).await.unwrap();
+    let holdings = ImportProfile::new(
+        checking.id,
+        ImportKind::Holdings,
+        None,
+        [("name".to_string(), "Valeur".to_string())],
+        at(3),
+    )
+    .unwrap();
+    db.store.save_profile(&holdings).await.unwrap();
+    assert_eq!(
+        db.store.profiles(checking.id).await.unwrap(),
+        vec![holdings, replaced]
+    );
+    assert!(
+        db.store
+            .profiles(AccountId::generate())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    db.store.delete_account(checking.id).await.unwrap();
+    assert_eq!(count(&db, "import_profiles").await, 0);
 }

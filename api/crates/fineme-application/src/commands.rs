@@ -96,6 +96,26 @@ pub struct OperationInput {
     pub note: Option<String>,
 }
 
+/// Titre désigné par une ligne d'import : rapproché d'une position du compte par ISIN, sinon par nom.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SecurityRef {
+    pub name: String,
+    pub isin: Option<String>,
+}
+
+/// Ligne d'un import CSV d'opérations : comme `OperationInput`, mais le titre est désigné par son nom.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationImportInput {
+    pub kind: String,
+    pub date: NaiveDate,
+    pub security: Option<SecurityRef>,
+    pub quantity: Option<f64>,
+    pub unit_price: Option<f64>,
+    pub amount: Option<f64>,
+    pub fees: Option<f64>,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GoalInput {
     pub name: Option<String>,

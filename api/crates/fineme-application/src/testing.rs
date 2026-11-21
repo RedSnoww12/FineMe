@@ -18,6 +18,7 @@ use fineme_domain::ids::{
     AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId,
     TransactionId, UserId,
 };
+use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::Member;
 use fineme_domain::operation::Operation;
@@ -42,6 +43,7 @@ pub struct State {
     pub rules: Vec<CategoryRule>,
     pub targets: Vec<BudgetTarget>,
     pub operations: Vec<Operation>,
+    pub import_profiles: Vec<ImportProfile>,
     /// Instantanés enregistrés, par vue (`None` = foyer).
     pub snapshots: Vec<(Option<MemberId>, SnapshotPoint)>,
     pub price_history: Vec<(HoldingId, PricePoint)>,
@@ -562,6 +564,15 @@ impl OperationRepository for InMemoryStore {
                 state.operations.retain(|existing| existing.id != *id);
                 *account
             }
+            OperationChange::Import {
+                account,
+                holdings,
+                operations,
+            } => {
+                state.holdings.extend(holdings.iter().cloned());
+                state.operations.extend(operations.iter().cloned());
+                *account
+            }
         };
         for update in positions {
             if let Some(holding) = state.holdings.iter_mut().find(|h| h.id == update.holding) {
@@ -570,6 +581,27 @@ impl OperationRepository for InMemoryStore {
             }
         }
         state.touch(account, at);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ImportProfileRepository for InMemoryStore {
+    async fn profiles(&self, account: AccountId) -> RepoResult<Vec<ImportProfile>> {
+        Ok(self
+            .lock()
+            .import_profiles
+            .iter()
+            .filter(|profile| profile.account_id() == account)
+            .cloned()
+            .collect())
+    }
+    async fn save_profile(&self, profile: &ImportProfile) -> RepoResult<()> {
+        let mut state = self.lock();
+        state.import_profiles.retain(|existing| {
+            (existing.account_id(), existing.kind()) != (profile.account_id(), profile.kind())
+        });
+        state.import_profiles.push(profile.clone());
         Ok(())
     }
 }
@@ -1089,6 +1121,7 @@ impl TestApp {
             connections: store.clone(),
             alerts: store.clone(),
             imports: store.clone(),
+            import_profiles: store.clone(),
             clock: clock.clone(),
             hasher: hasher.clone(),
             tokens: Arc::new(FakeTokens),

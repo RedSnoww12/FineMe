@@ -11,9 +11,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use fineme_application::ports::{
     AccountWrite, BenchmarkRepository, BudgetRepository, ConnectionRepository, Credentials,
-    FxRateRepository, GoalRepository, ImportBatch, ImportRepository, LoginJournal, OperationChange,
-    OperationRepository, PortfolioData, PortfolioRepository, PositionUpdate, PricePoint, RepoError,
-    RepoResult, SnapshotPoint, SnapshotRepository, TransactionRepository, UserRepository,
+    FxRateRepository, GoalRepository, ImportBatch, ImportProfileRepository, ImportRepository,
+    LoginJournal, OperationChange, OperationRepository, PortfolioData, PortfolioRepository,
+    PositionUpdate, PricePoint, RepoError, RepoResult, SnapshotPoint, SnapshotRepository,
+    TransactionRepository, UserRepository,
 };
 use fineme_domain::account::Account;
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -26,6 +27,7 @@ use fineme_domain::ids::{
     AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
     UserId,
 };
+use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::loan::Loan;
 use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
@@ -39,8 +41,9 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use rows::{
-    AccountRow, BudgetRuleRow, BudgetTargetRow, ConnectionRow, GoalRow, HoldingRow, LoanRow,
-    MemberRow, OperationRow, OwnerRow, PropertyRow, SnapshotAccountRow, TransactionRow,
+    AccountRow, BudgetRuleRow, BudgetTargetRow, ConnectionRow, GoalRow, HoldingRow,
+    ImportProfileRow, LoanRow, MemberRow, OperationRow, OwnerRow, PropertyRow, SnapshotAccountRow,
+    TransactionRow,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -1042,6 +1045,19 @@ impl OperationRepository for PgStore {
                     .map_err(db)?;
                 *account
             }
+            OperationChange::Import {
+                account,
+                holdings,
+                operations,
+            } => {
+                for holding in holdings {
+                    upsert_holding(&mut tx, holding).await?;
+                }
+                for operation in operations {
+                    upsert_operation(&mut tx, operation).await?;
+                }
+                *account
+            }
         };
         for position in positions {
             sqlx::query("UPDATE holdings SET quantity = $2, buy_price = $3 WHERE id = $1")
@@ -1054,6 +1070,47 @@ impl OperationRepository for PgStore {
         }
         touch_account(&mut tx, account.as_uuid(), at).await?;
         tx.commit().await.map_err(db)
+    }
+}
+
+#[async_trait]
+impl ImportProfileRepository for PgStore {
+    async fn profiles(&self, account: AccountId) -> RepoResult<Vec<ImportProfile>> {
+        sqlx::query_as::<_, ImportProfileRow>(
+            "SELECT account_id, kind, template, fields, headers, updated_at FROM import_profiles \
+             WHERE account_id = $1 ORDER BY kind",
+        )
+        .bind(account.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?
+        .into_iter()
+        .map(ImportProfile::try_from)
+        .collect()
+    }
+
+    async fn save_profile(&self, profile: &ImportProfile) -> RepoResult<()> {
+        let (fields, headers): (Vec<&str>, Vec<&str>) = profile
+            .columns()
+            .iter()
+            .map(|(field, header)| (field.as_str(), header.as_str()))
+            .unzip();
+        sqlx::query(
+            "INSERT INTO import_profiles (account_id, kind, template, fields, headers, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (account_id, kind) DO UPDATE SET \
+             template = EXCLUDED.template, fields = EXCLUDED.fields, headers = EXCLUDED.headers, \
+             updated_at = EXCLUDED.updated_at",
+        )
+        .bind(profile.account_id().as_uuid())
+        .bind(profile.kind().as_str())
+        .bind(profile.template())
+        .bind(fields)
+        .bind(headers)
+        .bind(profile.updated_at())
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
     }
 }
 

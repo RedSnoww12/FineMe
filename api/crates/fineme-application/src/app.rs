@@ -14,15 +14,16 @@ use crate::error::AppResult;
 use crate::goals::GoalService;
 use crate::history::HistoryService;
 use crate::holdings::HoldingService;
+use crate::import_profiles::ImportProfileService;
 use crate::members::MemberService;
 use crate::operations::OperationService;
 use crate::overview::OverviewService;
 use crate::performance::PerformanceService;
 use crate::ports::{
     AlertRepository, BankProvider, BenchmarkRepository, BudgetRepository, Clock,
-    ConnectionRepository, FxProvider, FxRateRepository, GoalRepository, ImportRepository,
-    LoginJournal, OperationRepository, PasswordHasher, PortfolioRepository, PriceProvider,
-    SnapshotRepository, TokenService, TransactionRepository, UserRepository,
+    ConnectionRepository, FxProvider, FxRateRepository, GoalRepository, ImportProfileRepository,
+    ImportRepository, LoginJournal, OperationRepository, PasswordHasher, PortfolioRepository,
+    PriceProvider, SnapshotRepository, TokenService, TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -45,6 +46,7 @@ pub struct Ports {
     pub connections: Arc<dyn ConnectionRepository>,
     pub alerts: Arc<dyn AlertRepository>,
     pub imports: Arc<dyn ImportRepository>,
+    pub import_profiles: Arc<dyn ImportProfileRepository>,
     pub clock: Arc<dyn Clock>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub tokens: Arc<dyn TokenService>,
@@ -77,6 +79,7 @@ pub struct App {
     pub accounts: AccountService,
     pub holdings: HoldingService,
     pub operations: OperationService,
+    pub import_profiles: ImportProfileService,
     pub transactions: TransactionService,
     pub budget: BudgetService,
     pub overview: OverviewService,
@@ -133,6 +136,11 @@ impl App {
                 operations: operations.clone(),
             },
             operations,
+            import_profiles: ImportProfileService {
+                reader: reader.clone(),
+                profiles: ports.import_profiles,
+                clock: ports.clock.clone(),
+            },
             transactions: TransactionService {
                 portfolio: ports.portfolio.clone(),
                 transactions: ports.transactions.clone(),
