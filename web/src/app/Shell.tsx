@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
 import { useMembers } from '@/shared/api/queries'
+import { DISCREET_SHORTCUT, isDiscreetShortcut, useDiscreet } from '@/shared/state/discreet'
 import { useView } from '@/shared/state/view'
 import { ErrorBoundary } from '@/shared/ui/ErrorBoundary'
+import { OfflineNotice } from '@/shared/ui/OfflineNotice'
 import { Icon, Logo, type IconName } from '@/shared/ui/Icon'
 import { cx } from '@/shared/ui/ui'
 
@@ -58,6 +60,42 @@ function ViewSwitcher({ compact = false }: { compact?: boolean }) {
   )
 }
 
+/** Masque ou affiche tous les montants (mode discret), aussi par Alt+Maj+D. */
+function DiscreetToggle({ withLabel = false }: { withLabel?: boolean }) {
+  const { hidden, toggle } = useDiscreet()
+  return (
+    <button
+      type="button"
+      aria-pressed={hidden}
+      aria-keyshortcuts={DISCREET_SHORTCUT}
+      aria-label={withLabel ? undefined : 'Masquer les montants'}
+      title={`Masquer les montants (${DISCREET_SHORTCUT.replace('Shift', 'Maj')})`}
+      onClick={toggle}
+      className={cx(
+        'inline-flex min-h-10 shrink-0 items-center gap-3 rounded-[9px] text-[14.5px] transition',
+        withLabel ? 'px-3' : 'size-10 justify-center',
+        hidden ? 'bg-accent-soft font-semibold text-accent' : 'text-muted hover:bg-surface-2 hover:text-ink',
+      )}
+    >
+      <Icon name={hidden ? 'eye-off' : 'eye'} size={withLabel ? 18 : 20} />
+      {withLabel ? 'Masquer les montants' : null}
+    </button>
+  )
+}
+
+function useDiscreetShortcut() {
+  const { toggle } = useDiscreet()
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isDiscreetShortcut(event) || event.repeat) return
+      event.preventDefault()
+      toggle()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [toggle])
+}
+
 function navClass({ isActive }: { isActive: boolean }) {
   return cx(
     'flex min-h-10 items-center gap-3 rounded-[9px] px-3 text-[14.5px] transition',
@@ -68,6 +106,7 @@ function navClass({ isActive }: { isActive: boolean }) {
 export function Shell() {
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
+  useDiscreetShortcut()
 
   useEffect(() => {
     window.scrollTo(0, 0)
@@ -101,7 +140,13 @@ export function Shell() {
             </NavLink>
           ))}
         </nav>
+        <div className="mt-auto">
+          <DiscreetToggle withLabel />
+        </div>
       </aside>
+
+      {/* Dans la colonne de contenu : jamais sous la barre latérale. */}
+      <OfflineNotice />
 
       {/* Barre supérieure (téléphone) */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-surface/95 px-4 py-2.5 backdrop-blur lg:hidden">
@@ -109,7 +154,10 @@ export function Shell() {
           <Logo size={26} />
           <span className="font-display text-[19px] font-semibold tracking-tight">FineMe</span>
         </NavLink>
-        <ViewSwitcher compact />
+        <div className="flex items-center gap-1">
+          <DiscreetToggle />
+          <ViewSwitcher compact />
+        </div>
       </header>
 
       <main id="contenu" className="mx-auto w-full max-w-[1180px] px-4 pt-5 pb-28 sm:px-6 lg:px-9 lg:pt-9 lg:pb-14">

@@ -1,11 +1,14 @@
 import { QueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/shared/api/client'
+import { PERSISTED_CACHE_MAX_AGE_MS } from '@/shared/api/persistence'
 
 export function createQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
         staleTime: 30_000,
+        // Gardées en mémoire aussi longtemps que leur copie locale, pour être relues hors ligne.
+        gcTime: PERSISTED_CACHE_MAX_AGE_MS,
         // Une erreur 4xx est une réponse de l'API : la rejouer ne change rien. Les autres (réseau, 502/503 de
         // l'hébergeur pendant le réveil de l'API) sont rejouées trois fois, à 1, 2 puis 4 s d'intervalle.
         retry: (failureCount, error) =>
