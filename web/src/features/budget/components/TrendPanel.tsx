@@ -19,7 +19,7 @@ export function TrendPanel({ trend }: { trend: BudgetFlows[] }) {
           <BarChart data={trend} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} accessibilityLayer={false}>
             <CartesianGrid stroke="var(--line)" vertical={false} />
             <XAxis dataKey="month" tickFormatter={monthShort} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: 'var(--line)' }} />
-            <YAxis tickFormatter={moneyCompact} tick={AXIS_TICK} tickLine={false} axisLine={false} width={64} />
+            <YAxis tickFormatter={(value: number) => moneyCompact(value)} tick={AXIS_TICK} tickLine={false} axisLine={false} width={64} />
             <Tooltip
               cursor={{ fill: 'var(--surface-2)' }}
               content={(props) => <MoneyTooltip {...props} formatLabel={(label) => monthLabel(String(label))} />}
