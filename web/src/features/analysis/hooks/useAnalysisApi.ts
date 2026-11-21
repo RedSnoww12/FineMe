@@ -1,4 +1,4 @@
-import { keepPreviousData, useQueries, useQuery, type UseQueryResult } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { api } from '@/shared/api/endpoints'
 import type { HistoryRange } from '@/shared/api/types'
 import { useView } from '@/shared/state/view'
@@ -51,6 +51,27 @@ export function useLoanSchedules(accountIds: readonly string[]) {
     })),
     combine: combineAll,
   })
+}
+
+/** Performance (TWR, MWR) de la vue sur la période ; désactivée tant que la période est invalide. */
+export function usePerformance(bounds: { from?: string; to?: string } | null) {
+  const { memberId } = useView()
+  return useQuery({
+    queryKey: ['performance', bounds, memberId],
+    queryFn: () => api.performance(bounds ?? {}, { member_id: memberId }),
+    enabled: bounds !== null,
+    placeholderData: keepPreviousData,
+  })
+}
+
+/** Choix ou retrait de l'indice de référence : la performance est relue ensuite. */
+export function useBenchmarkMutations() {
+  const queryClient = useQueryClient()
+  const onSuccess = () => void queryClient.invalidateQueries({ queryKey: ['performance'] })
+  return {
+    save: useMutation({ mutationFn: api.setBenchmark, onSuccess }),
+    remove: useMutation({ mutationFn: api.deleteBenchmark, onSuccess }),
+  }
 }
 
 /** Détail (positions comprises) des comptes donnés. Clé partagée avec la fiche d'un compte. */
