@@ -3,6 +3,7 @@ import { PersistQueryClientProvider, type Persister } from '@tanstack/react-quer
 import type { ReactNode } from 'react'
 import { PERSISTED_CACHE_BUSTER, PERSISTED_CACHE_MAX_AGE_MS } from '@/shared/api/persistence'
 import { AuthProvider } from '@/shared/state/auth'
+import { DiscreetProvider } from '@/shared/state/discreet'
 import { ThemeProvider } from '@/shared/state/theme'
 import { ViewProvider } from '@/shared/state/view'
 
@@ -31,7 +32,9 @@ export function Providers({ queryClient, persister, children }: Props) {
     <QueryProvider queryClient={queryClient} persister={persister}>
       <ThemeProvider>
         <AuthProvider>
-          <ViewProvider>{children}</ViewProvider>
+          <DiscreetProvider>
+            <ViewProvider>{children}</ViewProvider>
+          </DiscreetProvider>
         </AuthProvider>
       </ThemeProvider>
     </QueryProvider>

@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest'
-import { date, dateTime, duration, money, moneyCompact, number, pct, pctFromFraction, toInput, todayIso } from './format'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  date,
+  dateTime,
+  duration,
+  MASK,
+  money,
+  moneyCompact,
+  number,
+  pct,
+  pctFromFraction,
+  setAmountsHidden,
+  shortDateTime,
+  toInput,
+  todayIso,
+} from './format'
 
 // fr-FR sépare les milliers par une espace fine insécable et place une espace insécable avant € et %.
 const plain = (text: string) => text.replace(/[  ]/g, ' ')
@@ -32,6 +46,41 @@ describe('money', () => {
     expect(money(undefined)).toBe('–')
     expect(money(Number.NaN)).toBe('–')
     expect(money(Number.POSITIVE_INFINITY)).toBe('–')
+  })
+})
+
+describe('mode discret', () => {
+  afterEach(() => setAmountsHidden(false))
+
+  it('masque les chiffres en gardant le symbole de la devise', () => {
+    expect(plain(money(1234.5, { masked: true }))).toBe(`${MASK} €`)
+    expect(plain(money(10, { currency: 'USD', decimals: 2, masked: true }))).toBe(`${MASK} $US`)
+  })
+  it('ne laisse deviner ni le signe ni l’ordre de grandeur', () => {
+    const masked = [money(-250, { signed: true, masked: true }), money(250, { signed: true, masked: true }), money(12_345_678, { masked: true })]
+    expect(new Set(masked).size).toBe(1)
+    expect(masked[0]).not.toMatch(/[\d+-]/)
+  })
+  it('suit l’interrupteur global, y compris pour les axes de graphiques', () => {
+    setAmountsHidden(true)
+    expect(plain(money(1234))).toBe(`${MASK} €`)
+    expect(plain(moneyCompact(12_000))).toBe(`${MASK} €`)
+    setAmountsHidden(false)
+    expect(plain(money(1234))).toBe('1 234 €')
+  })
+  it('garde le tiret des valeurs absentes et ne masque pas les pourcentages', () => {
+    setAmountsHidden(true)
+    expect(money(null)).toBe('–')
+    expect(plain(pct(7))).toBe('7,0 %')
+  })
+  it('reste sur un code devise inconnu', () => {
+    expect(money(10, { currency: 'pas-une-devise', masked: true })).toBe(MASK)
+  })
+})
+
+describe('shortDateTime', () => {
+  it('formate en JJ/MM HH:mm, heure locale', () => {
+    expect(shortDateTime(new Date(2026, 10, 3, 9, 5).getTime())).toBe('03/11 09:05')
   })
 })
 
