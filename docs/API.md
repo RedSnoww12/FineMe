@@ -114,7 +114,7 @@ type Account = {
 ```
 
 Calcul de `value` :
-- `real_estate` : `property.current_value`
+- `real_estate` : `property.current_value` (valeur de l'estimation en vigueur, voir « Estimations de valeur d'un bien »)
 - `loan` : capital restant dû à aujourd'hui (tableau d'amortissement ; avant `start_date` = `principal`)
 - autres : `cash_balance` + Σ `holding.quantity × holding.current_price`, convertis en EUR.
 
@@ -307,7 +307,7 @@ type Property = {
   surface_m2: number | null;
   purchase_price: number; purchase_fees: number; // frais de notaire/agence
   purchased_at: string | null;
-  current_value: number;
+  current_value: number;         // calculé : valeur de l'estimation la plus récente à date (voir ci-dessous)
   monthly_rent: number;          // 0 si non loué
   monthly_charges: number;       // charges non récupérables
   yearly_property_tax: number;
@@ -333,6 +333,43 @@ type Loan = {
   `RealEstateItem = { account: Account, property: Property, loans: (Loan & {account_id, name})[], equity, gross_yield_pct | null, net_yield_pct | null, latent_gain }`
   (`equity` = valeur − capital restant dû des prêts liés ; rendements seulement si `monthly_rent > 0`)
 - GET `/api/loans/:account_id/schedule` → `{ loan: Loan, rows: [{ month: number, date, payment, interest, principal, insurance, remaining }] }`
+
+### Estimations de valeur d'un bien
+
+```ts
+type Valuation = {
+  id: string; account_id: string;      // compte immobilier
+  valued_on: string;                   // date de l'estimation, jamais future
+  value: number;                       // > 0, devise du compte
+  source: "manual" | "price_per_m2" | "external";
+  price_per_m2: number | null;         // prix retenu si source = price_per_m2
+  note: string | null;
+  recorded_at: string;                 // ISO datetime de la saisie
+};
+type ValuationInput = {
+  value?: number;                      // ou bien :
+  price_per_m2?: number;               // valeur = surface_m2 du bien × prix (surface requise)
+  valued_on?: string;                  // défaut : aujourd'hui
+  source?: "manual" | "external";      // défaut "manual" ; forcé à "price_per_m2" avec price_per_m2
+  note?: string | null;
+};
+```
+
+- GET `/api/accounts/:id/valuations` → `Valuation[]`, de la plus récente à la plus ancienne (404 si le compte n'est pas un bien)
+- POST `/api/accounts/:id/valuations` `ValuationInput` → 201 `Valuation`
+- PUT `/api/valuations/:id` `ValuationInput` (champs absents conservés) → `Valuation`
+- DELETE `/api/valuations/:id` → 204 ; (409) s'il s'agit de la dernière estimation du bien
+
+Règles :
+- Valeur courante (`property.current_value`, valeur du compte, patrimoine, instantané quotidien) = estimation la plus
+  récente datée au plus tard aujourd'hui (à date égale, la dernière saisie).
+- (400) `value` ≤ 0, `valued_on` dans le futur, `value` et `price_per_m2` ensemble, ni l'un ni l'autre à la création,
+  `price_per_m2` sans surface, `source = "price_per_m2"` sans `price_per_m2`.
+- Compatibilité : `POST /api/accounts` crée la première estimation (`manual`, datée du jour) depuis `current_value`
+  (à défaut `purchase_price`) si elle est > 0 ; `PUT /api/accounts/:id` avec un `property.current_value` différent de la
+  valeur courante ajoute une estimation `manual` datée du jour (identique : rien n'est ajouté ; 0 : 400).
+- Migration : chaque bien existant de valeur > 0 reçoit une première estimation `manual` de sa valeur actuelle,
+  datée du jour de création de son compte.
 
 ## Vue d'ensemble
 
@@ -666,6 +703,8 @@ type Bundle = {
     currency?: string; cash_balance?: number; annual_yield_pct?: number; opened_at?: string;
     owners: { member: string; share: number }[];      // member = nom
     holdings?: HoldingInput[]; property?: PropertyInput;
+    // bien : historique des estimations, du plus ancien au plus récent ; non vide, il remplace celui du bien
+    valuations?: { valued_on: string; value: number; source?: string; price_per_m2?: number; note?: string }[];
     loan?: LoanInput & { property_external_id?: string };
   }[];
   goals: (GoalInput sans account_ids/member_ids & { account_external_ids: string[]; members: string[] })[];
