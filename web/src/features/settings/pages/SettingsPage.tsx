@@ -8,6 +8,7 @@ import {
   useImportBundle,
   useSaveMember,
 } from '../hooks/useSettingsApi'
+import { LoginHistoryPanel } from '../components/LoginHistoryPanel'
 import type { Bundle, ImportResult, Member } from '@/shared/api/types'
 import {
   Badge,
@@ -396,6 +397,7 @@ export default function SettingsPage() {
           />
         </Panel>
         <PasswordPanel />
+        <LoginHistoryPanel />
         <Panel title="Session">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-muted">

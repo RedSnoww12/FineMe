@@ -1,9 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getToken, setToken, UNAUTHORIZED_EVENT } from '@/shared/api/client'
+import { api } from '@/shared/api/endpoints'
 import type { AuthResult, User } from '@/shared/api/types'
+import { shouldRefresh } from '@/shared/lib/token'
 
 const USER_KEY = 'fineme.user'
+const REFRESH_CHECK_MS = 60 * 60 * 1000
 
 type AuthContextValue = {
   isAuthenticated: boolean
@@ -67,6 +70,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     [queryClient, renewSession],
   )
+
+  // Renouvellement glissant : au chargement puis toutes les heures, un jeton de plus d'un jour est remplacé.
+  // Un échec réseau est ignoré (nouvel essai à l'heure suivante) ; un 401 déconnecte via le client API.
+  useEffect(() => {
+    if (!token) return
+    const refreshIfDue = () => {
+      const current = getToken()
+      if (!current || !shouldRefresh(current, Date.now())) return
+      api.refreshSession().then(renewSession, () => {})
+    }
+    refreshIfDue()
+    const timer = window.setInterval(refreshIfDue, REFRESH_CHECK_MS)
+    return () => window.clearInterval(timer)
+  }, [token, renewSession])
 
   // Le client API vide le jeton sur un 401 ; on synchronise l'état pour revenir à la connexion.
   useEffect(() => {

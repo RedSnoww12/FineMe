@@ -7,6 +7,14 @@ export type SetupInput = { email: string; password: string; name: string; setup_
 export type AuthResult = { token: string; user: User }
 export type PasswordChangeInput = { current_password: string; new_password: string }
 export type PasswordResetInput = { email: string; recovery_token: string; new_password: string }
+/** Tentative de connexion (`login`) ou de réinitialisation (`reset`) ; `at` en RFC 3339. */
+export type LoginEvent = {
+  at: string
+  action: 'login' | 'reset'
+  success: boolean
+  ip: string | null
+  user_agent: string | null
+}
 
 export type Member = { id: string; name: string; color: string; is_primary: boolean }
 export type MemberInput = { name: string; color?: string }

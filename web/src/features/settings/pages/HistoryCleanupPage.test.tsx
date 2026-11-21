@@ -210,6 +210,7 @@ describe('écran de nettoyage de l’historique', () => {
   it('est accessible depuis les paramètres', async () => {
     mockShell()
     mockReview()
+    mockJson('get', '/api/auth/logins', [])
     const { user } = renderApp('/parametres')
     await user.click(await screen.findByRole('link', { name: 'Nettoyer l’historique' }))
     expect(await screen.findByRole('heading', { name: 'Historique des graphiques' })).toBeInTheDocument()

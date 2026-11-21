@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { api } from '@/shared/api/endpoints'
 import { useApiMutation } from '@/shared/api/queries'
 import type { AuthResult, Bundle, ImportResult, MemberInput } from '@/shared/api/types'
@@ -21,6 +21,10 @@ export function useExportBundle(onSuccess: (bundle: Bundle) => void) {
 
 export function useImportBundle(onSuccess: (result: ImportResult) => void) {
   return useApiMutation((bundle: Bundle) => api.importBundle(bundle), onSuccess)
+}
+
+export function useLoginHistory() {
+  return useQuery({ queryKey: ['login-history'], queryFn: () => api.loginHistory() })
 }
 
 export function useChangePassword(onSuccess: (result: AuthResult) => void) {

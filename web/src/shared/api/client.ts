@@ -8,14 +8,17 @@ export const UNREACHABLE_MESSAGE =
 
 export class ApiError extends Error {
   status: number
+  /** Secondes à attendre avant de réessayer (en-tête `Retry-After` d'une réponse 429), sinon null. */
+  retryAfter: number | null
   /** true quand le serveur n'a pas répondu (réseau, proxy, serveur arrêté). */
   unreachable: boolean
 
-  constructor(message: string, status: number, unreachable = false) {
+  constructor(message: string, status: number, unreachable = false, retryAfter: number | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.unreachable = unreachable
+    this.retryAfter = retryAfter
   }
 }
 
@@ -36,7 +39,19 @@ export function setToken(token: string | null) {
   }
 }
 
-export type Query = Record<string, string | number | null | undefined>
+/** `Retry-After` en secondes (entier positif) ; null si absent ou illisible. */
+export function parseRetryAfter(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value.trim())) return null
+  const seconds = Number(value.trim())
+  return seconds > 0 ? seconds : null
+}
+
+/** Attente imposée par l'API après trop de tentatives, si `error` en est une. */
+export function retryAfterOf(error: unknown): number | null {
+  return error instanceof ApiError ? error.retryAfter : null
+}
+
+export type Query =Record<string, string | number | null | undefined>
 
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
@@ -96,7 +111,12 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (!apiMessage && response.status >= 500) {
       throw new ApiError(UNREACHABLE_MESSAGE, response.status, true)
     }
-    throw new ApiError(apiMessage ?? `La requête a échoué (erreur ${response.status}).`, response.status)
+    throw new ApiError(
+      apiMessage ?? `La requête a échoué (erreur ${response.status}).`,
+      response.status,
+      false,
+      response.status === 429 ? parseRetryAfter(response.headers.get('Retry-After')) : null,
+    )
   }
 
   if (data === undefined) {
