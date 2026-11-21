@@ -7,6 +7,7 @@ use fineme_application::commands::{
 use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
 use fineme_application::history::{HistoryReview, ReviewedPoint};
+use fineme_application::operations::OperationView;
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
 use fineme_domain::account::AccountKind;
@@ -14,6 +15,7 @@ use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
 use fineme_domain::loan::ScheduleRow;
 use fineme_domain::member::{Member, User};
+use fineme_domain::operation::YearSummary;
 use fineme_domain::portfolio::{
     AccountDetail, AccountSnapshot, AccountView, HoldingView, LoanView, Overview, RealEstateReport,
     Totals,
@@ -333,6 +335,43 @@ pub fn transaction(t: &Transaction) -> Value {
         "amount": t.amount,
         "category": t.category,
     })
+}
+
+pub fn operation(view: &OperationView) -> Value {
+    let op = &view.operation;
+    let trade = op.movement.trade();
+    json!({
+        "id": op.id.as_uuid(),
+        "account_id": op.account_id.as_uuid(),
+        "kind": op.movement.kind().as_str(),
+        "date": op.date,
+        "holding_id": op.movement.holding().map(|id| id.as_uuid()),
+        "holding_name": view.holding_name,
+        "quantity": trade.map(|t| t.quantity()),
+        "unit_price": trade.map(|t| t.unit_price()),
+        "amount": op.movement.amount(),
+        "fees": op.movement.trade().map_or(0.0, |t| t.fees()),
+        "currency": op.currency.as_str(),
+        "note": op.note,
+        "realized_gain": view.realized_gain,
+    })
+}
+
+pub fn operations_summary(years: &[YearSummary]) -> Value {
+    let years: Vec<Value> = years
+        .iter()
+        .map(|y| {
+            json!({
+                "year": y.year,
+                "realized_gain": y.realized_gain,
+                "dividends": y.dividends,
+                "fees": y.fees,
+                "deposits": y.deposits,
+                "withdrawals": y.withdrawals,
+            })
+        })
+        .collect();
+    json!({ "currency": "EUR", "years": years })
 }
 
 pub fn connection(c: &Connection) -> Value {

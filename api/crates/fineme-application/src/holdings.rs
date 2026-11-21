@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::commands::{HoldingInput, clean};
 use crate::error::{AppError, AppResult};
+use crate::operations::OperationService;
 use crate::ports::{AccountWrite, Clock, PortfolioRepository};
 use crate::reader::PortfolioReader;
 
@@ -99,10 +100,31 @@ pub struct HoldingService {
     pub(crate) reader: PortfolioReader,
     pub(crate) repo: Arc<dyn PortfolioRepository>,
     pub(crate) clock: Arc<dyn Clock>,
+    /// Journal d'opérations : il pilote la quantité et le PRU des positions qui y ont des achats ou ventes.
+    pub(crate) operations: OperationService,
+}
+
+fn differs(a: f64, b: f64) -> bool {
+    (a - b).abs() > 1e-9
+}
+
+/// Vrai si l'entrée modifie la quantité ou le PRU de la position (renvoyer les mêmes valeurs ne compte pas).
+fn changes_position(existing: &Holding, input: &HoldingInput) -> bool {
+    let quantity = input
+        .quantity
+        .is_some_and(|quantity| differs(quantity, existing.quantity));
+    let buy_price = input
+        .buy_price
+        .is_some_and(|price| match (price, existing.buy_price) {
+            (Some(new), Some(old)) => differs(new, old),
+            (None, None) => false,
+            _ => true,
+        });
+    quantity || buy_price
 }
 
 /// Compte capable de porter des positions (ni immobilier ni prêt).
-fn positions_account(portfolio: &Portfolio, account_id: Uuid) -> AppResult<&Account> {
+pub(crate) fn positions_account(portfolio: &Portfolio, account_id: Uuid) -> AppResult<&Account> {
     let account = portfolio
         .account(AccountId::from_uuid(account_id))
         .ok_or(AppError::NotFound("Compte introuvable"))?;
@@ -170,6 +192,11 @@ impl HoldingService {
         let account = portfolio
             .account(existing.account_id)
             .ok_or(AppError::NotFound("Compte introuvable"))?;
+        if changes_position(existing, input) && self.operations.drives(existing).await? {
+            return Err(AppError::Conflict(
+                "La quantité et le PRU de cette position sont calculés à partir de son journal d'opérations",
+            ));
+        }
         let now = self.clock.now();
         let holding = build_holding(Some(existing), account, input, now)?;
         self.repo.save_holding(&holding, now).await?;

@@ -11,11 +11,12 @@ use crate::goals::GoalService;
 use crate::history::HistoryService;
 use crate::holdings::HoldingService;
 use crate::members::MemberService;
+use crate::operations::OperationService;
 use crate::overview::OverviewService;
 use crate::ports::{
     BankProvider, Clock, ConnectionRepository, FxProvider, FxRateRepository, GoalRepository,
-    ImportRepository, PasswordHasher, PortfolioRepository, PriceProvider, SnapshotRepository,
-    TokenService, TransactionRepository, UserRepository,
+    ImportRepository, OperationRepository, PasswordHasher, PortfolioRepository, PriceProvider,
+    SnapshotRepository, TokenService, TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -29,6 +30,7 @@ pub struct Ports {
     pub portfolio: Arc<dyn PortfolioRepository>,
     pub fx_rates: Arc<dyn FxRateRepository>,
     pub transactions: Arc<dyn TransactionRepository>,
+    pub operations: Arc<dyn OperationRepository>,
     pub snapshots: Arc<dyn SnapshotRepository>,
     pub goals: Arc<dyn GoalRepository>,
     pub connections: Arc<dyn ConnectionRepository>,
@@ -64,6 +66,7 @@ pub struct App {
     pub members: MemberService,
     pub accounts: AccountService,
     pub holdings: HoldingService,
+    pub operations: OperationService,
     pub transactions: TransactionService,
     pub overview: OverviewService,
     pub history: HistoryService,
@@ -81,6 +84,11 @@ impl App {
         let reader = PortfolioReader {
             repo: ports.portfolio.clone(),
             fx: ports.fx_rates.clone(),
+            clock: ports.clock.clone(),
+        };
+        let operations = OperationService {
+            reader: reader.clone(),
+            operations: ports.operations,
             clock: ports.clock.clone(),
         };
         // Hash factice calculé une fois : vérifié à la connexion quand l'e-mail est inconnu.
@@ -107,7 +115,9 @@ impl App {
                 reader: reader.clone(),
                 repo: ports.portfolio.clone(),
                 clock: ports.clock.clone(),
+                operations: operations.clone(),
             },
+            operations,
             transactions: TransactionService {
                 portfolio: ports.portfolio.clone(),
                 transactions: ports.transactions.clone(),
