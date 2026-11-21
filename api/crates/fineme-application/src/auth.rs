@@ -8,9 +8,11 @@ use fineme_domain::throttle::{LoginThrottle, retry_after_seconds};
 
 use crate::error::{AppError, AppResult};
 use crate::ports::{
-    Clock, Credentials, LoginJournal, PasswordHasher, TokenService, TokenSubject, UserRepository,
+    Clock, Credentials, LoginJournal, PasswordHasher, SecondFactorRepository, TokenService,
+    TokenSubject, TotpSupport, UserRepository,
 };
 use crate::secret::code_matches;
+use crate::totp::LoginOutcome;
 
 /// Nombre de tentatives renvoyées par défaut par le journal des connexions, et plafond.
 pub const DEFAULT_LOGIN_HISTORY: i64 = 50;
@@ -22,7 +24,7 @@ pub const MIN_PASSWORD_LEN: usize = 10;
 /// Longueur minimale du code de secours : la route de réinitialisation est publique.
 pub const MIN_RECOVERY_TOKEN_LEN: usize = 16;
 const INVALID_CREDENTIALS: &str = "E-mail ou mot de passe incorrect";
-const INVALID_SESSION: &str = "Session invalide ou expirée";
+pub(crate) const INVALID_SESSION: &str = "Session invalide ou expirée";
 const INVALID_SETUP_TOKEN: &str = "Code de configuration invalide ou manquant";
 const INVALID_RECOVERY_TOKEN: &str = "Code de secours invalide ou manquant";
 const RECOVERY_DISABLED: &str =
@@ -51,6 +53,8 @@ pub struct Session {
 
 pub struct AuthService {
     pub(crate) users: Arc<dyn UserRepository>,
+    pub(crate) second_factor: Arc<dyn SecondFactorRepository>,
+    pub(crate) totp: Arc<dyn TotpSupport>,
     pub(crate) journal: Arc<dyn LoginJournal>,
     /// Échecs récents par IP et globalement (en mémoire : une seule instance de l'API).
     pub(crate) throttle: Mutex<LoginThrottle>,
@@ -91,7 +95,7 @@ impl AuthService {
         }
     }
 
-    fn open_session(&self, credentials: Credentials) -> AppResult<Session> {
+    pub(crate) fn open_session(&self, credentials: Credentials) -> AppResult<Session> {
         let subject = TokenSubject {
             user: credentials.user.id,
             session_version: credentials.session_version,
@@ -146,7 +150,7 @@ impl AuthService {
         self.open_session(credentials)
     }
 
-    fn throttle(&self) -> MutexGuard<'_, LoginThrottle> {
+    pub(crate) fn throttle(&self) -> MutexGuard<'_, LoginThrottle> {
         // Un verrou empoisonné ne contient qu'un compteur : on continue avec son état.
         self.throttle
             .lock()
@@ -154,7 +158,7 @@ impl AuthService {
     }
 
     /// Refuse (429) une tentative tant que le délai imposé à cette IP, ou à tout le serveur, court.
-    fn check_throttle(&self, origin: &LoginOrigin) -> AppResult<()> {
+    pub(crate) fn check_throttle(&self, origin: &LoginOrigin) -> AppResult<()> {
         self.throttle()
             .check(origin.throttle_key(), self.clock.now())
             .map_err(|wait| AppError::TooManyAttempts(retry_after_seconds(wait)))
@@ -162,7 +166,7 @@ impl AuthService {
 
     /// Met à jour le limiteur et le journal selon l'issue d'une tentative. Seuls les refus d'identité
     /// (mauvais mot de passe, code ou e-mail) comptent comme échecs ; une saisie invalide ne compte pas.
-    async fn conclude<T>(
+    pub(crate) async fn conclude<T>(
         &self,
         action: LoginAction,
         origin: &LoginOrigin,
@@ -201,27 +205,36 @@ impl AuthService {
     }
 
     /// Connexion limitée en fréquence et journalisée : même message et même coût que l'e-mail soit
-    /// inconnu ou le mot de passe faux.
+    /// inconnu ou le mot de passe faux. Avec le second facteur activé, un mot de passe juste donne un défi :
+    /// ni journalisé ni compté comme réussite (le compteur de l'IP n'est remis à zéro qu'à la seconde étape).
     pub async fn login(
         &self,
         email: &str,
         password: &str,
         origin: &LoginOrigin,
-    ) -> AppResult<Session> {
+    ) -> AppResult<LoginOutcome> {
         self.check_throttle(origin)?;
         let result = self.verify_login(email, password).await;
-        self.conclude(LoginAction::Login, origin, &result).await?;
+        if !matches!(result, Ok(LoginOutcome::Challenge { .. })) {
+            self.conclude(LoginAction::Login, origin, &result).await?;
+        }
         result
     }
 
-    async fn verify_login(&self, email: &str, password: &str) -> AppResult<Session> {
+    async fn verify_login(&self, email: &str, password: &str) -> AppResult<LoginOutcome> {
         let found = self.users.find_by_email(&normalize_email(email)).await?;
         let hash = found
             .as_ref()
             .map_or(self.dummy_hash.as_str(), |c| c.password_hash.as_str());
         let valid = self.hasher.verify(password, hash).await;
         match found {
-            Some(credentials) if valid => self.open_session(credentials),
+            Some(credentials) if valid => {
+                if self.totp_enabled(credentials.user.id).await? {
+                    self.challenge(&credentials)
+                } else {
+                    self.open_session(credentials).map(LoginOutcome::Session)
+                }
+            }
             _ => Err(AppError::Unauthorized(INVALID_CREDENTIALS)),
         }
     }
@@ -258,7 +271,7 @@ impl AuthService {
         Ok(self.journal.recent(limit).await?)
     }
 
-    async fn credentials(&self, id: UserId) -> AppResult<Credentials> {
+    pub(crate) async fn credentials(&self, id: UserId) -> AppResult<Credentials> {
         self.users
             .find_by_id(id)
             .await?
@@ -325,6 +338,8 @@ impl AuthService {
             .find_by_email(&normalize_email(email))
             .await?
             .ok_or(AppError::NotFound(UNKNOWN_EMAIL))?;
+        // Le code serveur est le dernier recours (téléphone perdu) : il désactive aussi le second facteur.
+        self.drop_second_factor(&credentials.user).await?;
         self.replace_password(credentials.user, new_password).await
     }
 
@@ -432,7 +447,8 @@ mod tests {
             .auth
             .login("A@B.test", PASSWORD, &LoginOrigin::default())
             .await
-            .unwrap();
+            .unwrap()
+            .into_session();
         assert_eq!(
             t.app.auth.me(session.user.id).await.unwrap().email,
             "a@b.test"
@@ -601,7 +617,8 @@ mod tests {
             .auth
             .login("a@b.test", PASSWORD, &LoginOrigin::default())
             .await
-            .unwrap();
+            .unwrap()
+            .into_session();
 
         let renewed = t
             .app
@@ -626,7 +643,8 @@ mod tests {
             .auth
             .login("a@b.test", NEW_PASSWORD, &LoginOrigin::default())
             .await
-            .unwrap();
+            .unwrap()
+            .into_session();
         assert!(is_valid(&t, &fresh.token).await);
         assert_eq!(
             t.store.state().users[0].password_hash,

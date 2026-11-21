@@ -10,6 +10,8 @@ const MAX_IP_CHARS: usize = 64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginAction {
     Login,
+    /// Seconde étape d'une connexion avec second facteur (code TOTP ou de secours).
+    Totp,
     Reset,
 }
 
@@ -17,6 +19,7 @@ impl LoginAction {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Login => "login",
+            Self::Totp => "totp",
             Self::Reset => "reset",
         }
     }
@@ -24,6 +27,7 @@ impl LoginAction {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "login" => Some(Self::Login),
+            "totp" => Some(Self::Totp),
             "reset" => Some(Self::Reset),
             _ => None,
         }
@@ -86,7 +90,7 @@ mod tests {
 
     #[test]
     fn actions_round_trip() {
-        for action in [LoginAction::Login, LoginAction::Reset] {
+        for action in [LoginAction::Login, LoginAction::Totp, LoginAction::Reset] {
             assert_eq!(LoginAction::parse(action.as_str()), Some(action));
         }
         assert_eq!(LoginAction::parse("autre"), None);

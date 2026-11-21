@@ -21,6 +21,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
+fineme-domain = { workspace = true }
 http-body-util = "0.1.5"
 serde_json = { workspace = true }
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

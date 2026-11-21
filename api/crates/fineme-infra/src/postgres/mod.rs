@@ -13,8 +13,9 @@ use fineme_application::ports::{
     AccountWrite, BenchmarkRepository, BudgetRepository, ConnectionRepository, Credentials,
     FxRateRepository, GoalRepository, ImportBatch, ImportProfileRepository, ImportRepository,
     LoginJournal, OperationChange, OperationRepository, PortfolioData, PortfolioRepository,
-    PositionUpdate, PricePoint, RepoError, RepoResult, SnapshotPoint, SnapshotRepository,
-    TransactionRepository, UserRepository,
+    PositionUpdate, PricePoint, RecoveryCodeHash, RepoError, RepoResult, SecondFactorRecord,
+    SecondFactorRepository, SnapshotPoint, SnapshotRepository, TransactionRepository,
+    UserRepository,
 };
 use fineme_domain::account::Account;
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -451,6 +452,155 @@ impl UserRepository for PgStore {
         .map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(true)
+    }
+}
+
+// ---------------------------------------------------------------- second facteur
+
+async fn insert_recovery_codes(
+    conn: &mut PgConnection,
+    user: UserId,
+    hashes: &[String],
+) -> RepoResult<()> {
+    sqlx::query("DELETE FROM totp_recovery_codes WHERE user_id = $1")
+        .bind(user.as_uuid())
+        .execute(&mut *conn)
+        .await
+        .map_err(db)?;
+    sqlx::query(
+        "INSERT INTO totp_recovery_codes (user_id, code_hash) SELECT $1, unnest($2::text[])",
+    )
+    .bind(user.as_uuid())
+    .bind(hashes)
+    .execute(&mut *conn)
+    .await
+    .map_err(db)?;
+    Ok(())
+}
+
+type SecondFactorRow = (Option<String>, Option<String>, Option<i64>);
+
+#[async_trait]
+impl SecondFactorRepository for PgStore {
+    async fn second_factor(&self, user: UserId) -> RepoResult<SecondFactorRecord> {
+        let row: Option<SecondFactorRow> = sqlx::query_as(
+            "SELECT totp_secret, totp_pending_secret, totp_last_step FROM users WHERE id = $1",
+        )
+        .bind(user.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        let Some((secret, pending_secret, last_step)) = row else {
+            return Ok(SecondFactorRecord::default());
+        };
+        let codes: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT id, code_hash FROM totp_recovery_codes \
+             WHERE user_id = $1 AND used_at IS NULL ORDER BY id",
+        )
+        .bind(user.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(SecondFactorRecord {
+            secret,
+            pending_secret,
+            last_step,
+            recovery_codes: codes
+                .into_iter()
+                .map(|(id, hash)| RecoveryCodeHash { id, hash })
+                .collect(),
+        })
+    }
+
+    async fn save_pending_secret(&self, user: UserId, sealed: &str) -> RepoResult<()> {
+        sqlx::query("UPDATE users SET totp_pending_secret = $2 WHERE id = $1")
+            .bind(user.as_uuid())
+            .bind(sealed)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    async fn enable_second_factor(
+        &self,
+        user: UserId,
+        sealed: &str,
+        step: i64,
+        recovery_hashes: &[String],
+    ) -> RepoResult<Option<i64>> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let version: Option<i64> = sqlx::query_scalar(
+            "UPDATE users SET totp_secret = $2, totp_pending_secret = NULL, totp_last_step = $3, \
+             session_version = session_version + 1 WHERE id = $1 RETURNING session_version",
+        )
+        .bind(user.as_uuid())
+        .bind(sealed)
+        .bind(step)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+        if version.is_none() {
+            return Ok(None);
+        }
+        insert_recovery_codes(&mut tx, user, recovery_hashes).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(version)
+    }
+
+    async fn disable_second_factor(&self, user: UserId) -> RepoResult<Option<i64>> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let version: Option<i64> = sqlx::query_scalar(
+            "UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL, \
+             session_version = session_version + 1 WHERE id = $1 RETURNING session_version",
+        )
+        .bind(user.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+        sqlx::query("DELETE FROM totp_recovery_codes WHERE user_id = $1")
+            .bind(user.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(version)
+    }
+
+    async fn use_totp_step(&self, user: UserId, step: i64) -> RepoResult<bool> {
+        // Condition dans la requête : deux vérifications concurrentes du même code n'aboutissent qu'une fois.
+        let updated = sqlx::query(
+            "UPDATE users SET totp_last_step = $2 \
+             WHERE id = $1 AND (totp_last_step IS NULL OR totp_last_step < $2)",
+        )
+        .bind(user.as_uuid())
+        .bind(step)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?
+        .rows_affected();
+        Ok(updated == 1)
+    }
+
+    async fn use_recovery_code(&self, user: UserId, id: i64) -> RepoResult<bool> {
+        let updated = sqlx::query(
+            "UPDATE totp_recovery_codes SET used_at = now() \
+             WHERE id = $2 AND user_id = $1 AND used_at IS NULL",
+        )
+        .bind(user.as_uuid())
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?
+        .rows_affected();
+        Ok(updated == 1)
+    }
+
+    async fn replace_recovery_codes(&self, user: UserId, hashes: &[String]) -> RepoResult<()> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        insert_recovery_codes(&mut tx, user, hashes).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(())
     }
 }
 

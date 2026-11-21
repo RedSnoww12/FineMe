@@ -21,6 +21,7 @@ pub mod performance;
 pub mod portfolio;
 pub mod property;
 pub mod throttle;
+pub mod totp;
 pub mod transaction;
 
 pub use error::DomainError;

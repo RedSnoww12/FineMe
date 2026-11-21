@@ -2276,3 +2276,210 @@ async fn import_profiles_are_remembered_per_account_and_kind() {
         .await;
     assert_eq!(error_of(&missing).0, 404);
 }
+
+// ---------------------------------------------------------------- second facteur
+
+/// Décode un secret base32 (RFC 4648, sans remplissage).
+fn base32_decode(text: &str) -> Vec<u8> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let (mut buffer, mut bits, mut out) = (0u32, 0u32, Vec::new());
+    for byte in text.bytes() {
+        let value = ALPHABET.iter().position(|c| *c == byte).unwrap() as u32;
+        buffer = (buffer << 5) | value;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// Code TOTP du pas courant décalé de `offset` pas, calculé comme une application d'authentification.
+fn totp_code(secret_base32: &str, offset: i64) -> String {
+    use fineme_application::ports::TotpSupport;
+    use fineme_domain::totp::{counter_message, time_step, truncate};
+    let step = time_step(chrono::Utc::now()) + offset;
+    let mac = fineme_infra::totp::TotpCrypto::new("inutile")
+        .hmac_sha1(&base32_decode(secret_base32), &counter_message(step));
+    format!("{:06}", truncate(&mac))
+}
+
+impl Api {
+    /// Requête publique vue derrière le proxy depuis l'IP `ip`.
+    async fn public_post(
+        &self,
+        ip: &str,
+        path: &str,
+        body: Value,
+    ) -> (StatusCode, axum::http::HeaderMap, Value) {
+        let request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("x-forwarded-for", ip)
+            .header(header::USER_AGENT, "Navigateur fictif/1.0")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        self.send(request).await
+    }
+}
+
+#[tokio::test]
+async fn second_factor_is_enabled_then_required_at_login_then_disabled() {
+    let (mut api, _, _) = Api::household().await;
+    let status = api.get("/api/auth/totp").await;
+    assert_eq!(
+        status,
+        json!({ "enabled": false, "recovery_codes_remaining": 0 })
+    );
+
+    let enrollment = api.post("/api/auth/totp/setup", json!({})).await;
+    let secret = enrollment["secret"].as_str().unwrap().to_string();
+    assert!(
+        enrollment["otpauth_uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("otpauth://totp/FineMe:alice%40exemple.test?secret=")
+    );
+    assert!(enrollment["qr_svg"].as_str().unwrap().contains("<svg"));
+    // Le secret est chiffré au repos.
+    let stored: Option<String> = sqlx::query_scalar("SELECT totp_pending_secret FROM users")
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+    assert!(!stored.unwrap().contains(&secret));
+
+    let (status, _) = api
+        .call(
+            "POST",
+            "/api/auth/totp/enable",
+            Some(json!({ "code": "abc" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let old_token = api.token.clone();
+    let activation = api
+        .post(
+            "/api/auth/totp/enable",
+            json!({ "code": totp_code(&secret, 0) }),
+        )
+        .await;
+    let recovery: Vec<String> =
+        serde_json::from_value(activation["recovery_codes"].clone()).unwrap();
+    assert_eq!(recovery.len(), 10);
+    // L'activation ferme les autres sessions.
+    api.token = old_token;
+    assert_eq!(
+        api.call("GET", "/api/auth/me", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    api.token = activation["token"].as_str().unwrap().to_string();
+    assert_eq!(
+        api.get("/api/auth/totp").await["recovery_codes_remaining"],
+        10
+    );
+
+    // Connexion en deux étapes.
+    let ip = "198.51.100.7";
+    let (status, _, step) = api.login_via_proxy(ip, PASSWORD).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(step["totp_required"], true);
+    assert_eq!(step["expires_in"], 300);
+    assert!(step.get("token").is_none());
+    let challenge = step["challenge"].as_str().unwrap().to_string();
+    // Le défi n'ouvre aucune route protégée.
+    let session_token = std::mem::replace(&mut api.token, challenge.clone());
+    assert_eq!(
+        api.call("GET", "/api/auth/me", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    api.token = session_token;
+    // Le code de l'activation est déjà utilisé : rejeu refusé.
+    let replay = json!({ "challenge": challenge, "code": totp_code(&secret, 0) });
+    let (status, _, _) = api.public_post(ip, "/api/auth/login/totp", replay).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let next = json!({ "challenge": challenge, "code": totp_code(&secret, 1) });
+    let (status, _, session) = api.public_post(ip, "/api/auth/login/totp", next).await;
+    assert_eq!(status, StatusCode::OK, "{session}");
+    api.token = session["token"].as_str().unwrap().to_string();
+    let logins = api.get("/api/auth/logins").await;
+    assert_eq!(logins[0]["action"], "totp");
+    assert_eq!(logins[0]["success"], true);
+    assert_eq!(logins[1]["action"], "totp");
+    assert_eq!(logins[1]["success"], false);
+
+    // Code de secours : une seule fois.
+    let (_, _, step) = api.login_via_proxy(ip, PASSWORD).await;
+    let with_recovery = json!({ "challenge": step["challenge"], "code": recovery[0] });
+    let (status, _, _) = api
+        .public_post(ip, "/api/auth/login/totp", with_recovery.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = api
+        .public_post(ip, "/api/auth/login/totp", with_recovery)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Désactivation : mot de passe et code exigés.
+    let (status, _) = api
+        .call(
+            "POST",
+            "/api/auth/totp/disable",
+            Some(json!({ "password": "mauvais-mot-de-passe", "code": recovery[1] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let disabled = api
+        .post(
+            "/api/auth/totp/disable",
+            json!({ "password": PASSWORD, "code": recovery[1] }),
+        )
+        .await;
+    api.token = disabled["token"].as_str().unwrap().to_string();
+    assert_eq!(api.get("/api/auth/totp").await["enabled"], false);
+    let (_, _, session) = api.login_via_proxy(ip, PASSWORD).await;
+    assert!(session["token"].is_string());
+}
+
+#[tokio::test]
+async fn wrong_second_factor_codes_are_throttled() {
+    let (api, _, _) = Api::household().await;
+    let secret = api.post("/api/auth/totp/setup", json!({})).await["secret"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let activation = api
+        .post(
+            "/api/auth/totp/enable",
+            json!({ "code": totp_code(&secret, 0) }),
+        )
+        .await;
+    assert!(activation["token"].is_string());
+
+    let attacker = "203.0.113.9";
+    let (_, _, step) = api.login_via_proxy(attacker, PASSWORD).await;
+    let valid: Vec<String> = (-1..=2).map(|offset| totp_code(&secret, offset)).collect();
+    let wrong = (0..10)
+        .map(|n| n.to_string().repeat(6))
+        .find(|code| !valid.contains(code))
+        .unwrap();
+    let attempt = json!({ "challenge": step["challenge"], "code": wrong });
+    for attempt_number in 1..=6 {
+        let (status, _, _) = api
+            .public_post(attacker, "/api/auth/login/totp", attempt.clone())
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        if attempt_number < 6 {
+            // Un mot de passe juste (nouveau défi) ne remet pas le compteur à zéro.
+            let (status, _, _) = api.login_via_proxy(attacker, PASSWORD).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+    }
+    let good = json!({ "challenge": step["challenge"], "code": totp_code(&secret, 1) });
+    let (status, headers, _) = api
+        .public_post(attacker, "/api/auth/login/totp", good)
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(headers[header::RETRY_AFTER], "30");
+}

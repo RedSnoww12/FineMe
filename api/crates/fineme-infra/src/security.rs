@@ -14,6 +14,10 @@ use uuid::Uuid;
 
 /// Durée de vie d'un jeton ; le front le renouvelle (`POST /api/auth/refresh`) tant que la session est active.
 pub const TOKEN_DAYS: i64 = 7;
+/// Durée de vie d'un jeton de défi (seconde étape de connexion), en secondes.
+pub const CHALLENGE_SECONDS: i64 = 300;
+/// Usage porté par un jeton de défi ; un jeton de session n'en porte pas.
+const CHALLENGE_PURPOSE: &str = "totp";
 
 /// Hachage argon2id (paramètres par défaut de la crate, format PHC).
 #[derive(Debug, Clone, Copy, Default)]
@@ -62,6 +66,9 @@ struct Claims {
     /// Version de session ; absente des jetons émis avant son introduction, elle vaut alors 0.
     #[serde(default)]
     ver: i64,
+    /// Usage particulier (`totp` pour un défi) ; absent pour un jeton de session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pur: Option<String>,
 }
 
 /// Jetons JWT signés HS256. L'expiration est comparée à l'instant fourni par l'appelant (port `Clock`).
@@ -78,30 +85,74 @@ impl JwtTokens {
     }
 }
 
-impl TokenService for JwtTokens {
-    fn issue(&self, subject: TokenSubject, now: DateTime<Utc>) -> Result<String, ProviderError> {
+impl JwtTokens {
+    fn encode(
+        &self,
+        subject: TokenSubject,
+        now: DateTime<Utc>,
+        lifetime: Duration,
+        purpose: Option<&str>,
+    ) -> Result<String, ProviderError> {
         let claims = Claims {
             sub: subject.user.as_uuid(),
             iat: now.timestamp(),
-            exp: (now + Duration::days(TOKEN_DAYS)).timestamp(),
+            exp: (now + lifetime).timestamp(),
             ver: subject.session_version,
+            pur: purpose.map(str::to_string),
         };
         EncodingKey::from_secret(self.secret.as_bytes())
             .and_then(|key| jsonwebtoken::encode(&Header::new(Algorithm::HS256), &claims, &key))
             .map_err(|e| ProviderError(format!("création du jeton impossible : {e}")))
     }
 
-    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject> {
+    /// Contenu d'un jeton authentique, non expiré et dont l'usage est exactement `purpose`.
+    fn decode(
+        &self,
+        token: &str,
+        now: DateTime<Utc>,
+        purpose: Option<&str>,
+    ) -> Option<TokenSubject> {
         let key = DecodingKey::from_secret(self.secret.as_bytes()).ok()?;
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
         let claims = jsonwebtoken::decode::<Claims>(token, &key, &validation)
             .ok()?
             .claims;
-        (claims.exp > now.timestamp()).then(|| TokenSubject {
+        (claims.exp > now.timestamp() && claims.pur.as_deref() == purpose).then(|| TokenSubject {
             user: UserId::from_uuid(claims.sub),
             session_version: claims.ver,
         })
+    }
+}
+
+impl TokenService for JwtTokens {
+    fn issue(&self, subject: TokenSubject, now: DateTime<Utc>) -> Result<String, ProviderError> {
+        self.encode(subject, now, Duration::days(TOKEN_DAYS), None)
+    }
+
+    fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject> {
+        self.decode(token, now, None)
+    }
+
+    fn issue_challenge(
+        &self,
+        subject: TokenSubject,
+        now: DateTime<Utc>,
+    ) -> Result<String, ProviderError> {
+        self.encode(
+            subject,
+            now,
+            Duration::seconds(CHALLENGE_SECONDS),
+            Some(CHALLENGE_PURPOSE),
+        )
+    }
+
+    fn verify_challenge(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject> {
+        self.decode(token, now, Some(CHALLENGE_PURPOSE))
+    }
+
+    fn challenge_seconds(&self) -> i64 {
+        CHALLENGE_SECONDS
     }
 }
 
@@ -157,6 +208,25 @@ mod tests {
         );
         assert_eq!(
             tokens.verify(&token, now + Duration::days(TOKEN_DAYS)),
+            None
+        );
+    }
+
+    #[test]
+    fn challenge_and_session_tokens_are_not_interchangeable() {
+        let tokens = JwtTokens::new("secret-de-test");
+        let (subject, now) = (subject(2), Utc::now());
+        let challenge = tokens.issue_challenge(subject, now).unwrap();
+        let session = tokens.issue(subject, now).unwrap();
+        assert_eq!(tokens.verify_challenge(&challenge, now), Some(subject));
+        assert_eq!(tokens.verify(&challenge, now), None);
+        assert_eq!(tokens.verify_challenge(&session, now), None);
+        assert_eq!(
+            tokens.verify_challenge(&challenge, now + Duration::seconds(CHALLENGE_SECONDS)),
+            None
+        );
+        assert_eq!(
+            JwtTokens::new("autre-secret").verify_challenge(&challenge, now),
             None
         );
     }

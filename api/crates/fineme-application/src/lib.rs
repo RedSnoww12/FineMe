@@ -24,6 +24,7 @@ pub mod prices;
 pub mod reader;
 pub mod real_estate;
 mod secret;
+pub mod totp;
 pub mod transactions;
 
 #[cfg(test)]

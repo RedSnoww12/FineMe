@@ -23,7 +23,8 @@ use crate::ports::{
     AlertRepository, BankProvider, BenchmarkRepository, BudgetRepository, Clock,
     ConnectionRepository, FxProvider, FxRateRepository, GoalRepository, ImportProfileRepository,
     ImportRepository, LoginJournal, OperationRepository, PasswordHasher, PortfolioRepository,
-    PriceProvider, SnapshotRepository, TokenService, TransactionRepository, UserRepository,
+    PriceProvider, SecondFactorRepository, SnapshotRepository, TokenService, TotpSupport,
+    TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -34,6 +35,7 @@ use crate::transactions::TransactionService;
 #[derive(Clone)]
 pub struct Ports {
     pub users: Arc<dyn UserRepository>,
+    pub second_factor: Arc<dyn SecondFactorRepository>,
     pub login_journal: Arc<dyn LoginJournal>,
     pub portfolio: Arc<dyn PortfolioRepository>,
     pub fx_rates: Arc<dyn FxRateRepository>,
@@ -50,6 +52,7 @@ pub struct Ports {
     pub clock: Arc<dyn Clock>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub tokens: Arc<dyn TokenService>,
+    pub totp: Arc<dyn TotpSupport>,
     pub fx_provider: Arc<dyn FxProvider>,
     pub price_providers: Vec<Arc<dyn PriceProvider>>,
     pub bank_providers: Vec<Arc<dyn BankProvider>>,
@@ -112,6 +115,8 @@ impl App {
         Ok(Self {
             auth: AuthService {
                 users: ports.users,
+                second_factor: ports.second_factor,
+                totp: ports.totp,
                 journal: ports.login_journal,
                 throttle: Mutex::new(LoginThrottle::default()),
                 hasher: ports.hasher,
