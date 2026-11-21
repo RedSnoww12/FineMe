@@ -428,12 +428,60 @@ type BudgetTarget = { category: string; monthly_amount: number };
 ## Tâche quotidienne
 
 POST `/api/jobs/daily`, en-tête `Authorization: Bearer <CRON_SECRET>`, sans corps →
-`{ prices: { updated, failed: { holding_id, name, reason }[] }, snapshot_date: "YYYY-MM-DD" }`
+`{ prices: { updated, failed: { holding_id, name, reason }[] }, snapshot_date: "YYYY-MM-DD", alerts: AlertEvaluation }`
 
 Rafraîchit les taux et les cours (comme `/api/prices/refresh`), puis enregistre l'instantané du jour (foyer + chaque
-membre). Appelée chaque matin par un planificateur externe (workflow GitHub Actions `daily.yml`). Idempotente :
+membre), et évalue enfin les alertes (voir « Alertes et rappels ») sur cet instantané. Appelée chaque matin par un planificateur externe (workflow GitHub Actions `daily.yml`). Idempotente :
 un second appel le même jour remplace les cours et l'instantané du jour.
 - (501) si `CRON_SECRET` n'est pas défini ; (403) si le secret est absent ou différent (comparaison en temps constant).
+
+## Alertes et rappels
+
+```ts
+type AlertRuleKind = "goals" | "savings_ceiling" | "net_worth_change" | "connections" | "stale_prices";
+type AlertRule = {
+  kind: AlertRuleKind;
+  enabled: boolean;
+  threshold_pct: number | null; // savings_ceiling : ]0, 100] (défaut 90) ; net_worth_change : ]0, 1000] (défaut 10) ; sinon null
+  ceiling: number | null;       // savings_ceiling seulement : plafond en EUR (défaut 22 950, plafond du Livret A)
+};
+type Alert = {
+  id: string;
+  kind: "goal_reached" | "goal_overdue" | "savings_ceiling" | "net_worth_change"
+      | "connection_expired" | "connection_error" | "stale_prices";
+  severity: "info" | "warning";
+  title: string; message: string; // en français, prêts à afficher
+  created_at: string;             // ISO datetime (première détection, ou réapparition)
+  read: boolean; archived: boolean;
+  active: boolean;                // false : la condition a disparu depuis (alerte résolue)
+};
+type AlertEvaluation = { created: number; reopened: number; resolved: number };
+```
+
+Règles (toutes activées par défaut ; une règle désactivée n'est pas évaluée) :
+- `goals` : objectif atteint (`completed` ou `funded`) → `goal_reached` ; date cible dépassée (`overdue`) → `goal_overdue`.
+  Le statut est celui de `GET /api/goals`.
+- `savings_ceiling` : compte `savings` dont la valeur (EUR) atteint `threshold_pct` % de `ceiling` (ou le dépasse).
+- `net_worth_change` : |variation| du patrimoine net du foyer entre les deux derniers instantanés des 31 derniers jours
+  ≥ `threshold_pct` %, rapportée à |patrimoine précédent| (aucune alerte si le précédent vaut 0).
+- `connections` : connexion bancaire `expired` → `connection_expired`, `error` → `connection_error`.
+- `stale_prices` : une seule alerte tant qu'au moins une position a un cours automatique ancien (`price_stale`).
+
+Dédoublonnage : chaque condition a une clé stable (règle + objet concerné, + date du dernier instantané pour
+`net_worth_change`). Tant qu'elle dure, l'évaluation garde la même alerte (son état lu / archivé est conservé, son texte
+mis à jour) ; quand elle disparaît, l'alerte passe `active: false` ; si elle réapparaît, l'alerte est rouverte (non lue,
+désarchivée, `created_at` = date de réapparition). Une évaluation quotidienne ne crée donc pas une alerte par jour.
+
+Routes :
+- GET `/api/alerts?archived=true|false` (défaut `false`) → `Alert[]`, de la plus récente à la plus ancienne
+- POST `/api/alerts/evaluate` → `AlertEvaluation` (évaluation à la demande ; aussi faite par la tâche quotidienne)
+- PUT `/api/alerts/:id` `{ read?: boolean, archived?: boolean }` → `Alert` (404 si inconnue)
+- POST `/api/alerts/read-all` → `{ updated: number }` (marque lues les alertes non archivées)
+- GET `/api/alerts/rules` → `AlertRule[]` (une par type, valeurs par défaut si jamais modifiée)
+- PUT `/api/alerts/rules/:kind` `{ enabled?, threshold_pct?, ceiling? }` → `AlertRule` (400 si seuil invalide ou non
+  applicable à la règle ; 404 si `kind` inconnu)
+
+Non fait : résumé périodique par e-mail (exige un service d'envoi externe).
 
 ## Objectifs
 
