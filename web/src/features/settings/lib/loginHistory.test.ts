@@ -29,6 +29,7 @@ describe('describeAttempt', () => {
   it('nomme l’action et son issue', () => {
     expect(describeAttempt({ action: 'login', success: true })).toBe('Connexion réussie')
     expect(describeAttempt({ action: 'reset', success: false })).toBe('Réinitialisation refusée')
+    expect(describeAttempt({ action: 'totp', success: false })).toBe('Vérification en deux étapes refusée')
   })
 })
 

@@ -57,6 +57,9 @@ pub struct State {
     pub rates_updated_at: Option<DateTime<Utc>>,
     pub fail_price_updates: bool,
     pub login_events: Vec<LoginEvent>,
+    /// Second facteur de l'utilisateur unique.
+    pub second_factor: SecondFactorRecord,
+    pub next_recovery_id: i64,
 }
 
 impl State {
@@ -151,6 +154,85 @@ impl LoginJournal for InMemoryStore {
         let count = state.login_events.len();
         state.login_events.retain(|event| event.at >= before);
         Ok((count - state.login_events.len()) as u64)
+    }
+}
+
+impl State {
+    fn bump_session(&mut self, user: UserId) -> Option<i64> {
+        let credentials = self.users.iter_mut().find(|c| c.user.id == user)?;
+        credentials.session_version += 1;
+        Some(credentials.session_version)
+    }
+
+    fn set_recovery_codes(&mut self, hashes: &[String]) {
+        self.second_factor.recovery_codes = hashes
+            .iter()
+            .map(|hash| {
+                self.next_recovery_id += 1;
+                RecoveryCodeHash {
+                    id: self.next_recovery_id,
+                    hash: hash.clone(),
+                }
+            })
+            .collect();
+    }
+}
+
+#[async_trait]
+impl SecondFactorRepository for InMemoryStore {
+    async fn second_factor(&self, _user: UserId) -> RepoResult<SecondFactorRecord> {
+        Ok(self.lock().second_factor.clone())
+    }
+    async fn save_pending_secret(&self, _user: UserId, sealed: &str) -> RepoResult<()> {
+        self.lock().second_factor.pending_secret = Some(sealed.to_string());
+        Ok(())
+    }
+    async fn enable_second_factor(
+        &self,
+        user: UserId,
+        sealed: &str,
+        step: i64,
+        recovery_hashes: &[String],
+    ) -> RepoResult<Option<i64>> {
+        let mut state = self.lock();
+        let Some(version) = state.bump_session(user) else {
+            return Ok(None);
+        };
+        state.second_factor.secret = Some(sealed.to_string());
+        state.second_factor.pending_secret = None;
+        state.second_factor.last_step = Some(step);
+        state.set_recovery_codes(recovery_hashes);
+        Ok(Some(version))
+    }
+    async fn disable_second_factor(&self, user: UserId) -> RepoResult<Option<i64>> {
+        let mut state = self.lock();
+        state.second_factor = SecondFactorRecord::default();
+        Ok(state.bump_session(user))
+    }
+    async fn use_totp_step(&self, _user: UserId, step: i64) -> RepoResult<bool> {
+        let mut state = self.lock();
+        if state
+            .second_factor
+            .last_step
+            .is_some_and(|last| last >= step)
+        {
+            return Ok(false);
+        }
+        state.second_factor.last_step = Some(step);
+        Ok(true)
+    }
+    async fn use_recovery_code(&self, _user: UserId, id: i64) -> RepoResult<bool> {
+        let mut state = self.lock();
+        let before = state.second_factor.recovery_codes.len();
+        state
+            .second_factor
+            .recovery_codes
+            .retain(|code| code.id != id);
+        Ok(state.second_factor.recovery_codes.len() < before)
+    }
+    async fn replace_recovery_codes(&self, _user: UserId, hashes: &[String]) -> RepoResult<()> {
+        self.lock().set_recovery_codes(hashes);
+        Ok(())
     }
 }
 
@@ -924,7 +1006,7 @@ impl TokenService for FakeTokens {
         ))
     }
     fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject> {
-        let mut parts = token.split('|').skip(1);
+        let mut parts = token.strip_prefix("jeton|")?.split('|');
         let user = Uuid::parse_str(parts.next()?).ok()?;
         let session_version = parts.next()?.parse().ok()?;
         let expires: i64 = parts.next()?.parse().ok()?;
@@ -932,6 +1014,82 @@ impl TokenService for FakeTokens {
             user: UserId::from_uuid(user),
             session_version,
         })
+    }
+    fn issue_challenge(
+        &self,
+        subject: TokenSubject,
+        now: DateTime<Utc>,
+    ) -> Result<String, ProviderError> {
+        Ok(format!(
+            "defi|{}|{}|{}",
+            subject.user,
+            subject.session_version,
+            (now + Duration::seconds(self.challenge_seconds())).timestamp()
+        ))
+    }
+    fn verify_challenge(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject> {
+        token
+            .strip_prefix("defi|")
+            .and_then(|rest| self.verify(&format!("jeton|{rest}"), now))
+    }
+    fn challenge_seconds(&self) -> i64 {
+        300
+    }
+}
+
+/// Primitives factices et déterministes : aléa en compteur, « HMAC » arithmétique,
+/// « chiffrement » = préfixe lisible.
+#[derive(Default)]
+pub struct FakeTotp(AtomicUsize);
+
+impl FakeTotp {
+    /// Code attendu pour ce secret au pas de l'instant `at` décalé de `offset` pas.
+    pub fn code(&self, secret: &[u8], at: DateTime<Utc>, offset: i64) -> String {
+        let step = fineme_domain::totp::time_step(at) + offset;
+        let mac = self.hmac_sha1(secret, &fineme_domain::totp::counter_message(step));
+        format!("{:06}", fineme_domain::totp::truncate(&mac))
+    }
+}
+
+impl TotpSupport for FakeTotp {
+    fn random_bytes(&self, len: usize) -> Result<Vec<u8>, ProviderError> {
+        let start = self.0.fetch_add(len, Ordering::SeqCst);
+        // Suite déterministe sans motif court (hachage multiplicatif du rang).
+        Ok((start..start + len)
+            .map(|i| ((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as u8)
+            .collect())
+    }
+    fn hmac_sha1(&self, key: &[u8], message: &[u8]) -> [u8; 20] {
+        // Décalage 0 (dernier octet nul) : le code vaut (somme de la clé × 7919 + compteur × 7) mod 10⁶,
+        // distinct d'un pas à l'autre.
+        let key_sum: u64 = key.iter().map(|b| u64::from(*b)).sum();
+        let counter = u64::from_be_bytes(message.try_into().unwrap_or([0; 8]));
+        let value = u32::try_from((key_sum * 7919 + counter * 7) % 1_000_000).unwrap_or(0);
+        let mut mac = [0u8; 20];
+        mac[..4].copy_from_slice(&value.to_be_bytes());
+        mac
+    }
+    fn seal(&self, secret: &[u8]) -> Result<String, ProviderError> {
+        Ok(format!(
+            "scelle:{}",
+            secret
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ))
+    }
+    fn open(&self, sealed: &str) -> Result<Vec<u8>, ProviderError> {
+        let hex = sealed
+            .strip_prefix("scelle:")
+            .ok_or_else(|| ProviderError("scellé inconnu".into()))?;
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+            .collect::<Result<_, _>>()
+            .map_err(|e| ProviderError(e.to_string()))
+    }
+    fn qr_svg(&self, text: &str) -> Result<String, ProviderError> {
+        Ok(format!("<svg>{text}</svg>"))
     }
 }
 
@@ -1073,6 +1231,7 @@ pub struct TestApp {
     pub store: Arc<InMemoryStore>,
     pub clock: Arc<FixedClock>,
     pub hasher: Arc<FakeHasher>,
+    pub totp: Arc<FakeTotp>,
     pub fx: Arc<FakeFx>,
     pub securities: Arc<FakePrices>,
     /// Fournisseur de repli pour les titres, essayé après `securities`.
@@ -1087,6 +1246,7 @@ impl TestApp {
         let store = Arc::new(InMemoryStore::default());
         let clock = Arc::new(FixedClock::new());
         let hasher = Arc::new(FakeHasher::default());
+        let totp = Arc::new(FakeTotp::default());
         let fx = Arc::new(FakeFx(Mutex::new(Ok(Vec::new()))));
         let securities = Arc::new(FakePrices::new(HoldingKind::Security));
         let fallback = Arc::new(FakePrices::new(HoldingKind::Security));
@@ -1109,6 +1269,7 @@ impl TestApp {
         }
         let ports = Ports {
             users: store.clone(),
+            second_factor: store.clone(),
             login_journal: store.clone(),
             portfolio: store.clone(),
             fx_rates: store.clone(),
@@ -1125,6 +1286,7 @@ impl TestApp {
             clock: clock.clone(),
             hasher: hasher.clone(),
             tokens: Arc::new(FakeTokens),
+            totp: totp.clone(),
             fx_provider: fx.clone(),
             price_providers: vec![crypto.clone(), securities.clone(), fallback.clone()],
             bank_providers: bank
@@ -1138,6 +1300,7 @@ impl TestApp {
             store,
             clock,
             hasher,
+            totp,
             fx,
             securities,
             fallback,

@@ -11,6 +11,7 @@ use fineme_application::commands::{
     HoldingInput, OperationImportInput, OperationInput, TransactionInput, TransactionPatch,
     ValuationInput,
 };
+use fineme_application::totp::LoginOutcome;
 use fineme_domain::ids::AccountId;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -22,9 +23,10 @@ use crate::input::{
     AccountBody, AlertPatchBody, AlertRuleBody, AlertsQuery, BenchmarkBody, BudgetQuery,
     BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody,
     HistoryQuery, HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody,
-    ImportProfileBody, LimitQuery, LoginBody, MemberBody, OperationBody, OperationsBulkBody,
-    PageQuery, PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody,
-    TransactionPatchBody, TransactionsBulkBody, ValuationBody, ViewQuery,
+    ImportProfileBody, LimitQuery, LoginBody, LoginTotpBody, MemberBody, OperationBody,
+    OperationsBulkBody, PageQuery, PasswordChangeBody, PasswordResetBody, PerformanceQuery,
+    RangeQuery, SetupBody, TotpCodeBody, TotpDisableBody, TransactionPatchBody,
+    TransactionsBulkBody, ValuationBody, ViewQuery,
 };
 use crate::origin::ClientOrigin;
 use crate::output;
@@ -46,6 +48,7 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/auth/status", get(auth_status))
         .route("/auth/setup", post(auth_setup))
         .route("/auth/login", post(auth_login))
+        .route("/auth/login/totp", post(auth_login_totp))
         .route("/auth/reset", post(auth_reset))
         // Protégée par CRON_SECRET et non par le JWT : appelée par un planificateur, sans session.
         .route("/jobs/daily", post(jobs_daily));
@@ -55,6 +58,11 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/auth/password", put(auth_password))
         .route("/auth/refresh", post(auth_refresh))
         .route("/auth/logins", get(auth_logins))
+        .route("/auth/totp", get(totp_status))
+        .route("/auth/totp/setup", post(totp_setup))
+        .route("/auth/totp/enable", post(totp_enable))
+        .route("/auth/totp/disable", post(totp_disable))
+        .route("/auth/totp/recovery-codes", post(totp_recovery_codes))
         .route("/members", get(members_list).post(members_create))
         .route("/members/{id}", put(members_update).delete(members_delete))
         .route("/accounts", get(accounts_list).post(accounts_create))
@@ -191,8 +199,88 @@ async fn auth_login(
     ClientOrigin(origin): ClientOrigin,
     Json(body): Json<LoginBody>,
 ) -> JsonResponse {
-    let session = app.auth.login(&body.email, &body.password, &origin).await?;
+    match app.auth.login(&body.email, &body.password, &origin).await? {
+        LoginOutcome::Session(session) => ok(self::session(&session)),
+        LoginOutcome::Challenge { token, expires_in } => ok(json!({
+            "totp_required": true,
+            "challenge": token,
+            "expires_in": expires_in,
+        })),
+    }
+}
+
+async fn auth_login_totp(
+    State(app): State<AppState>,
+    ClientOrigin(origin): ClientOrigin,
+    Json(body): Json<LoginTotpBody>,
+) -> JsonResponse {
+    let session = app
+        .auth
+        .login_totp(&body.challenge, &body.code, &origin)
+        .await?;
     ok(self::session(&session))
+}
+
+// ---------------------------------------------------------------- second facteur
+
+async fn totp_status(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+) -> JsonResponse {
+    let status = app.auth.totp_status(id).await?;
+    ok(json!({
+        "enabled": status.enabled,
+        "recovery_codes_remaining": status.recovery_codes_remaining,
+    }))
+}
+
+async fn totp_setup(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+) -> JsonResponse {
+    let enrollment = app.auth.start_totp(id).await?;
+    ok(json!({
+        "secret": enrollment.secret,
+        "otpauth_uri": enrollment.otpauth_uri,
+        "qr_svg": enrollment.qr_svg,
+    }))
+}
+
+async fn totp_enable(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+    Json(body): Json<TotpCodeBody>,
+) -> JsonResponse {
+    let activation = app.auth.enable_totp(id, &body.code).await?;
+    let mut response = self::session(&activation.session);
+    response["recovery_codes"] = json!(activation.recovery_codes);
+    ok(response)
+}
+
+async fn totp_disable(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+    ClientOrigin(origin): ClientOrigin,
+    Json(body): Json<TotpDisableBody>,
+) -> JsonResponse {
+    let session = app
+        .auth
+        .disable_totp(id, &body.password, &body.code, &origin)
+        .await?;
+    ok(self::session(&session))
+}
+
+async fn totp_recovery_codes(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+    ClientOrigin(origin): ClientOrigin,
+    Json(body): Json<TotpCodeBody>,
+) -> JsonResponse {
+    let codes = app
+        .auth
+        .regenerate_recovery_codes(id, &body.code, &origin)
+        .await?;
+    ok(json!({ "recovery_codes": codes }))
 }
 
 async fn auth_refresh(

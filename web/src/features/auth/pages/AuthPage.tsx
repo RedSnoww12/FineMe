@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router'
-import { useAuthStatus, useLogin, useResetPassword, useSetup } from '../hooks/useAuthApi'
+import { useAuthStatus, useLogin, useLoginTotp, useResetPassword, useSetup } from '../hooks/useAuthApi'
 import { useCooldown } from '../hooks/useCooldown'
 import { formatWait } from '../lib/cooldown'
+import { cleanCode, isTotpChallenge } from '../lib/loginStep'
 import { retryAfterOf } from '@/shared/api/client'
 import { MIN_PASSWORD_LENGTH, newPasswordErrors } from '@/shared/lib/password'
 import { Logo } from '@/shared/ui/Icon'
@@ -114,13 +115,59 @@ function SetupForm({ tokenRequired }: { tokenRequired: boolean }) {
   )
 }
 
+/** Seconde étape : code de l'application d'authentification, ou code de secours. */
+function TotpStep({ challenge, onCancel }: { challenge: string; onCancel: () => void }) {
+  const { signIn } = useAuth()
+  const [code, setCode] = useState('')
+  const [error, setError] = useState<string>()
+  const mutation = useLoginTotp(signIn)
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    const cleaned = cleanCode(code)
+    setError(cleaned ? undefined : 'Saisissez le code à 6 chiffres ou un code de secours.')
+    if (!cleaned) return
+    mutation.mutate({ challenge, code: cleaned })
+  }
+
+  return (
+    <form onSubmit={submit} noValidate className="flex flex-col gap-4">
+      <div>
+        <h1 className="text-[26px] font-semibold">Vérification en deux étapes</h1>
+        <p className="mt-1.5 text-muted">
+          Saisissez le code affiché par votre application d’authentification. Téléphone indisponible ? Utilisez un de
+          vos codes de secours.
+        </p>
+      </div>
+      <TextField
+        label="Code de vérification"
+        value={code}
+        onChange={setCode}
+        error={error}
+        hint="6 chiffres, ou un code de secours de la forme xxxxx-xxxxx."
+        autoComplete="one-time-code"
+      />
+      <ThrottledSubmit error={mutation.error} submittedAt={mutation.submittedAt} busy={mutation.isPending}>
+        Vérifier
+      </ThrottledSubmit>
+      <Button variant="ghost" onClick={onCancel}>
+        Retour à la connexion
+      </Button>
+    </form>
+  )
+}
+
 /** `onForgot` absent : la récupération n'est pas activée sur le serveur, le lien est masqué. */
 function LoginForm({ onForgot }: { onForgot?: () => void }) {
   const { signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
-  const mutation = useLogin(signIn)
+  const [challenge, setChallenge] = useState<string | null>(null)
+  const mutation = useLogin((result) => {
+    if (isTotpChallenge(result)) setChallenge(result.challenge)
+    else signIn(result)
+  })
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -130,6 +177,19 @@ function LoginForm({ onForgot }: { onForgot?: () => void }) {
     setErrors(next)
     if (Object.keys(next).length > 0) return
     mutation.mutate({ email: email.trim(), password })
+  }
+
+  if (challenge) {
+    return (
+      <TotpStep
+        challenge={challenge}
+        onCancel={() => {
+          setChallenge(null)
+          setPassword('')
+          mutation.reset()
+        }}
+      />
+    )
   }
 
   return (

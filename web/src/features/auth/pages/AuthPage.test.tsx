@@ -309,3 +309,70 @@ describe('mot de passe oublié', () => {
     expect(localStorage.getItem('fineme.token')).toBeNull()
   })
 })
+
+describe('connexion avec second facteur', () => {
+  const CHALLENGE = { totp_required: true, challenge: 'jeton-de-defi', expires_in: 300 }
+
+  async function reachSecondStep() {
+    mockJson('get', '/api/auth/status', { setup_required: false })
+    mockJson('post', '/api/auth/login', CHALLENGE)
+    const view = renderApp('/connexion', { authenticated: false })
+    await view.user.type(await screen.findByLabelText('Adresse e-mail'), user.email)
+    await view.user.type(screen.getByLabelText('Mot de passe'), PASSWORD)
+    await view.user.click(screen.getByRole('button', { name: 'Se connecter' }))
+    await screen.findByRole('heading', { name: 'Vérification en deux étapes' })
+    return view
+  }
+
+  it('demande le code après le mot de passe puis ouvre la session', async () => {
+    let received: unknown
+    server.use(
+      http.post(`${API}/api/auth/login/totp`, async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ token: 'jeton-totp', user })
+      }),
+    )
+    mockShell()
+    mockOverviewScreen(buildOverview())
+    const { user: actor } = await reachSecondStep()
+    // Aucun jeton tant que le code n'est pas vérifié.
+    expect(localStorage.getItem('fineme.token')).toBeNull()
+
+    await actor.click(screen.getByRole('button', { name: 'Vérifier' }))
+    expect(screen.getByText('Saisissez le code à 6 chiffres ou un code de secours.')).toBeInTheDocument()
+    await actor.type(screen.getByLabelText('Code de vérification'), '123 456')
+    await actor.click(screen.getByRole('button', { name: 'Vérifier' }))
+
+    expect(await screen.findByRole('heading', { name: 'Vue d’ensemble' })).toBeInTheDocument()
+    expect(received).toEqual({ challenge: 'jeton-de-defi', code: '123456' })
+    expect(localStorage.getItem('fineme.token')).toBe('jeton-totp')
+  })
+
+  it('affiche le refus d’un code et permet de revenir à la connexion', async () => {
+    mockApiError('post', '/api/auth/login/totp', 401, 'Code de vérification incorrect ou déjà utilisé')
+    const { user: actor } = await reachSecondStep()
+    await actor.type(screen.getByLabelText('Code de vérification'), '000000')
+    await actor.click(screen.getByRole('button', { name: 'Vérifier' }))
+    expect(await screen.findByText('Code de vérification incorrect ou déjà utilisé')).toBeInTheDocument()
+    expect(localStorage.getItem('fineme.token')).toBeNull()
+
+    await actor.click(screen.getByRole('button', { name: 'Retour à la connexion' }))
+    expect(await screen.findByRole('heading', { name: 'Connexion' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Mot de passe')).toHaveValue('')
+  })
+
+  it('bloque l’envoi pendant le délai imposé après trop de codes faux', async () => {
+    server.use(
+      http.post(`${API}/api/auth/login/totp`, () =>
+        HttpResponse.json(
+          { error: 'Trop de tentatives. Réessayez dans 30 secondes.' },
+          { status: 429, headers: { 'Retry-After': '30' } },
+        ),
+      ),
+    )
+    const { user: actor } = await reachSecondStep()
+    await actor.type(screen.getByLabelText('Code de vérification'), '000000')
+    await actor.click(screen.getByRole('button', { name: 'Vérifier' }))
+    expect(await screen.findByRole('button', { name: /Réessayer dans (30|29) s/ })).toBeDisabled()
+  })
+})

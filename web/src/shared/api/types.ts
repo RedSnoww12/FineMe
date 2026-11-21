@@ -7,10 +7,17 @@ export type SetupInput = { email: string; password: string; name: string; setup_
 export type AuthResult = { token: string; user: User }
 export type PasswordChangeInput = { current_password: string; new_password: string }
 export type PasswordResetInput = { email: string; recovery_token: string; new_password: string }
-/** Tentative de connexion (`login`) ou de réinitialisation (`reset`) ; `at` en RFC 3339. */
+/** Seconde étape attendue : mot de passe juste, second facteur activé (jeton de défi valable `expires_in` s). */
+export type TotpChallenge = { totp_required: true; challenge: string; expires_in: number }
+export type LoginResult = AuthResult | TotpChallenge
+export type TotpStatus = { enabled: boolean; recovery_codes_remaining: number }
+export type TotpEnrollment = { secret: string; otpauth_uri: string; qr_svg: string }
+export type TotpActivation = AuthResult & { recovery_codes: string[] }
+export type TotpDisableInput = { password: string; code: string }
+/** Tentative de connexion (`login`), seconde étape (`totp`) ou réinitialisation (`reset`) ; `at` en RFC 3339. */
 export type LoginEvent = {
   at: string
-  action: 'login' | 'reset'
+  action: 'login' | 'totp' | 'reset'
   success: boolean
   ip: string | null
   user_agent: string | null

@@ -5,7 +5,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 - `api/` : Rust (Axum + sqlx + Postgres), hébergé sur Render, base Postgres Supabase.
 - `web/` : React + Vite + TypeScript, hébergé sur Vercel.
 - Toutes les routes sont préfixées par `/api`. JSON partout, `snake_case`.
-- Auth : `Authorization: Bearer <JWT>` sur toutes les routes sauf `/api/health`, `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`, `/api/auth/reset`.
+- Auth : `Authorization: Bearer <JWT>` sur toutes les routes sauf `/api/health`, `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`, `/api/auth/login/totp`, `/api/auth/reset`.
   `/api/jobs/daily` n'accepte pas le JWT : elle exige `Authorization: Bearer <CRON_SECRET>` (voir « Tâche quotidienne »).
 - Montants : nombres JSON (f64). Devise de référence : EUR. Dates : `YYYY-MM-DD`. Identifiants : UUID.
 - Parts de détention : fraction `0..1` (0.5 = 50 %).
@@ -24,10 +24,11 @@ Les migrations sqlx s'exécutent au démarrage.
 | GET | `/api/health` | – | `{ "status": "ok" }` |
 | GET | `/api/auth/status` | – | `{ "setup_required": bool, "setup_token_required": bool, "recovery_enabled": bool }` (`setup_required` true tant qu'aucun utilisateur n'existe ; `setup_token_required` true si `SETUP_TOKEN` est défini côté serveur) |
 | POST | `/api/auth/setup` | `{ email, password, name, setup_token? }` | `{ token, user }` — refusé (409) si un utilisateur existe déjà ; refusé (403) si `SETUP_TOKEN` est défini et que `setup_token` est absent ou différent (comparaison en temps constant). Crée aussi le membre principal `name`. |
-| POST | `/api/auth/login` | `{ email, password }` | `{ token, user }` |
+| POST | `/api/auth/login` | `{ email, password }` | `{ token, user }`, ou `TotpChallenge` si le second facteur est activé (voir « Second facteur ») |
+| POST | `/api/auth/login/totp` | `{ challenge, code }` | `{ token, user }` — seconde étape de la connexion ; (401) défi invalide ou expiré, ou code incorrect ou déjà utilisé. |
 | GET | `/api/auth/me` | – | `user` = `{ id, email, name }` |
 | PUT | `/api/auth/password` | `{ current_password, new_password }` | `{ token, user }` — refusé (403) si `current_password` est faux ; (400) si `new_password` est trop court ou identique à l'actuel. Le jeton renvoyé remplace celui de l'appareil courant. |
-| POST | `/api/auth/reset` | `{ email, recovery_token, new_password }` | `{ token, user }` — (501) si `RECOVERY_TOKEN` n'est pas défini ; (403) si `recovery_token` est absent ou différent (comparaison en temps constant, vérifiée avant tout le reste) ; (400) mot de passe trop court ; (404) aucun compte pour cet e-mail. |
+| POST | `/api/auth/reset` | `{ email, recovery_token, new_password }` | `{ token, user }` — (501) si `RECOVERY_TOKEN` n'est pas défini ; (403) si `recovery_token` est absent ou différent (comparaison en temps constant, vérifiée avant tout le reste) ; (400) mot de passe trop court ; (404) aucun compte pour cet e-mail. **Désactive aussi le second facteur** (voir « Second facteur »). |
 
 | POST | `/api/auth/refresh` | – | `{ token, user }` — renouvellement glissant : nouveau jeton valable 7 jours, à la version de session courante. |
 | GET | `/api/auth/logins?limit=` | – | `LoginEvent[]`, du plus récent au plus ancien (`limit` défaut 50, borné à 1..200). |
@@ -38,7 +39,8 @@ un appareil oublié est déconnecté au bout de 7 jours d'inactivité.
 
 ### Limitation des tentatives
 
-`/api/auth/login` et `/api/auth/reset` partagent un limiteur en mémoire. Ne comptent comme échecs que les refus
+`/api/auth/login`, `/api/auth/login/totp`, `/api/auth/reset` et les routes protégées par code du second facteur
+(`/api/auth/totp/disable`, `/api/auth/totp/recovery-codes`) partagent un limiteur en mémoire. Ne comptent comme échecs que les refus
 d'identité (401, 403, 404) ; une saisie invalide (400) ne compte pas.
 
 - Par adresse IP : 5 échecs tolérés, puis un délai de 30 s, doublé à chaque nouvel échec (1 min, 2 min…), plafonné à 15 min.
@@ -54,17 +56,54 @@ utilise l'adresse TCP (sans proxy). Sans IP connue, toutes les requêtes partage
 
 ### Journal des connexions
 
-`LoginEvent = { at: string (RFC 3339), action: "login" | "reset", success: bool, ip: string | null, user_agent: string | null }`
+`LoginEvent = { at: string (RFC 3339), action: "login" | "totp" | "reset", success: bool, ip: string | null, user_agent: string | null }`
 
-Chaque tentative de connexion ou de réinitialisation qui atteint la vérification est journalisée (pas les refus
+`action` vaut `totp` pour la seconde étape d'une connexion avec second facteur (code TOTP ou de secours) ; un mot
+de passe juste suivi d'un défi n'est pas journalisé (seul le résultat de la seconde étape l'est).
+
+Chaque tentative de connexion (y compris la seconde étape) ou de réinitialisation qui atteint la vérification est journalisée (pas les refus
 429 ni les saisies invalides). Le user-agent est tronqué à 200 caractères ; l'e-mail saisi n'est pas conservé.
 Les entrées de plus de 90 jours sont purgées à chaque connexion réussie.
+
+### Second facteur (TOTP)
+
+Facultatif, activé depuis Paramètres. Codes TOTP RFC 6238 : HMAC-SHA1, 6 chiffres, pas de 30 s, tolérance
+d'un pas avant ou après (horloge du téléphone décalée). Le secret (20 octets aléatoires, générés par le serveur)
+est chiffré au repos (AES-256-GCM, clé dérivée de `JWT_SECRET` : changer `JWT_SECRET` rend le secret illisible,
+il faut alors se connecter avec un code de secours ou réinitialiser par `RECOVERY_TOKEN`).
+
+| Méthode | Route | Corps | Réponse |
+|---|---|---|---|
+| GET | `/api/auth/totp` | – | `{ enabled: bool, recovery_codes_remaining: int }` |
+| POST | `/api/auth/totp/setup` | – | `{ secret, otpauth_uri, qr_svg }` — nouveau secret **en attente** (remplace un éventuel secret en attente précédent) ; `secret` en base32 pour une saisie manuelle, `qr_svg` = document SVG du QR code de `otpauth_uri` (affiché en `data:` URI). (409) si déjà activé. |
+| POST | `/api/auth/totp/enable` | `{ code }` | `{ token, user, recovery_codes: string[] }` — confirme le secret en attente par un premier code et active le second facteur ; renvoie 10 codes de secours (affichés une seule fois). (409) aucun secret en attente ou déjà activé ; (403) code incorrect. |
+| POST | `/api/auth/totp/disable` | `{ password, code }` | `{ token, user }` — exige le mot de passe et un code TOTP ou de secours. (403) mot de passe ou code incorrect ; (409) non activé. |
+| POST | `/api/auth/totp/recovery-codes` | `{ code }` | `{ recovery_codes: string[] }` — régénère les 10 codes de secours (les anciens deviennent inutilisables) ; exige un code TOTP. (403) code incorrect ; (409) non activé. |
+
+`TotpChallenge = { totp_required: true, challenge: string, expires_in: int }` : réponse de `/api/auth/login`
+quand le mot de passe est juste et que le second facteur est activé. `challenge` est un jeton court (5 minutes,
+`expires_in` en secondes), qui ne donne accès à aucune route protégée ; il est lié à la version de session.
+Le front le renvoie à `/api/auth/login/totp` avec le code saisi.
+
+- `code` : 6 chiffres TOTP (espaces ignorés), ou un code de secours `xxxxx-xxxxx` (casse, espaces et tiret
+  ignorés). Un code de secours ne sert qu'une fois ; ils sont hachés en argon2id.
+- **Anti-rejeu** : un code TOTP accepté ne peut plus servir, ni aucun code d'un pas antérieur ou égal
+  (le serveur retient le dernier pas accepté).
+- Activer ou désactiver le second facteur incrémente la version de session : tous les autres appareils sont
+  déconnectés ; le jeton renvoyé remplace celui de l'appareil courant.
+- `/api/auth/login/totp`, `/api/auth/totp/disable` et `/api/auth/totp/recovery-codes` partagent le limiteur de la
+  connexion (un mauvais code compte comme un échec, 429 + `Retry-After`). Un mot de passe juste suivi d'un défi
+  ne remet **pas** le compteur de l'IP à zéro : seule la seconde étape réussie le fait.
+- Réinitialisation par `RECOVERY_TOKEN` : elle **désactive le second facteur** (secret et codes de secours
+  supprimés). Ce code de secours serveur est le dernier recours quand le téléphone est perdu, et qui le détient
+  contrôle déjà l'environnement du serveur ; le second facteur se réactive ensuite depuis Paramètres.
+- Changer le mot de passe (`PUT /api/auth/password`) conserve le second facteur.
 
 `GET /api/auth/status` renvoie aussi `recovery_enabled: bool` (true si `RECOVERY_TOKEN` est défini), pour
 afficher ou non le lien « Mot de passe oublié ».
 
 Sessions : chaque utilisateur porte un numéro de version de session, recopié dans le JWT. Changer ou
-réinitialiser le mot de passe l'incrémente : tous les jetons émis auparavant sont refusés (401), sur tous les
+réinitialiser le mot de passe, activer ou désactiver le second facteur l'incrémente : tous les jetons émis auparavant sont refusés (401), sur tous les
 appareils. Seul le jeton renvoyé par la route reste valable.
 
 ## Membres du foyer

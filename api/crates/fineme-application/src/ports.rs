@@ -71,8 +71,30 @@ pub struct TokenSubject {
 
 pub trait TokenService: Send + Sync {
     fn issue(&self, subject: TokenSubject, now: DateTime<Utc>) -> Result<String, ProviderError>;
-    /// Contenu du jeton s'il est authentique et non expiré à `now`.
+    /// Contenu du jeton s'il est authentique et non expiré à `now`. Un jeton de défi est refusé.
     fn verify(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject>;
+    /// Jeton court de défi (seconde étape de connexion) : ne vaut pas session.
+    fn issue_challenge(
+        &self,
+        subject: TokenSubject,
+        now: DateTime<Utc>,
+    ) -> Result<String, ProviderError>;
+    /// Contenu d'un jeton de défi authentique et non expiré ; un jeton de session est refusé.
+    fn verify_challenge(&self, token: &str, now: DateTime<Utc>) -> Option<TokenSubject>;
+    /// Durée de validité d'un jeton de défi, en secondes.
+    fn challenge_seconds(&self) -> i64;
+}
+
+/// Primitives du second facteur : aléa, HMAC-SHA1, chiffrement du secret au repos et QR code.
+pub trait TotpSupport: Send + Sync {
+    fn random_bytes(&self, len: usize) -> Result<Vec<u8>, ProviderError>;
+    fn hmac_sha1(&self, key: &[u8], message: &[u8]) -> [u8; 20];
+    /// Secret chiffré, prêt à stocker.
+    fn seal(&self, secret: &[u8]) -> Result<String, ProviderError>;
+    /// Secret déchiffré ; erreur si la valeur est altérée ou la clé a changé.
+    fn open(&self, sealed: &str) -> Result<Vec<u8>, ProviderError>;
+    /// Document SVG du QR code de `text`.
+    fn qr_svg(&self, text: &str) -> Result<String, ProviderError>;
 }
 
 // ---------------------------------------------------------------- persistance
@@ -100,6 +122,49 @@ pub trait UserRepository: Send + Sync {
         credentials: &Credentials,
         primary_member: &Member,
     ) -> RepoResult<bool>;
+}
+
+/// Code de secours non utilisé (haché).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryCodeHash {
+    pub id: i64,
+    pub hash: String,
+}
+
+/// État du second facteur d'un utilisateur.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecondFactorRecord {
+    /// Secret chiffré actif ; `None` = second facteur désactivé.
+    pub secret: Option<String>,
+    /// Secret chiffré en attente de confirmation par un premier code.
+    pub pending_secret: Option<String>,
+    /// Dernier pas TOTP accepté (anti-rejeu).
+    pub last_step: Option<i64>,
+    /// Codes de secours encore utilisables.
+    pub recovery_codes: Vec<RecoveryCodeHash>,
+}
+
+#[async_trait]
+pub trait SecondFactorRepository: Send + Sync {
+    /// État du second facteur (vide si l'utilisateur n'existe pas).
+    async fn second_factor(&self, user: UserId) -> RepoResult<SecondFactorRecord>;
+    async fn save_pending_secret(&self, user: UserId, sealed: &str) -> RepoResult<()>;
+    /// Active le secret, retient le pas utilisé, remplace les codes de secours, retire le secret en attente et
+    /// incrémente la version de session, tout ou rien. Renvoie la nouvelle version (`None` : utilisateur absent).
+    async fn enable_second_factor(
+        &self,
+        user: UserId,
+        sealed: &str,
+        step: i64,
+        recovery_hashes: &[String],
+    ) -> RepoResult<Option<i64>>;
+    /// Efface secret, secret en attente et codes de secours, et incrémente la version de session.
+    async fn disable_second_factor(&self, user: UserId) -> RepoResult<Option<i64>>;
+    /// Retient `step` s'il est postérieur au dernier pas accepté ; `false` = rejeu (écriture conditionnelle).
+    async fn use_totp_step(&self, user: UserId, step: i64) -> RepoResult<bool>;
+    /// Consomme un code de secours ; `false` s'il était déjà utilisé.
+    async fn use_recovery_code(&self, user: UserId, id: i64) -> RepoResult<bool>;
+    async fn replace_recovery_codes(&self, user: UserId, hashes: &[String]) -> RepoResult<()>;
 }
 
 /// Journal des tentatives de connexion et de réinitialisation.

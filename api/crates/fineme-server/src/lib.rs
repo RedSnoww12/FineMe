@@ -13,6 +13,7 @@ use fineme_infra::clock::SystemClock;
 use fineme_infra::market::{self, CoinGecko, Eodhd, Frankfurter, YahooFinance};
 use fineme_infra::postgres::{self, PgStore};
 use fineme_infra::security::{Argon2Hasher, JwtTokens};
+use fineme_infra::totp::TotpCrypto;
 use sqlx::PgPool;
 
 pub const DEFAULT_PORT: u16 = 8080;
@@ -114,6 +115,7 @@ pub async fn build_app(
     }
     let ports = Ports {
         users: store.clone(),
+        second_factor: store.clone(),
         login_journal: store.clone(),
         portfolio: store.clone(),
         fx_rates: store.clone(),
@@ -130,6 +132,8 @@ pub async fn build_app(
         clock: Arc::new(SystemClock),
         hasher: Arc::new(Argon2Hasher),
         tokens: Arc::new(JwtTokens::new(jwt_secret)),
+        // Secret TOTP chiffré au repos avec une clé dérivée de JWT_SECRET.
+        totp: Arc::new(TotpCrypto::new(jwt_secret)),
         fx_provider: Arc::new(Frankfurter::new(http.clone(), market::FRANKFURTER_URL)),
         price_providers,
         bank_providers: Vec::new(),

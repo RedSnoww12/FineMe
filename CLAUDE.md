@@ -119,6 +119,12 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
   Safari et de plus en plus par Chrome) plus une protection CSRF, ou un proxy Vercel vers l'API. Le risque XSS du
   `localStorage` est contenu par la CSP stricte de `web/vercel.json` (aucun script en ligne hors l'empreinte du
   script de thème, `connect-src` limité à l'API) et par la version de session (changer le mot de passe coupe tout).
+- Second facteur TOTP facultatif (RFC 6238, SHA-1, 6 chiffres, 30 s, ±1 pas) : `POST /api/auth/login` renvoie
+  alors un jeton de défi de 5 min (claim `pur: "totp"`, refusé comme session) à échanger avec le code sur
+  `POST /api/auth/login/totp`. Secret chiffré AES-256-GCM (clé dérivée de `JWT_SECRET`), dernier pas accepté
+  retenu (anti-rejeu), 10 codes de secours hachés argon2id. Activer ou désactiver (mot de passe + code)
+  incrémente la version de session. La réinitialisation par `RECOVERY_TOKEN` désactive le TOTP : c'est le dernier
+  recours en cas de téléphone perdu, et son détenteur contrôle déjà le serveur.
 - Connexion et réinitialisation limitées en fréquence (délai croissant par IP et global, 429 + `Retry-After`) et
   journalisées (`GET /api/auth/logins`, visible dans Paramètres). L'IP vient de `X-Forwarded-For` lu **depuis la
   droite** (`TRUSTED_PROXY_HOPS`, défaut 1 pour le proxy de Render) : l'entrée de gauche est forgeable par le client.

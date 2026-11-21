@@ -6,7 +6,8 @@ use fineme_application::ports::{
     AccountWrite, BenchmarkRepository, BudgetRepository, ConnectionRepository, Credentials,
     FxRateRepository, GoalRepository, ImportBatch, ImportProfileRepository, ImportRepository,
     LoginJournal, OperationChange, OperationRepository, PortfolioRepository, PositionUpdate,
-    PricePoint, RepoError, SnapshotRepository, TransactionRepository, UserRepository,
+    PricePoint, RepoError, SecondFactorRecord, SecondFactorRepository, SnapshotRepository,
+    TransactionRepository, UserRepository,
 };
 use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -272,6 +273,133 @@ async fn login_journal_lists_newest_first_and_prunes_old_entries() {
 
     assert_eq!(db.store.prune_before(at(3)).await.unwrap(), 2);
     assert_eq!(db.store.recent(10).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn second_factor_lifecycle_is_atomic_and_refuses_replay() {
+    let db = test_db().await;
+    let credentials = Credentials {
+        user: User {
+            id: UserId::generate(),
+            email: "camille@exemple.test".into(),
+            name: "Camille".into(),
+        },
+        password_hash: "$argon2id$fictif".into(),
+        session_version: 0,
+    };
+    let user = credentials.user.id;
+    db.store
+        .create_first(&credentials, &member("Camille", true))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.store.second_factor(user).await.unwrap(),
+        SecondFactorRecord::default()
+    );
+    assert_eq!(
+        db.store.second_factor(UserId::generate()).await.unwrap(),
+        SecondFactorRecord::default()
+    );
+
+    db.store
+        .save_pending_secret(user, "v1:attente")
+        .await
+        .unwrap();
+    assert_eq!(
+        db.store
+            .second_factor(user)
+            .await
+            .unwrap()
+            .pending_secret
+            .as_deref(),
+        Some("v1:attente")
+    );
+
+    let hashes: Vec<String> = (0..3).map(|i| format!("$argon2id$code{i}")).collect();
+    assert_eq!(
+        db.store
+            .enable_second_factor(user, "v1:attente", 100, &hashes)
+            .await
+            .unwrap(),
+        Some(1)
+    );
+    let record = db.store.second_factor(user).await.unwrap();
+    assert_eq!(record.secret.as_deref(), Some("v1:attente"));
+    assert_eq!(record.pending_secret, None);
+    assert_eq!(record.last_step, Some(100));
+    assert_eq!(
+        record
+            .recovery_codes
+            .iter()
+            .map(|c| c.hash.clone())
+            .collect::<Vec<_>>(),
+        hashes
+    );
+
+    // Anti-rejeu : seul un pas postérieur au dernier est retenu.
+    assert!(!db.store.use_totp_step(user, 100).await.unwrap());
+    assert!(!db.store.use_totp_step(user, 99).await.unwrap());
+    assert!(db.store.use_totp_step(user, 101).await.unwrap());
+
+    // Code de secours à usage unique.
+    let first = record.recovery_codes[0].id;
+    assert!(db.store.use_recovery_code(user, first).await.unwrap());
+    assert!(!db.store.use_recovery_code(user, first).await.unwrap());
+    assert!(
+        !db.store
+            .use_recovery_code(UserId::generate(), record.recovery_codes[1].id)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        db.store
+            .second_factor(user)
+            .await
+            .unwrap()
+            .recovery_codes
+            .len(),
+        2
+    );
+
+    db.store
+        .replace_recovery_codes(user, &["$argon2id$neuf".to_string()])
+        .await
+        .unwrap();
+    let codes = db.store.second_factor(user).await.unwrap().recovery_codes;
+    assert_eq!(codes.len(), 1);
+    assert_eq!(codes[0].hash, "$argon2id$neuf");
+
+    assert_eq!(db.store.disable_second_factor(user).await.unwrap(), Some(2));
+    assert_eq!(
+        db.store.second_factor(user).await.unwrap(),
+        SecondFactorRecord::default()
+    );
+    assert_eq!(
+        db.store
+            .find_by_id(user)
+            .await
+            .unwrap()
+            .unwrap()
+            .session_version,
+        2
+    );
+    assert_eq!(
+        db.store
+            .disable_second_factor(UserId::generate())
+            .await
+            .unwrap(),
+        None
+    );
+
+    // Le journal accepte la seconde étape de connexion.
+    let totp = LoginEvent {
+        at: at(5),
+        action: LoginAction::Totp,
+        success: false,
+        origin: LoginOrigin::default(),
+    };
+    db.store.record(&totp).await.unwrap();
+    assert_eq!(db.store.recent(1).await.unwrap(), vec![totp]);
 }
 
 #[tokio::test]

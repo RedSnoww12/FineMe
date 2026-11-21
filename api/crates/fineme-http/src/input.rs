@@ -121,6 +121,23 @@ pub struct LoginBody {
 }
 
 #[derive(Deserialize)]
+pub struct LoginTotpBody {
+    pub challenge: String,
+    pub code: String,
+}
+
+#[derive(Deserialize)]
+pub struct TotpCodeBody {
+    pub code: String,
+}
+
+#[derive(Deserialize)]
+pub struct TotpDisableBody {
+    pub password: String,
+    pub code: String,
+}
+
+#[derive(Deserialize)]
 pub struct PasswordChangeBody {
     pub current_password: String,
     pub new_password: String,

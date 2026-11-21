@@ -6,6 +6,8 @@ import { mockJson } from './server'
 export function mockShell() {
   mockJson('get', '/api/members', members)
   mockJson('get', '/api/alerts', [])
+  // Panneau du second facteur (Paramètres) : désactivé par défaut.
+  mockJson('get', '/api/auth/totp', { enabled: false, recovery_codes_remaining: 0 })
 }
 
 /** Requêtes de la vue d'ensemble, sans historique. */
