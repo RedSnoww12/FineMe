@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { buildOperationInput, cashEffect, emptyOperationForm, type OperationForm } from '@/features/accounts/lib/operations'
+import {
+  buildOperationInput,
+  cashEffect,
+  emptyOperationForm,
+  operationToForm,
+  type OperationForm,
+} from '@/features/accounts/lib/operations'
+import type { Operation } from '@/shared/api/types'
 
 const TODAY = '2025-06-30'
 
@@ -82,5 +89,63 @@ describe('cashEffect', () => {
     expect(cashEffect({ kind: 'deposit', amount: 500, fees: 0 })).toBe(500)
     expect(cashEffect({ kind: 'fee', amount: 3, fees: 0 })).toBe(-3)
     expect(cashEffect({ kind: 'withdrawal', amount: 200, fees: 0 })).toBe(-200)
+  })
+})
+
+function operation(overrides: Partial<Operation>): Operation {
+  return {
+    id: 'op-1',
+    account_id: 'a-1',
+    kind: 'buy',
+    date: '2025-01-10',
+    holding_id: 'h-1',
+    holding_name: 'Fonds fictif',
+    quantity: 12.5,
+    unit_price: 1234.5,
+    amount: 15431.25,
+    fees: 1.99,
+    currency: 'EUR',
+    note: null,
+    realized_gain: null,
+    ...overrides,
+  }
+}
+
+describe('operationToForm', () => {
+  it('préremplit un achat avec des nombres à la française, sans le montant calculé', () => {
+    expect(operationToForm(operation({ note: 'Ordre' }))).toEqual({
+      kind: 'buy',
+      date: '2025-01-10',
+      holding_id: 'h-1',
+      quantity: '12,5',
+      unit_price: '1234,5',
+      fees: '1,99',
+      amount: '',
+      note: 'Ordre',
+    })
+  })
+
+  it('laisse les frais vides quand ils sont nuls et garde les petites quantités lisibles', () => {
+    const form = operationToForm(operation({ kind: 'sell', quantity: 0.0000005, fees: 0 }))
+    expect(form.fees).toBe('')
+    expect(form.quantity).toBe('0,0000005')
+  })
+
+  it('préremplit le montant d’un versement, sans position', () => {
+    const form = operationToForm(
+      operation({ kind: 'deposit', holding_id: null, quantity: null, unit_price: null, amount: 3000, fees: 0 }),
+    )
+    expect(form).toMatchObject({ kind: 'deposit', holding_id: '', quantity: '', unit_price: '', fees: '', amount: '3000' })
+  })
+
+  it('redonne le même corps que l’opération enregistrée quand rien n’est modifié', () => {
+    const op = operation({ kind: 'dividend', quantity: null, unit_price: null, amount: 12.34, fees: 0, note: 'Coupon' })
+    expect(buildOperationInput(operationToForm(op), TODAY).input).toEqual({
+      kind: 'dividend',
+      date: '2025-01-10',
+      holding_id: 'h-1',
+      amount: 12.34,
+      note: 'Coupon',
+    })
   })
 })

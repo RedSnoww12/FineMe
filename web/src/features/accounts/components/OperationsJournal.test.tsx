@@ -34,15 +34,20 @@ const summary: OperationsSummary = {
 
 /** Compte PEA dont le journal est servi depuis un état modifiable. */
 function servePea(initial: Operation[]) {
-  const state = { operations: [...initial] }
+  const state = { operations: [...initial], accountLoads: 0, summaryLoads: 0 }
+  const account = buildAccountDetail({ id: 'a-pea', name: 'PEA Camille', kind: 'investment', envelope: 'pea', holdings: [etf] })
   mockShell()
-  mockJson(
-    'get',
-    '/api/accounts/a-pea',
-    buildAccountDetail({ id: 'a-pea', name: 'PEA Camille', kind: 'investment', envelope: 'pea', holdings: [etf] }),
-  )
   mockJson('get', '/api/accounts/a-pea/transactions', { items: [], total: 0 })
-  mockJson('get', '/api/accounts/a-pea/operations/summary', summary)
+  server.use(
+    http.get(`${API}/api/accounts/a-pea`, () => {
+      state.accountLoads += 1
+      return HttpResponse.json(account)
+    }),
+    http.get(`${API}/api/accounts/a-pea/operations/summary`, () => {
+      state.summaryLoads += 1
+      return HttpResponse.json(summary)
+    }),
+  )
   server.use(http.get(`${API}/api/accounts/a-pea/operations`, () => HttpResponse.json(state.operations)))
   return state
 }
@@ -159,5 +164,71 @@ describe('journal d’opérations d’un compte d’investissement', () => {
     await actor.click(dialog.getByRole('button', { name: 'Supprimer l’opération' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(await screen.findByText(/Aucune opération\. Enregistrez vos achats/)).toBeInTheDocument()
+  })
+
+  it('préremplit la modification, envoie un remplacement complet puis rafraîchit position et synthèse', async () => {
+    const state = servePea([buildOperation({ note: 'Ordre initial' })])
+    let received: unknown
+    server.use(
+      http.put(`${API}/api/operations/op-1`, async ({ request }) => {
+        received = await request.json()
+        const updated = buildOperation({ quantity: 20, unit_price: 100, amount: 2000, fees: 5, note: 'Ordre corrigé' })
+        state.operations = [updated]
+        return HttpResponse.json(updated)
+      }),
+    )
+    const { user: actor } = await openJournal()
+    const edit = await screen.findByRole('button', { name: 'Modifier l’opération Achat Fonds Indice Monde du 10/01/2025' })
+    await actor.click(edit)
+
+    const modal = await screen.findByRole('dialog', { name: 'Modifier l’opération' })
+    expect(modal).toHaveFocus()
+    const dialog = within(modal)
+    expect(dialog.getByLabelText('Type d’opération')).toHaveValue('buy')
+    expect(dialog.getByLabelText('Date')).toHaveValue('2025-01-10')
+    expect(dialog.getByLabelText('Position')).toHaveValue('h-1')
+    expect(dialog.getByLabelText('Quantité')).toHaveValue('10')
+    expect(dialog.getByLabelText('Cours unitaire')).toHaveValue('100')
+    expect(dialog.getByLabelText('Frais')).toHaveValue('5')
+    expect(dialog.getByLabelText('Note')).toHaveValue('Ordre initial')
+
+    const accountLoads = state.accountLoads
+    const summaryLoads = state.summaryLoads
+    await actor.clear(dialog.getByLabelText('Quantité'))
+    await actor.type(dialog.getByLabelText('Quantité'), '20')
+    await actor.clear(dialog.getByLabelText('Note'))
+    await actor.type(dialog.getByLabelText('Note'), 'Ordre corrigé')
+    await actor.click(dialog.getByRole('button', { name: 'Enregistrer' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(received).toEqual({
+      kind: 'buy',
+      date: '2025-01-10',
+      holding_id: 'h-1',
+      quantity: 20,
+      unit_price: 100,
+      fees: 5,
+      note: 'Ordre corrigé',
+    })
+    expect(await screen.findByText('Ordre corrigé')).toBeInTheDocument()
+    // La position (quantité, PRU) vient de la fiche compte : elle et la synthèse annuelle sont rechargées.
+    await waitFor(() => expect(state.accountLoads).toBeGreaterThan(accountLoads))
+    await waitFor(() => expect(state.summaryLoads).toBeGreaterThan(summaryLoads))
+    expect(screen.getByRole('button', { name: /Modifier l’opération Achat Fonds Indice Monde/ })).toHaveFocus()
+  })
+
+  it('affiche le refus de l’API sans perdre la saisie de la modification', async () => {
+    servePea([buildOperation({ kind: 'sell', quantity: 2, unit_price: 150, amount: 300, fees: 0, realized_gain: 100 })])
+    mockApiError('put', '/api/operations/op-1', 400, 'Vente impossible le 2025-01-10 : seulement 2 titre(s) détenu(s) à cette date')
+    const { user: actor } = await openJournal()
+    await actor.click(await screen.findByRole('button', { name: /Modifier l’opération Vente Fonds Indice Monde/ }))
+    const dialog = within(await screen.findByRole('dialog', { name: 'Modifier l’opération' }))
+    await actor.clear(dialog.getByLabelText('Quantité'))
+    await actor.type(dialog.getByLabelText('Quantité'), '50')
+    await actor.click(dialog.getByRole('button', { name: 'Enregistrer' }))
+
+    expect(await dialog.findByText(/Vente impossible le 2025-01-10/)).toBeInTheDocument()
+    expect(dialog.getByLabelText('Quantité')).toHaveValue('50')
+    expect(dialog.getByLabelText('Type d’opération')).toHaveValue('sell')
   })
 })
