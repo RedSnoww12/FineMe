@@ -10,8 +10,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use fineme_application::ports::{
     AccountWrite, ConnectionRepository, Credentials, FxRateRepository, GoalRepository, ImportBatch,
-    ImportRepository, PortfolioData, PortfolioRepository, PricePoint, RepoError, RepoResult,
-    SnapshotPoint, SnapshotRepository, TransactionRepository, UserRepository,
+    ImportRepository, OperationChange, OperationRepository, PortfolioData, PortfolioRepository,
+    PositionUpdate, PricePoint, RepoError, RepoResult, SnapshotPoint, SnapshotRepository,
+    TransactionRepository, UserRepository,
 };
 use fineme_domain::account::Account;
 use fineme_domain::connection::Connection;
@@ -20,10 +21,11 @@ use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::Holding;
 use fineme_domain::ids::{
-    AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
+    AccountId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId, UserId,
 };
 use fineme_domain::loan::Loan;
 use fineme_domain::member::{Member, User};
+use fineme_domain::operation::Operation;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::property::Property;
 use fineme_domain::transaction::Transaction;
@@ -32,8 +34,8 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use rows::{
-    AccountRow, ConnectionRow, GoalRow, HoldingRow, LoanRow, MemberRow, OwnerRow, PropertyRow,
-    SnapshotAccountRow, TransactionRow,
+    AccountRow, ConnectionRow, GoalRow, HoldingRow, LoanRow, MemberRow, OperationRow, OwnerRow,
+    PropertyRow, SnapshotAccountRow, TransactionRow,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -757,6 +759,105 @@ impl TransactionRepository for PgStore {
             .await
             .map_err(db)?;
         Ok(result.rows_affected() > 0)
+    }
+}
+
+/// Colonnes lues d'une opération (macro : sqlx n'accepte que des requêtes littérales).
+macro_rules! select_operations {
+    ($condition:literal) => {
+        concat!(
+            "SELECT id, account_id, holding_id, kind, date, quantity, unit_price, amount, fees, \
+             currency, note, recorded_at FROM investment_operations ",
+            $condition
+        )
+    };
+}
+
+async fn upsert_operation(conn: &mut PgConnection, op: &Operation) -> RepoResult<()> {
+    let movement = &op.movement;
+    let trade = movement.trade();
+    sqlx::query(
+        "INSERT INTO investment_operations (id, account_id, holding_id, kind, date, quantity, unit_price, \
+         amount, fees, currency, note, recorded_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+         ON CONFLICT (id) DO UPDATE SET holding_id = EXCLUDED.holding_id, kind = EXCLUDED.kind, \
+         date = EXCLUDED.date, quantity = EXCLUDED.quantity, unit_price = EXCLUDED.unit_price, \
+         amount = EXCLUDED.amount, fees = EXCLUDED.fees, currency = EXCLUDED.currency, note = EXCLUDED.note",
+    )
+    .bind(op.id.as_uuid())
+    .bind(op.account_id.as_uuid())
+    .bind(movement.holding().map(|id| id.as_uuid()))
+    .bind(movement.kind().as_str())
+    .bind(op.date)
+    .bind(trade.map(|t| t.quantity()))
+    .bind(trade.map(|t| t.unit_price()))
+    .bind(trade.is_none().then(|| movement.amount()))
+    .bind(trade.map_or(0.0, |t| t.fees()))
+    .bind(op.currency.as_str())
+    .bind(&op.note)
+    .bind(op.recorded_at)
+    .execute(conn)
+    .await
+    .map_err(db)?;
+    Ok(())
+}
+
+#[async_trait]
+impl OperationRepository for PgStore {
+    async fn operations(&self, account: AccountId) -> RepoResult<Vec<Operation>> {
+        sqlx::query_as::<_, OperationRow>(select_operations!(
+            "WHERE account_id = $1 ORDER BY date, recorded_at, id"
+        ))
+        .bind(account.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?
+        .into_iter()
+        .map(Operation::try_from)
+        .collect()
+    }
+
+    async fn find_operation(&self, id: OperationId) -> RepoResult<Option<Operation>> {
+        sqlx::query_as::<_, OperationRow>(select_operations!("WHERE id = $1"))
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?
+            .map(Operation::try_from)
+            .transpose()
+    }
+
+    async fn apply_operation(
+        &self,
+        change: &OperationChange,
+        positions: &[PositionUpdate],
+        at: DateTime<Utc>,
+    ) -> RepoResult<()> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let account = match change {
+            OperationChange::Save(operation) => {
+                upsert_operation(&mut tx, operation).await?;
+                operation.account_id
+            }
+            OperationChange::Delete { id, account } => {
+                sqlx::query("DELETE FROM investment_operations WHERE id = $1")
+                    .bind(id.as_uuid())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?;
+                *account
+            }
+        };
+        for position in positions {
+            sqlx::query("UPDATE holdings SET quantity = $2, buy_price = $3 WHERE id = $1")
+                .bind(position.holding.as_uuid())
+                .bind(position.quantity)
+                .bind(position.buy_price)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        touch_account(&mut tx, account.as_uuid(), at).await?;
+        tx.commit().await.map_err(db)
     }
 }
 

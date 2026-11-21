@@ -1528,3 +1528,122 @@ async fn history_cleanup_routes_review_correct_delete_recompute_and_reset() {
         );
     }
 }
+
+#[tokio::test]
+async fn investment_operations_drive_positions_and_yearly_summary() {
+    let (api, alice, _) = Api::household().await;
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    let pea = api
+        .id_of(
+            "/api/accounts",
+            json!({ "name": "PEA", "kind": "investment", "owners": owners }),
+        )
+        .await;
+    let etf = api
+        .id_of(
+            &format!("/api/accounts/{pea}/holdings"),
+            json!({ "name": "ETF Démo", "quantity": 0, "current_price": 140 }),
+        )
+        .await;
+    let ops = format!("/api/accounts/{pea}/operations");
+
+    for body in [
+        json!({ "kind": "deposit", "date": "2025-01-02", "amount": 3000 }),
+        json!({ "kind": "buy", "date": "2025-01-10", "holding_id": etf, "quantity": 10, "unit_price": 100, "fees": 5 }),
+        json!({ "kind": "buy", "date": "2025-03-10", "holding_id": etf, "quantity": 10, "unit_price": 130, "fees": 5 }),
+        json!({ "kind": "dividend", "date": "2025-07-01", "holding_id": etf, "amount": 12.5, "note": "Coupon" }),
+    ] {
+        let (status, created) = api.call("POST", &ops, Some(body)).await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+    }
+    let sale = api
+        .post(&ops, json!({ "kind": "sell", "date": "2025-06-01", "holding_id": etf, "quantity": 8, "unit_price": 150, "fees": 4 }))
+        .await;
+    assert_eq!(
+        (&sale["kind"], &sale["holding_name"], &sale["currency"]),
+        (&json!("sell"), &json!("ETF Démo"), &json!("EUR"))
+    );
+    assert!(close(&sale["amount"], 1200.0) && close(&sale["realized_gain"], 272.0));
+
+    // La position suit le journal : 12 parts au PRU de 115,50 €, cours inchangé.
+    let detail = api.get(&format!("/api/accounts/{pea}")).await;
+    let holding = &detail["holdings"][0];
+    assert!(close(&holding["quantity"], 12.0) && close(&holding["buy_price"], 115.5));
+    assert!(close(&holding["value"], 1680.0));
+
+    // Le formulaire de la position ne peut plus changer la quantité.
+    let (status, _) = api
+        .call(
+            "PUT",
+            &format!("/api/holdings/{etf}"),
+            Some(json!({ "quantity": 1 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let list = api.get(&ops).await;
+    let kinds: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|op| op["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["dividend", "sell", "buy", "buy", "deposit"]);
+    assert_eq!(list[0]["note"], "Coupon");
+    assert_eq!(list[4]["holding_id"], Value::Null);
+
+    let summary = api.get(&format!("{ops}/summary")).await;
+    assert_eq!(summary["currency"], "EUR");
+    let year = &summary["years"][0];
+    assert_eq!(year["year"], 2025);
+    assert!(close(&year["realized_gain"], 272.0) && close(&year["dividends"], 12.5));
+    assert!(close(&year["fees"], 14.0) && close(&year["deposits"], 3000.0));
+
+    // Modifier la vente (15 au lieu de 8) rend chaque achat indispensable : en supprimer un est refusé.
+    let sale_id = sale["id"].as_str().unwrap();
+    let (status, edited) = api
+        .call("PUT", &format!("/api/operations/{sale_id}"), Some(json!({
+            "kind": "sell", "date": "2025-06-01", "holding_id": etf, "quantity": 15, "unit_price": 150, "fees": 4
+        })))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(close(&edited["realized_gain"], 513.5));
+    let first_buy = list[3]["id"].as_str().unwrap();
+    let refused = api
+        .call("DELETE", &format!("/api/operations/{first_buy}"), None)
+        .await;
+    assert_eq!(error_of(&refused).0, 400);
+    assert!(error_of(&refused).1.contains("Vente impossible"));
+    assert_eq!(
+        api.call("DELETE", &format!("/api/operations/{sale_id}"), None)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        api.call("DELETE", &format!("/api/operations/{sale_id}"), None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let holding = &api.get(&format!("/api/accounts/{pea}")).await["holdings"][0];
+    assert!(close(&holding["quantity"], 20.0));
+
+    // Validation : vente sans position, type inconnu.
+    let missing = api
+        .call(
+            "POST",
+            &ops,
+            Some(json!({ "kind": "sell", "date": "2025-01-01", "quantity": 1, "unit_price": 1 })),
+        )
+        .await;
+    assert_eq!(error_of(&missing).0, 400);
+    let unknown = api
+        .call(
+            "POST",
+            &ops,
+            Some(json!({ "kind": "transfer", "date": "2025-01-01", "amount": 1 })),
+        )
+        .await;
+    assert_eq!(error_of(&unknown).0, 400);
+}

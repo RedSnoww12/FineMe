@@ -11,9 +11,10 @@ use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
-    AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
+    AccountId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId, UserId,
 };
 use fineme_domain::member::{Member, User};
+use fineme_domain::operation::Operation;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::transaction::Transaction;
 
@@ -171,6 +172,40 @@ pub trait TransactionRepository: Send + Sync {
     /// doublons, tout ou rien ; renvoie le nombre de mouvements réellement insérés.
     async fn import(&self, account: &Account, transactions: &[Transaction]) -> RepoResult<u64>;
     async fn delete(&self, id: TransactionId) -> RepoResult<bool>;
+}
+
+/// Modification du journal d'opérations d'un compte.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OperationChange {
+    /// Crée ou remplace l'opération.
+    Save(Operation),
+    Delete {
+        id: OperationId,
+        account: AccountId,
+    },
+}
+
+/// Quantité et PRU d'une position recalculés à partir du journal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PositionUpdate {
+    pub holding: HoldingId,
+    pub quantity: f64,
+    pub buy_price: Option<f64>,
+}
+
+#[async_trait]
+pub trait OperationRepository: Send + Sync {
+    /// Opérations d'un compte, dans un ordre quelconque.
+    async fn operations(&self, account: AccountId) -> RepoResult<Vec<Operation>>;
+    async fn find_operation(&self, id: OperationId) -> RepoResult<Option<Operation>>;
+    /// Applique la modification du journal, écrit les positions recalculées et date la modification
+    /// du compte, tout ou rien.
+    async fn apply_operation(
+        &self,
+        change: &OperationChange,
+        positions: &[PositionUpdate],
+        at: DateTime<Utc>,
+    ) -> RepoResult<()>;
 }
 
 #[derive(Debug, Clone, PartialEq)]

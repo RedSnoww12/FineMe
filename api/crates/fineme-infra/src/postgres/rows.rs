@@ -10,10 +10,12 @@ use fineme_domain::fx::Currency;
 use fineme_domain::goal::{Goal, GoalKind};
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
-    AccountId, ConnectionId, GoalId, HoldingId, LoanId, MemberId, PropertyId, TransactionId,
+    AccountId, ConnectionId, GoalId, HoldingId, LoanId, MemberId, OperationId, PropertyId,
+    TransactionId,
 };
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::member::Member;
+use fineme_domain::operation::{Movement, MovementFields, Operation, OperationKind};
 use fineme_domain::ownership::Ownership;
 use fineme_domain::portfolio::AccountSnapshot;
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
@@ -235,6 +237,51 @@ impl From<TransactionRow> for Transaction {
             amount: row.amount,
             category: row.category,
         }
+    }
+}
+
+#[derive(FromRow)]
+pub(super) struct OperationRow {
+    id: Uuid,
+    account_id: Uuid,
+    holding_id: Option<Uuid>,
+    kind: String,
+    date: NaiveDate,
+    quantity: Option<f64>,
+    unit_price: Option<f64>,
+    amount: Option<f64>,
+    fees: f64,
+    currency: String,
+    note: Option<String>,
+    recorded_at: DateTime<Utc>,
+}
+
+impl TryFrom<OperationRow> for Operation {
+    type Error = RepoError;
+
+    fn try_from(row: OperationRow) -> RepoResult<Self> {
+        let invalid = corrupt("investment_operations", row.id);
+        let kind = OperationKind::parse(&row.kind).map_err(&invalid)?;
+        let movement = Movement::new(
+            kind,
+            MovementFields {
+                holding: row.holding_id.map(HoldingId::from_uuid),
+                quantity: row.quantity,
+                unit_price: row.unit_price,
+                amount: row.amount,
+                fees: Some(row.fees),
+            },
+        )
+        .map_err(&invalid)?;
+        Ok(Operation {
+            id: OperationId::from_uuid(row.id),
+            account_id: AccountId::from_uuid(row.account_id),
+            date: row.date,
+            movement,
+            currency: Currency::parse(&row.currency).map_err(&invalid)?,
+            note: row.note,
+            recorded_at: row.recorded_at,
+        })
     }
 }
 

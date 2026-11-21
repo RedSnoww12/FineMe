@@ -11,6 +11,7 @@ pub mod holding;
 pub mod ids;
 pub mod loan;
 pub mod member;
+pub mod operation;
 pub mod ownership;
 pub mod portfolio;
 pub mod property;

@@ -7,6 +7,7 @@ import type { AccountDetail, Holding, PricesRefresh, Transaction } from '@/share
 import { AccountEditor } from '../components/AccountEditor'
 import { CsvImportModal } from '../components/CsvImport'
 import { HoldingFormModal } from '../components/HoldingForm'
+import { OperationsJournal } from '../components/OperationsJournal'
 import { Icon } from '@/shared/ui/Icon'
 import {
   Badge,
@@ -20,6 +21,7 @@ import {
   Notice,
   PageHeader,
   Panel,
+  Segmented,
   Signed,
   Stat,
 } from '@/shared/ui/ui'
@@ -214,6 +216,27 @@ function HoldingsPanel({ account, onImport }: { account: AccountDetail; onImport
         </ConfirmModal>
       ) : null}
     </Panel>
+  )
+}
+
+type InvestmentTab = 'holdings' | 'journal'
+
+/** Positions et journal d'opérations, en onglets : le journal n'est chargé qu'à l'ouverture de son onglet. */
+function InvestmentSection({ account, onImport }: { account: AccountDetail; onImport: () => void }) {
+  const [tab, setTab] = useState<InvestmentTab>('holdings')
+  return (
+    <div className="flex flex-col gap-3">
+      <Segmented
+        label="Affichage des investissements"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'holdings', label: 'Positions' },
+          { value: 'journal', label: 'Journal d’opérations' },
+        ]}
+      />
+      {tab === 'holdings' ? <HoldingsPanel account={account} onImport={onImport} /> : <OperationsJournal account={account} />}
+    </div>
   )
 }
 
@@ -483,7 +506,7 @@ export default function AccountDetailPage() {
           </Panel>
         ) : null}
 
-        {isPlain && hasHoldings ? <HoldingsPanel account={data} onImport={() => setImporting(true)} /> : null}
+        {isPlain && hasHoldings ? <InvestmentSection account={data} onImport={() => setImporting(true)} /> : null}
         {isPlain ? <TransactionsPanel account={data} onImport={() => setImporting(true)} /> : null}
       </div>
 
