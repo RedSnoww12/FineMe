@@ -20,8 +20,16 @@ export function useOperationsSummary(accountId: string) {
   return useQuery({ queryKey: ['operations-summary', accountId], queryFn: () => api.operationsSummary(accountId) })
 }
 
-export function useCreateOperation(accountId: string, onSuccess: () => void) {
-  return useApiMutation((input: OperationInput) => api.createOperation(accountId, input), onSuccess)
+/**
+ * Crée l'opération, ou la remplace quand `operationId` est fourni. Le succès invalide toutes les requêtes :
+ * position (quantité, PRU), journal, synthèse annuelle et patrimoine se rechargent.
+ */
+export function useSaveOperation(accountId: string, operationId: string | undefined, onSuccess: () => void) {
+  return useApiMutation(
+    (input: OperationInput) =>
+      operationId ? api.updateOperation(operationId, input) : api.createOperation(accountId, input),
+    onSuccess,
+  )
 }
 
 export function useDeleteOperation(onSuccess: () => void) {

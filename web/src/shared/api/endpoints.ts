@@ -132,6 +132,8 @@ export const api = {
     request<OperationsSummary>(`/api/accounts/${accountId}/operations/summary`),
   createOperation: (accountId: string, body: OperationInput) =>
     request<Operation>(`/api/accounts/${accountId}/operations`, { method: 'POST', body }),
+  updateOperation: (id: string, body: OperationInput) =>
+    request<Operation>(`/api/operations/${id}`, { method: 'PUT', body }),
   deleteOperation: (id: string) => request<void>(`/api/operations/${id}`, { method: 'DELETE' }),
   bulkOperations: (accountId: string, body: { operations: OperationImportInput[] }) =>
     request<OperationsBulkResult>(`/api/accounts/${accountId}/operations/bulk`, { method: 'POST', body }),

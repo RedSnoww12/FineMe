@@ -1,4 +1,4 @@
-import type { OperationInput, OperationKind } from '@/shared/api/types'
+import type { Operation, OperationInput, OperationKind } from '@/shared/api/types'
 import { parseFrNumber } from '@/shared/lib/parse'
 
 export const OPERATION_KIND_LABEL: Record<OperationKind, string> = {
@@ -39,8 +39,30 @@ export function emptyOperationForm(today: string): OperationForm {
   return { kind: 'buy', date: today, holding_id: '', quantity: '', unit_price: '', fees: '', amount: '', note: '' }
 }
 
+/** Nombre tel qu'on le saisirait (`12,5`), sans arrondi ni séparateur de milliers. */
+function toInputNumber(value: number): string {
+  const text = Number.isInteger(value) || Math.abs(value) >= 1e-6 ? String(value) : value.toFixed(12).replace(/0+$/, '')
+  return text.replace('.', ',')
+}
+
+/** Valeurs du formulaire préremplies à partir d'une opération enregistrée, pour la modifier. */
+export function operationToForm(operation: Operation): OperationForm {
+  const trade = isTrade(operation.kind)
+  return {
+    kind: operation.kind,
+    date: operation.date,
+    holding_id: acceptsHolding(operation.kind) ? (operation.holding_id ?? '') : '',
+    quantity: trade && operation.quantity !== null ? toInputNumber(operation.quantity) : '',
+    unit_price: trade && operation.unit_price !== null ? toInputNumber(operation.unit_price) : '',
+    fees: trade && operation.fees > 0 ? toInputNumber(operation.fees) : '',
+    amount: trade ? '' : toInputNumber(operation.amount),
+    note: operation.note ?? '',
+  }
+}
+
 /**
- * Valide le formulaire et construit le corps de `POST /api/accounts/:id/operations`.
+ * Valide le formulaire et construit le corps de `POST /api/accounts/:id/operations`
+ * ou de `PUT /api/operations/:id` (remplacement complet).
  * Seuls les champs utiles au type d'opération sont envoyés.
  */
 export function buildOperationInput(

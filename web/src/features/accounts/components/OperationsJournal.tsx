@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react'
-import { useCreateOperation, useDeleteOperation, useOperations, useOperationsSummary } from '../hooks/useAccountsApi'
+import { useCallback, useState, type FormEvent } from 'react'
+import { useDeleteOperation, useOperations, useOperationsSummary, useSaveOperation } from '../hooks/useAccountsApi'
 import {
   acceptsHolding,
   buildOperationInput,
@@ -8,6 +8,7 @@ import {
   isTrade,
   OPERATION_KIND_LABEL,
   OPERATION_KINDS,
+  operationToForm,
   type OperationErrors,
   type OperationForm,
 } from '../lib/operations'
@@ -29,12 +30,21 @@ import {
   TextField,
 } from '@/shared/ui/ui'
 
-function OperationFormModal({ account, onClose }: { account: AccountDetail; onClose: () => void }) {
+/** Ajout d'une opération, ou modification quand `operation` est fourni (formulaire prérempli). */
+function OperationFormModal({
+  account,
+  operation,
+  onClose,
+}: {
+  account: AccountDetail
+  operation?: Operation
+  onClose: () => void
+}) {
   const today = todayIso()
-  const [form, setForm] = useState<OperationForm>(() => emptyOperationForm(today))
+  const [form, setForm] = useState<OperationForm>(() => (operation ? operationToForm(operation) : emptyOperationForm(today)))
   const [errors, setErrors] = useState<OperationErrors>({})
   const set = (key: keyof OperationForm) => (value: string) => setForm((f) => ({ ...f, [key]: value }))
-  const mutation = useCreateOperation(account.id, onClose)
+  const mutation = useSaveOperation(account.id, operation?.id, onClose)
   const trade = isTrade(form.kind)
 
   const submit = (event: FormEvent) => {
@@ -51,13 +61,13 @@ function OperationFormModal({ account, onClose }: { account: AccountDetail; onCl
 
   return (
     <Modal
-      title="Ajouter une opération"
+      title={operation ? 'Modifier l’opération' : 'Ajouter une opération'}
       onClose={onClose}
       footer={
         <>
           <Button onClick={onClose}>Annuler</Button>
           <Button variant="primary" type="submit" form="operation-form" busy={mutation.isPending}>
-            Ajouter
+            {operation ? 'Enregistrer' : 'Ajouter'}
           </Button>
         </>
       }
@@ -152,6 +162,10 @@ function describe(operation: Operation): string {
 export function OperationsJournal({ account }: { account: AccountDetail }) {
   const operations = useOperations(account.id)
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Operation | null>(null)
+  // Fermetures stables : la modale rend le focus au bouton qui l'a ouverte, même si le journal se recharge entre-temps.
+  const closeAdd = useCallback(() => setAdding(false), [])
+  const closeEdit = useCallback(() => setEditing(null), [])
   const [deleting, setDeleting] = useState<Operation | null>(null)
   const remove = useDeleteOperation(() => setDeleting(null))
 
@@ -233,6 +247,11 @@ export function OperationsJournal({ account }: { account: AccountDetail }) {
                     <td>
                       <div className="flex justify-end">
                         <IconButton
+                          icon="edit"
+                          label={`Modifier l’opération ${label} du ${date(operation.date)}`}
+                          onClick={() => setEditing(operation)}
+                        />
+                        <IconButton
                           icon="trash"
                           label={`Supprimer l’opération ${label} du ${date(operation.date)}`}
                           onClick={() => {
@@ -250,7 +269,10 @@ export function OperationsJournal({ account }: { account: AccountDetail }) {
         </div>
       ) : null}
 
-      {adding ? <OperationFormModal account={account} onClose={() => setAdding(false)} /> : null}
+      {adding ? <OperationFormModal account={account} onClose={closeAdd} /> : null}
+      {editing ? (
+        <OperationFormModal key={editing.id} account={account} operation={editing} onClose={closeEdit} />
+      ) : null}
       {deleting ? (
         <ConfirmModal
           title="Supprimer cette opération ?"
