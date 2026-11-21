@@ -16,6 +16,7 @@ pub mod holdings;
 pub mod members;
 pub mod operations;
 pub mod overview;
+pub mod performance;
 pub mod ports;
 pub mod prices;
 pub mod reader;

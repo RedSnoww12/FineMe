@@ -121,6 +121,7 @@ pub async fn build_app(
         budget: store.clone(),
         operations: store.clone(),
         snapshots: store.clone(),
+        benchmarks: store.clone(),
         goals: store.clone(),
         connections: store.clone(),
         imports: store,

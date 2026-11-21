@@ -364,6 +364,82 @@ POST `/api/history/reset` `{ confirmation: "EFFACER" }` → `{ deleted_days: num
 Supprime tout l'historique, toutes vues confondues. Action protégée : (400) si `confirmation` n'est pas exactement
 `EFFACER` (espaces de début et de fin ignorés), rien n'est supprimé.
 
+## Performance (TWR, MWR) et indice de référence
+
+Mesure la performance des comptes de titres et de crypto (`kind` = `investment` ou `crypto`) et de leur ensemble
+(« portefeuille ») pour la vue demandée, à partir de l'historique des instantanés détaillés (`/api/history`) et des
+flux du journal d'opérations. Les autres comptes sont exclus : leurs soldes varient avec des flux (salaires, intérêts)
+que le journal ne décrit pas.
+
+GET `/api/performance?member_id=&from=YYYY-MM-DD&to=YYYY-MM-DD` (bornes facultatives : tout l'historique, jusqu'à
+aujourd'hui) →
+```ts
+type Performance = {
+  from: string; to: string;          // période réellement couverte (voir « Période »)
+  start_value: number; end_value: number; // EUR, part détenue par la vue
+  net_flows: number;                 // apports − retraits de la période
+  gain: number;                      // end_value − start_value − net_flows
+  twr: number | null;                // fraction (0.05 = +5 %) ; null = indéfini
+  twr_annualized: number | null;     // null si la période fait moins de 365 jours
+  mwr: number | null;                // TRI ramené à la période
+  mwr_annualized: number | null;     // TRI annuel ; null si moins de 365 jours
+  years: { year: number; from: string; to: string; twr: number | null }[]; // années civiles, ordre chronologique
+  points: { date: string; value: number; benchmark: number | null }[];    // courbe base 100
+};
+{
+  portfolio: Performance | null;     // null : aucun compte mesuré dans l'historique de la période
+  accounts: { account_id: string; name: string; kind: AccountKind; performance: Performance | null }[]; // par nom
+  benchmark: null | (Benchmark & {
+    comparison: null | { from: string; to: string; benchmark_return: number; portfolio_return: number };
+    message: string | null;          // explication si la comparaison manque ou ne couvre pas toute la période
+  });
+}
+```
+(400) date illisible ou `from` après `to` ; (404) membre inconnu.
+
+Calcul (fonctions pures du domaine) :
+- **Période** : départ au dernier instantané détaillé au plus tard à `from` (sinon le premier après), fin au dernier
+  au plus tard à `to`. Les instantanés sans détail par compte (anciens ou corrigés à la main) sont ignorés.
+- **Flux externes** d'un compte, convertis en EUR aux taux actuels et multipliés par la part détenue par la vue :
+  si le journal contient des versements ou des retraits, seuls ceux-ci comptent (achats, ventes, dividendes et frais
+  restent internes au compte) ; sinon (seuls les titres sont suivis) un achat est un apport (montant + frais), une
+  vente un retrait (montant − frais), un dividende un retrait et des frais un apport. Un flux daté d'un jour
+  d'instantané est inclus dans la valeur de ce jour ; un flux daté du premier point est déjà dans la valeur initiale.
+- **Portefeuille** : somme des comptes mesurés à chaque instantané ; un compte qui entre dans l'historique est un
+  apport de sa première valeur (ses opérations jusque-là y sont incluses), un compte qui en sort un retrait de sa
+  dernière valeur.
+- **TWR** : produit des (1 + r) des sous-périodes entre deux instantanés consécutifs, r selon Dietz modifiée
+  (`(V_fin − V_début − flux) / (V_début + Σ poids × flux)`, poids = part de la sous-période restant après le flux).
+  Une sous-période sans capital engagé est ignorée ; null si aucune n'est mesurable (moins de deux points).
+- **MWR** : TRI (XIRR, base 365 jours ; Newton puis dichotomie) des flux de l'investisseur : valeur initiale et
+  apports investis, retraits et valeur finale récupérés. Perte totale sans rien récupérer : −100 %.
+- **Courbe base 100** : 100 × TWR cumulé à chaque instantané. `benchmark` : cours de l'indice ramené au niveau du
+  portefeuille au début de la fenêtre de comparaison, null hors fenêtre ou si le dernier cours connu a plus de 7 jours.
+- **Comparaison** : fenêtre commençant au premier instantané pour lequel l'indice a un cours (au plus 7 jours avant) ;
+  `benchmark_return` et `portfolio_return` (TWR) sur cette même fenêtre. Aucun cours n'est estimé : sans au moins
+  deux dates couvertes, `comparison` est null et `message` le dit. L'indice est comparé dans sa devise de cotation.
+
+Indice de référence (un seul, choisi par l'utilisateur) :
+```ts
+type Benchmark = {
+  name: string; symbol: string | null; isin: string | null; // ticker ou ISIN requis
+  kind: "security" | "crypto";        // fournisseurs de cours utilisés, comme pour une position
+  currency: string;                   // devise de l'indice, défaut EUR
+  prices: number; first_date: string | null; last_date: string | null; // historique de cours disponible
+  last_error: string | null;          // échec du relevé du cours (réponse du PUT uniquement)
+};
+```
+- GET `/api/performance/benchmark` → `Benchmark` ou `null`
+- PUT `/api/performance/benchmark` `{ name, symbol?, isin?, kind?, currency? }` → `Benchmark` : crée ou remplace
+  l'indice et relève aussitôt son cours du jour (un échec est signalé dans `last_error`, l'indice reste enregistré).
+  Changer de ticker, d'ISIN, de type ou de devise efface les cours relevés pour l'ancien indice. (400) nom vide,
+  ni ticker ni ISIN, type ou devise invalide.
+- DELETE `/api/performance/benchmark` → 204 ; (404) aucun indice choisi.
+
+Historique de l'indice : les fournisseurs ne donnent que le cours du jour. Il se constitue donc jour après jour (tâche
+quotidienne et PUT), complété par l'historique des cours (`price_history`) d'une position de même ISIN ou de
+même ticker, de même type et cotée dans la même devise ; un cours relevé pour l'indice l'emporte le même jour.
+
 ## Budget
 
 Revenus, dépenses et taux d'épargne calculés à partir des transactions de tous les comptes, convertis en EUR et
@@ -430,7 +506,8 @@ type BudgetTarget = { category: string; monthly_amount: number };
 POST `/api/jobs/daily`, en-tête `Authorization: Bearer <CRON_SECRET>`, sans corps →
 `{ prices: { updated, failed: { holding_id, name, reason }[] }, snapshot_date: "YYYY-MM-DD" }`
 
-Rafraîchit les taux et les cours (comme `/api/prices/refresh`), puis enregistre l'instantané du jour (foyer + chaque
+Rafraîchit les taux et les cours (comme `/api/prices/refresh`), relève le cours de l'indice de référence s'il y en a un
+(échec seulement journalisé), puis enregistre l'instantané du jour (foyer + chaque
 membre). Appelée chaque matin par un planificateur externe (workflow GitHub Actions `daily.yml`). Idempotente :
 un second appel le même jour remplace les cours et l'instantané du jour.
 - (501) si `CRON_SECRET` n'est pas défini ; (403) si le secret est absent ou différent (comparaison en temps constant).

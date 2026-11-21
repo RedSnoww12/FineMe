@@ -17,11 +17,11 @@ use crate::AppState;
 use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
-    AccountBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery,
-    GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody, HistoryReviewQuery,
-    HoldingBody, HoldingsBulkBody, LimitQuery, LoginBody, MemberBody, OperationBody, PageQuery,
-    PasswordChangeBody, PasswordResetBody, RangeQuery, SetupBody, TransactionPatchBody,
-    TransactionsBulkBody, ViewQuery,
+    AccountBody, BenchmarkBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody,
+    DateRangeQuery, GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody,
+    HistoryReviewQuery, HoldingBody, HoldingsBulkBody, LimitQuery, LoginBody, MemberBody,
+    OperationBody, PageQuery, PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery,
+    SetupBody, TransactionPatchBody, TransactionsBulkBody, ViewQuery,
 };
 use crate::origin::ClientOrigin;
 use crate::output;
@@ -105,6 +105,13 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/history/points/{date}", put(history_correct))
         .route("/history/recompute", post(history_recompute))
         .route("/history/reset", post(history_reset))
+        .route("/performance", get(performance))
+        .route(
+            "/performance/benchmark",
+            get(benchmark_get)
+                .put(benchmark_put)
+                .delete(benchmark_delete),
+        )
         .route("/goals", get(goals_list).post(goals_create))
         .route("/goals/{id}", put(goals_update).delete(goals_delete))
         .route("/connections/providers", get(connection_providers))
@@ -619,6 +626,42 @@ async fn history_reset(
 ) -> JsonResponse {
     let deleted_days = app.history.reset(body.confirmation.as_deref()).await?;
     ok(json!({ "deleted_days": deleted_days }))
+}
+
+// ---------------------------------------------------------------- performance
+
+async fn performance(
+    State(app): State<AppState>,
+    Query(query): Query<PerformanceQuery>,
+) -> JsonResponse {
+    ok(output::performance(
+        &app.performance
+            .performance(query.member_id, query.from, query.to)
+            .await?,
+    ))
+}
+
+async fn benchmark_get(State(app): State<AppState>) -> JsonResponse {
+    ok(app
+        .performance
+        .benchmark()
+        .await?
+        .as_ref()
+        .map_or(Value::Null, output::benchmark_info))
+}
+
+async fn benchmark_put(
+    State(app): State<AppState>,
+    Json(body): Json<BenchmarkBody>,
+) -> JsonResponse {
+    ok(output::benchmark_info(
+        &app.performance.set_benchmark(&body.into()).await?,
+    ))
+}
+
+async fn benchmark_delete(State(app): State<AppState>) -> ApiResult<StatusCode> {
+    app.performance.delete_benchmark().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------- objectifs

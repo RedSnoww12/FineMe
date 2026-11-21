@@ -6,6 +6,8 @@ import type {
   AccountInput,
   AuthResult,
   AuthStatus,
+  Benchmark,
+  BenchmarkInput,
   BudgetMonth,
   BudgetRule,
   BudgetTarget,
@@ -36,6 +38,7 @@ import type {
   Overview,
   PasswordChangeInput,
   PasswordResetInput,
+  PerformanceReport,
   PricesRefresh,
   Provider,
   RealEstate,
@@ -130,6 +133,14 @@ export const api = {
   overview: (view: View) => request<Overview>('/api/overview', { query: view }),
   history: (range: HistoryRange, view: View): Promise<History> =>
     request<History>('/api/history', { query: { range, ...view } }).then(normalizeHistory),
+
+  // Performance et indice de référence
+  performance: (period: { from?: string; to?: string }, view: View) =>
+    request<PerformanceReport>('/api/performance', { query: { ...period, ...view } }),
+  benchmark: () => request<Benchmark | null>('/api/performance/benchmark'),
+  setBenchmark: (body: BenchmarkInput) =>
+    request<Benchmark>('/api/performance/benchmark', { method: 'PUT', body }),
+  deleteBenchmark: () => request<void>('/api/performance/benchmark', { method: 'DELETE' }),
 
   // Nettoyage de l'historique
   historyReview: (view: View) => request<HistoryReview>('/api/history/points', { query: view }),

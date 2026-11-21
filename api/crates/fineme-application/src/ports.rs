@@ -18,6 +18,7 @@ use fineme_domain::ids::{
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
 use fineme_domain::operation::Operation;
+use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::transaction::Transaction;
 
@@ -280,6 +281,21 @@ pub trait SnapshotRepository: Send + Sync {
     async fn delete_range(&self, range: DateRange) -> RepoResult<u64>;
     /// Supprime tout l'historique (toutes vues) ; renvoie le nombre de jours supprimés.
     async fn delete_all(&self) -> RepoResult<u64>;
+}
+
+/// Indice de référence choisi (un seul) et ses cours relevés, dans la devise de l'indice.
+#[async_trait]
+pub trait BenchmarkRepository: Send + Sync {
+    async fn benchmark(&self) -> RepoResult<Option<Benchmark>>;
+    /// Crée ou remplace l'indice ; `reset_prices` efface d'abord les cours relevés, tout ou rien.
+    async fn save_benchmark(&self, benchmark: &Benchmark, reset_prices: bool) -> RepoResult<()>;
+    /// Supprime l'indice et ses cours ; `false` si aucun indice n'était choisi.
+    async fn delete_benchmark(&self) -> RepoResult<bool>;
+    /// Enregistre ou remplace le cours d'un jour.
+    async fn record_benchmark_price(&self, date: NaiveDate, price: f64) -> RepoResult<()>;
+    /// Cours depuis `from`, du plus ancien au plus récent, un par jour : les cours relevés, complétés
+    /// par l'historique des positions de même ISIN ou ticker cotées dans la même devise.
+    async fn benchmark_prices(&self, from: NaiveDate) -> RepoResult<Vec<PricePoint>>;
 }
 
 #[async_trait]
