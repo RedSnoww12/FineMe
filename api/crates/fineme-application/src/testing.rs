@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use fineme_domain::account::Account;
+use fineme_domain::alert::{Alert, AlertRule};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::Connection;
 use fineme_domain::fx::{Currency, FxRates};
@@ -14,8 +15,8 @@ use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
-    AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId, TransactionId,
-    UserId,
+    AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId,
+    TransactionId, UserId,
 };
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::Member;
@@ -45,6 +46,8 @@ pub struct State {
     pub price_history: Vec<(HoldingId, PricePoint)>,
     pub goals: Vec<Goal>,
     pub connections: Vec<Connection>,
+    pub alerts: Vec<Alert>,
+    pub alert_rules: Vec<AlertRule>,
     pub rates: Vec<(Currency, f64)>,
     pub rates_updated_at: Option<DateTime<Utc>>,
     pub fail_price_updates: bool,
@@ -709,6 +712,48 @@ impl ConnectionRepository for InMemoryStore {
 }
 
 #[async_trait]
+impl AlertRepository for InMemoryStore {
+    async fn alerts(&self) -> RepoResult<Vec<Alert>> {
+        Ok(self.lock().alerts.clone())
+    }
+    async fn find_alert(&self, id: AlertId) -> RepoResult<Option<Alert>> {
+        Ok(self.lock().alerts.iter().find(|a| a.id == id).cloned())
+    }
+    async fn save_alerts(&self, alerts: &[Alert]) -> RepoResult<()> {
+        let mut state = self.lock();
+        for alert in alerts {
+            if state
+                .alerts
+                .iter()
+                .any(|existing| existing.key == alert.key && existing.id != alert.id)
+            {
+                return Err(RepoError::Conflict);
+            }
+            match state
+                .alerts
+                .iter_mut()
+                .find(|existing| existing.id == alert.id)
+            {
+                Some(existing) => *existing = alert.clone(),
+                None => state.alerts.push(alert.clone()),
+            }
+        }
+        Ok(())
+    }
+    async fn rules(&self) -> RepoResult<Vec<AlertRule>> {
+        Ok(self.lock().alert_rules.clone())
+    }
+    async fn save_rule(&self, rule: &AlertRule) -> RepoResult<()> {
+        let mut state = self.lock();
+        state
+            .alert_rules
+            .retain(|existing| existing.kind() != rule.kind());
+        state.alert_rules.push(rule.clone());
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl ImportRepository for InMemoryStore {
     async fn apply(&self, batch: &ImportBatch) -> RepoResult<()> {
         let mut state = self.lock();
@@ -994,6 +1039,7 @@ impl TestApp {
             snapshots: store.clone(),
             goals: store.clone(),
             connections: store.clone(),
+            alerts: store.clone(),
             imports: store.clone(),
             clock: clock.clone(),
             hasher: hasher.clone(),

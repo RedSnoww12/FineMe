@@ -1,6 +1,7 @@
 //! DTO d'entrée (JSON → commandes des cas d'usage). Un champ nullable distingue « absent » de `null`.
 
 use chrono::NaiveDate;
+use fineme_application::alerts::{AlertPatch, RulePatch};
 use fineme_application::bundle::{Bundle, BundleAccount, BundleGoal, BundleMember, BundleOwner};
 use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, OperationInput, OwnerInput, Patch,
@@ -306,6 +307,44 @@ impl From<TransactionPatchBody> for TransactionPatch {
 pub struct BudgetQuery {
     pub month: Option<String>,
     pub member_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+pub struct AlertsQuery {
+    #[serde(default)]
+    pub archived: bool,
+}
+
+#[derive(Deserialize)]
+pub struct AlertPatchBody {
+    pub read: Option<bool>,
+    pub archived: Option<bool>,
+}
+
+impl From<AlertPatchBody> for AlertPatch {
+    fn from(body: AlertPatchBody) -> Self {
+        Self {
+            read: body.read,
+            archived: body.archived,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AlertRuleBody {
+    pub enabled: Option<bool>,
+    pub threshold_pct: Option<f64>,
+    pub ceiling: Option<f64>,
+}
+
+impl From<AlertRuleBody> for RulePatch {
+    fn from(body: AlertRuleBody) -> Self {
+        Self {
+            enabled: body.enabled,
+            threshold_pct: body.threshold_pct,
+            ceiling: body.ceiling,
+        }
+    }
 }
 
 #[derive(Deserialize)]
