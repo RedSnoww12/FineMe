@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { loanMonthlyPayment, loanSummary } from './loan'
+import { loanMonthlyPayment, loanRemainingBalance, loanSummary } from './loan'
 
 describe('loanMonthlyPayment', () => {
   it('calcule la mensualité d’un prêt classique', () => {
@@ -69,5 +69,24 @@ describe('cas limites du prêt', () => {
     const high = loanSummary(200_000, 4, 0, 300)
     expect(high.monthlyPayment).toBeGreaterThan(low.monthlyPayment)
     expect(high.totalInterest).toBeGreaterThan(low.totalInterest)
+  })
+})
+
+describe('loanRemainingBalance', () => {
+  it('décroît linéairement à taux nul', () => {
+    expect(loanRemainingBalance(1200, 0, 12, 3)).toBe(900)
+  })
+  it('vaut le capital avant la première échéance et 0 à la fin', () => {
+    expect(loanRemainingBalance(150_000, 3.5, 300, 0)).toBe(150_000)
+    expect(loanRemainingBalance(150_000, 3.5, 300, 300)).toBe(0)
+    expect(loanRemainingBalance(150_000, 3.5, 300, 400)).toBe(0)
+  })
+  it('suit le tableau d’amortissement', () => {
+    // Première échéance de 200 000 € à 4 % sur 20 ans : 666,67 € d'intérêts, 545,29 € de capital.
+    expect(loanRemainingBalance(200_000, 4, 240, 1)).toBeCloseTo(200_000 - (1211.96 - 666.67), 1)
+  })
+  it('est nul sans capital ni durée', () => {
+    expect(loanRemainingBalance(0, 4, 240, 10)).toBe(0)
+    expect(loanRemainingBalance(1000, 4, 0, 0)).toBe(0)
   })
 })

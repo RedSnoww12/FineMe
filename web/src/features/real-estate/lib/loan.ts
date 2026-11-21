@@ -44,3 +44,15 @@ export function loanSummary(
   }
 }
 
+/** Capital restant dû après `paid` mensualités d'un prêt amortissable (borné à [0, principal]). */
+export function loanRemainingBalance(principal: number, annualRatePct: number, months: number, paid: number): number {
+  if (principal <= 0 || months <= 0) return 0
+  const k = Math.min(Math.max(0, Math.floor(paid)), months)
+  if (k >= months) return 0
+  const r = annualRatePct / 100 / 12
+  if (r === 0) return principal * (1 - k / months)
+  const payment = loanMonthlyPayment(principal, annualRatePct, months)
+  const growth = Math.pow(1 + r, k)
+  return Math.max(0, principal * growth - (payment * (growth - 1)) / r)
+}
+
