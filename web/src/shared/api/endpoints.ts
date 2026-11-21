@@ -25,6 +25,9 @@ import type {
   LoanSchedule,
   Member,
   MemberInput,
+  Operation,
+  OperationInput,
+  OperationsSummary,
   Overview,
   PasswordChangeInput,
   PasswordResetInput,
@@ -87,6 +90,14 @@ export const api = {
   bulkTransactions: (accountId: string, body: TransactionsBulkInput) =>
     request<TransactionsBulkResult>(`/api/accounts/${accountId}/transactions/bulk`, { method: 'POST', body }),
   deleteTransaction: (id: string) => request<void>(`/api/transactions/${id}`, { method: 'DELETE' }),
+
+  // Journal d'opérations (comptes d'investissement)
+  operations: (accountId: string) => request<Operation[]>(`/api/accounts/${accountId}/operations`),
+  operationsSummary: (accountId: string) =>
+    request<OperationsSummary>(`/api/accounts/${accountId}/operations/summary`),
+  createOperation: (accountId: string, body: OperationInput) =>
+    request<Operation>(`/api/accounts/${accountId}/operations`, { method: 'POST', body }),
+  deleteOperation: (id: string) => request<void>(`/api/operations/${id}`, { method: 'DELETE' }),
 
   // Immobilier et prêts
   realEstate: (view: View) => request<RealEstate>('/api/real-estate', { query: view }),
