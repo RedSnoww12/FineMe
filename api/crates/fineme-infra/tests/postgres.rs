@@ -4,7 +4,7 @@
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use fineme_application::ports::{
     AccountWrite, ConnectionRepository, Credentials, FxRateRepository, GoalRepository, ImportBatch,
-    ImportRepository, PortfolioRepository, PricePoint, RepoError, SnapshotRepository,
+    ImportRepository, LoginJournal, PortfolioRepository, PricePoint, RepoError, SnapshotRepository,
     TransactionRepository, UserRepository,
 };
 use fineme_domain::account::{Account, AccountKind, AccountSource};
@@ -15,6 +15,7 @@ use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::*;
 use fineme_domain::loan::{Loan, LoanTerms};
+use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
 use fineme_domain::ownership::Ownership;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
@@ -218,6 +219,40 @@ async fn first_user_is_created_once_with_its_primary_member() {
     let members = db.store.members().await.unwrap();
     assert_eq!(members.len(), 1);
     assert!(members[0].is_primary && members[0].name == "Camille");
+}
+
+#[tokio::test]
+async fn login_journal_lists_newest_first_and_prunes_old_entries() {
+    let db = test_db().await;
+    let event = |day: u32, action: LoginAction, success: bool| LoginEvent {
+        at: at(day),
+        action,
+        success,
+        origin: LoginOrigin::new(Some("192.0.2.10"), Some("Navigateur fictif")),
+    };
+    for e in [
+        event(1, LoginAction::Login, false),
+        event(3, LoginAction::Reset, true),
+        event(2, LoginAction::Login, true),
+    ] {
+        db.store.record(&e).await.unwrap();
+    }
+    db.store
+        .record(&LoginEvent {
+            origin: LoginOrigin::default(),
+            ..event(4, LoginAction::Login, false)
+        })
+        .await
+        .unwrap();
+
+    let recent = db.store.recent(3).await.unwrap();
+    let days: Vec<_> = recent.iter().map(|e| e.at).collect();
+    assert_eq!(days, vec![at(4), at(3), at(2)]);
+    assert_eq!(recent[0].origin, LoginOrigin::default());
+    assert_eq!(recent[1], event(3, LoginAction::Reset, true));
+
+    assert_eq!(db.store.prune_before(at(3)).await.unwrap(), 2);
+    assert_eq!(db.store.recent(10).await.unwrap().len(), 2);
 }
 
 #[tokio::test]

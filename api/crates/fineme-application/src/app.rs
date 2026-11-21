@@ -1,6 +1,8 @@
 //! Assemblage des cas d'usage à partir des ports (appelé par la composition root et par les tests).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use fineme_domain::throttle::LoginThrottle;
 
 use crate::accounts::AccountService;
 use crate::auth::AuthService;
@@ -14,8 +16,8 @@ use crate::members::MemberService;
 use crate::overview::OverviewService;
 use crate::ports::{
     BankProvider, Clock, ConnectionRepository, FxProvider, FxRateRepository, GoalRepository,
-    ImportRepository, PasswordHasher, PortfolioRepository, PriceProvider, SnapshotRepository,
-    TokenService, TransactionRepository, UserRepository,
+    ImportRepository, LoginJournal, PasswordHasher, PortfolioRepository, PriceProvider,
+    SnapshotRepository, TokenService, TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -26,6 +28,7 @@ use crate::transactions::TransactionService;
 #[derive(Clone)]
 pub struct Ports {
     pub users: Arc<dyn UserRepository>,
+    pub login_journal: Arc<dyn LoginJournal>,
     pub portfolio: Arc<dyn PortfolioRepository>,
     pub fx_rates: Arc<dyn FxRateRepository>,
     pub transactions: Arc<dyn TransactionRepository>,
@@ -88,6 +91,8 @@ impl App {
         Ok(Self {
             auth: AuthService {
                 users: ports.users,
+                journal: ports.login_journal,
+                throttle: Mutex::new(LoginThrottle::default()),
                 hasher: ports.hasher,
                 tokens: ports.tokens,
                 clock: ports.clock.clone(),

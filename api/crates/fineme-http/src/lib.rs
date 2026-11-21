@@ -4,6 +4,7 @@
 mod auth;
 mod error;
 mod input;
+mod origin;
 mod output;
 mod routes;
 
@@ -49,16 +50,22 @@ fn cors_layer(origins: &str) -> CorsLayer {
             Method::OPTIONS,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        // Lisible par le front pour afficher le délai d'attente après un 429.
+        .expose_headers([header::RETRY_AFTER])
         .max_age(Duration::from_secs(3600))
 }
 
-/// Routeur complet de l'API. `cors_origins` : origines autorisées, séparées par des virgules.
-pub fn router(app: Arc<App>, cors_origins: &str) -> Router {
+/// Routeur complet de l'API. `cors_origins` : origines autorisées, séparées par des virgules ;
+/// `trusted_proxy_hops` : nombre de proxys de confiance devant l'API (voir `origin`).
+pub fn router(app: Arc<App>, cors_origins: &str, trusted_proxy_hops: usize) -> Router {
     Router::new()
         .nest("/api", routes::api(app.clone()))
         .fallback(routes::not_found)
         .method_not_allowed_fallback(routes::method_not_allowed)
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(axum::Extension(origin::TrustedProxyHops(
+            trusted_proxy_hops,
+        )))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer(cors_origins))
         .with_state(app)

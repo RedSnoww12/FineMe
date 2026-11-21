@@ -1,4 +1,4 @@
-//! Mots de passe (argon2id) et jetons de session (JWT HS256, 30 jours).
+//! Mots de passe (argon2id) et jetons de session (JWT HS256, 7 jours, renouvelés par le client).
 
 use argon2::{
     Argon2,
@@ -12,7 +12,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const TOKEN_DAYS: i64 = 30;
+/// Durée de vie d'un jeton ; le front le renouvelle (`POST /api/auth/refresh`) tant que la session est active.
+pub const TOKEN_DAYS: i64 = 7;
 
 /// Hachage argon2id (paramètres par défaut de la crate, format PHC).
 #[derive(Debug, Clone, Copy, Default)]
@@ -146,15 +147,18 @@ mod tests {
     }
 
     #[test]
-    fn token_expires_after_thirty_days() {
+    fn token_expires_after_seven_days() {
         let tokens = JwtTokens::new("secret-de-test");
         let (subject, now) = (subject(0), Utc::now());
         let token = tokens.issue(subject, now).unwrap();
         assert_eq!(
-            tokens.verify(&token, now + Duration::days(29)),
+            tokens.verify(&token, now + Duration::days(TOKEN_DAYS - 1)),
             Some(subject)
         );
-        assert_eq!(tokens.verify(&token, now + Duration::days(30)), None);
+        assert_eq!(
+            tokens.verify(&token, now + Duration::days(TOKEN_DAYS)),
+            None
+        );
     }
 
     #[test]

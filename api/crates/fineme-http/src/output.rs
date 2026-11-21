@@ -13,6 +13,7 @@ use fineme_domain::account::AccountKind;
 use fineme_domain::connection::Connection;
 use fineme_domain::ids::AccountId;
 use fineme_domain::loan::ScheduleRow;
+use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
 use fineme_domain::portfolio::{
     AccountDetail, AccountSnapshot, AccountView, HoldingView, LoanView, Overview, RealEstateReport,
@@ -24,6 +25,16 @@ use serde_json::{Map, Value, json};
 
 pub fn user(user: &User) -> Value {
     json!({ "id": user.id.as_uuid(), "email": user.email, "name": user.name })
+}
+
+pub fn login_event(event: &LoginEvent) -> Value {
+    json!({
+        "at": event.at,
+        "action": event.action.as_str(),
+        "success": event.success,
+        "ip": event.origin.ip,
+        "user_agent": event.origin.user_agent,
+    })
 }
 
 pub fn member(member: &Member) -> Value {

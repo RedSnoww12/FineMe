@@ -1,5 +1,5 @@
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use fineme_application::AppError;
 use fineme_application::ports::RepoError;
@@ -10,6 +10,8 @@ use serde_json::json;
 pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
+    /// Secondes à attendre avant de réessayer (en-tête `Retry-After`, réponses 429).
+    pub retry_after: Option<u64>,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -19,6 +21,7 @@ impl ApiError {
         Self {
             status,
             message: message.into(),
+            retry_after: None,
         }
     }
 
@@ -42,7 +45,14 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, axum::Json(json!({ "error": self.message }))).into_response()
+        let mut response =
+            (self.status, axum::Json(json!({ "error": self.message }))).into_response();
+        if let Some(seconds) = self.retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, seconds.into());
+        }
+        response
     }
 }
 
@@ -55,6 +65,10 @@ impl From<AppError> for ApiError {
             AppError::Unauthorized(message) => Self::new(StatusCode::UNAUTHORIZED, *message),
             AppError::Forbidden(message) => Self::new(StatusCode::FORBIDDEN, *message),
             AppError::NotConfigured(message) => Self::new(StatusCode::NOT_IMPLEMENTED, *message),
+            AppError::TooManyAttempts(seconds) => Self {
+                retry_after: Some(*seconds),
+                ..Self::new(StatusCode::TOO_MANY_REQUESTS, error.to_string())
+            },
             AppError::Repository(RepoError::Conflict) => {
                 Self::new(StatusCode::CONFLICT, "Cet élément existe déjà")
             }
@@ -146,6 +160,15 @@ mod tests {
             .0,
             501
         );
+    }
+
+    #[test]
+    fn too_many_attempts_is_a_429_with_retry_after() {
+        let api = ApiError::from(AppError::TooManyAttempts(30));
+        assert_eq!(api.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(api.retry_after, Some(30));
+        let response = api.into_response();
+        assert_eq!(response.headers()[header::RETRY_AFTER], "30");
     }
 
     #[test]

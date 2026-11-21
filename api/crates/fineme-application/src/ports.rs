@@ -13,6 +13,7 @@ use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
     AccountId, ConnectionId, GoalId, HoldingId, MemberId, TransactionId, UserId,
 };
+use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
 use fineme_domain::transaction::Transaction;
@@ -93,6 +94,16 @@ pub trait UserRepository: Send + Sync {
         credentials: &Credentials,
         primary_member: &Member,
     ) -> RepoResult<bool>;
+}
+
+/// Journal des tentatives de connexion et de réinitialisation.
+#[async_trait]
+pub trait LoginJournal: Send + Sync {
+    async fn record(&self, event: &LoginEvent) -> RepoResult<()>;
+    /// Les `limit` tentatives les plus récentes, de la plus récente à la plus ancienne.
+    async fn recent(&self, limit: i64) -> RepoResult<Vec<LoginEvent>>;
+    /// Supprime les tentatives antérieures à `before` ; renvoie le nombre de lignes supprimées.
+    async fn prune_before(&self, before: DateTime<Utc>) -> RepoResult<u64>;
 }
 
 #[derive(Debug, Clone, Default)]

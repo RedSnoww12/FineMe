@@ -20,6 +20,9 @@ pub enum AppError {
     /// Action refusée faute de preuve suffisante (ex. code de première configuration).
     #[error("{0}")]
     Forbidden(&'static str),
+    /// Trop de tentatives d'authentification : réessayer après ce nombre de secondes.
+    #[error("{}", too_many_attempts_message(*.0))]
+    TooManyAttempts(u64),
     /// Fonction disponible seulement avec un fournisseur externe non configuré.
     #[error("{0}")]
     NotConfigured(&'static str),
@@ -36,5 +39,37 @@ pub type AppResult<T> = Result<T, AppError>;
 impl AppError {
     pub fn invalid(message: impl Into<String>) -> Self {
         Self::Invalid(message.into())
+    }
+}
+
+/// « Trop de tentatives. Réessayez dans 30 secondes. » (en minutes au-delà d'une minute).
+fn too_many_attempts_message(retry_after_secs: u64) -> String {
+    let wait = if retry_after_secs <= 60 {
+        let plural = if retry_after_secs > 1 { "s" } else { "" };
+        format!("{retry_after_secs} seconde{plural}")
+    } else {
+        format!("{} minutes", retry_after_secs.div_ceil(60))
+    };
+    format!("Trop de tentatives. Réessayez dans {wait}.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn too_many_attempts_message_is_readable() {
+        assert_eq!(
+            AppError::TooManyAttempts(1).to_string(),
+            "Trop de tentatives. Réessayez dans 1 seconde."
+        );
+        assert_eq!(
+            AppError::TooManyAttempts(30).to_string(),
+            "Trop de tentatives. Réessayez dans 30 secondes."
+        );
+        assert_eq!(
+            AppError::TooManyAttempts(61).to_string(),
+            "Trop de tentatives. Réessayez dans 2 minutes."
+        );
     }
 }

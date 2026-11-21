@@ -16,9 +16,11 @@ use fineme_infra::security::{Argon2Hasher, JwtTokens};
 use sqlx::PgPool;
 
 pub const DEFAULT_PORT: u16 = 8080;
+/// Render place un proxy devant le service : sa dernière entrée de `X-Forwarded-For` est l'IP du client.
+pub const DEFAULT_TRUSTED_PROXY_HOPS: usize = 1;
 
 /// Configuration lue dans l'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT`, `SETUP_TOKEN`,
-/// `RECOVERY_TOKEN`, `CRON_SECRET`, `EODHD_API_KEY`).
+/// `RECOVERY_TOKEN`, `CRON_SECRET`, `EODHD_API_KEY`, `TRUSTED_PROXY_HOPS`).
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
@@ -33,6 +35,9 @@ pub struct Config {
     pub cron_secret: Option<String>,
     /// Clé du fournisseur de cours de repli EODHD (`EODHD_API_KEY`) ; `None` = pas de repli.
     pub eodhd_api_key: Option<String>,
+    /// Proxys de confiance devant l'API (`TRUSTED_PROXY_HOPS`, défaut 1 : le proxy de Render) : l'IP du client
+    /// est lue à cette position depuis la droite de `X-Forwarded-For` ; 0 = adresse TCP seulement.
+    pub trusted_proxy_hops: usize,
 }
 
 /// Code facultatif lu dans l'environnement : espaces retirés, vide = absent.
@@ -81,6 +86,9 @@ impl Config {
             recovery_token,
             cron_secret,
             eodhd_api_key: optional_code(&lookup, "EODHD_API_KEY"),
+            trusted_proxy_hops: lookup("TRUSTED_PROXY_HOPS")
+                .and_then(|hops| hops.trim().parse().ok())
+                .unwrap_or(DEFAULT_TRUSTED_PROXY_HOPS),
         })
     }
 }
@@ -106,6 +114,7 @@ pub async fn build_app(
     }
     let ports = Ports {
         users: store.clone(),
+        login_journal: store.clone(),
         portfolio: store.clone(),
         fx_rates: store.clone(),
         transactions: store.clone(),
@@ -132,12 +141,14 @@ pub async fn build_router(
     pool: PgPool,
     jwt_secret: &str,
     cors_origins: &str,
+    trusted_proxy_hops: usize,
     settings: Settings,
     eodhd_api_key: Option<&str>,
 ) -> anyhow::Result<Router> {
     Ok(fineme_http::router(
         build_app(pool, jwt_secret, settings, eodhd_api_key).await?,
         cors_origins,
+        trusted_proxy_hops,
     ))
 }
 
@@ -179,6 +190,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         pool,
         &config.jwt_secret,
         &config.cors_origins,
+        config.trusted_proxy_hops,
         settings,
         config.eodhd_api_key.as_deref(),
     )
@@ -188,11 +200,15 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("écoute sur {address} impossible"))?;
     tracing::info!("FineMe API à l'écoute sur http://{address}");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c().await.ok();
-        })
-        .await?;
+    // L'adresse TCP du client sert de repli quand `X-Forwarded-For` est absent (usage local).
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        tokio::signal::ctrl_c().await.ok();
+    })
+    .await?;
     Ok(())
 }
 
@@ -292,6 +308,18 @@ mod tests {
         assert_eq!(
             (config.port, config.cors_origins.as_str()),
             (DEFAULT_PORT, "")
+        );
+        assert_eq!(config.trusted_proxy_hops, DEFAULT_TRUSTED_PROXY_HOPS);
+        let vars = [
+            ("DATABASE_URL", "postgres://x"),
+            ("JWT_SECRET", "s"),
+            ("TRUSTED_PROXY_HOPS", " 0 "),
+        ];
+        assert_eq!(
+            Config::from_lookup(lookup(&vars))
+                .unwrap()
+                .trusted_proxy_hops,
+            0
         );
         let vars = [
             ("DATABASE_URL", "postgres://x"),
