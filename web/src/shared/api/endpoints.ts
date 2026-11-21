@@ -38,6 +38,7 @@ import type {
   ImportResult,
   LoanSchedule,
   LoginEvent,
+  LoginResult,
   Member,
   MemberInput,
   Operation,
@@ -56,6 +57,10 @@ import type {
   SyncResult,
   Transaction,
   TransactionPage,
+  TotpActivation,
+  TotpDisableInput,
+  TotpEnrollment,
+  TotpStatus,
   TransactionPatch,
   TransactionsBulkInput,
   TransactionsBulkResult,
@@ -71,7 +76,9 @@ export const api = {
   setup: (body: SetupInput) =>
     request<AuthResult>('/api/auth/setup', { method: 'POST', body }),
   login: (body: { email: string; password: string }) =>
-    request<AuthResult>('/api/auth/login', { method: 'POST', body }),
+    request<LoginResult>('/api/auth/login', { method: 'POST', body }),
+  loginTotp: (body: { challenge: string; code: string }) =>
+    request<AuthResult>('/api/auth/login/totp', { method: 'POST', body }),
   me: () => request<User>('/api/auth/me'),
   changePassword: (body: PasswordChangeInput) =>
     request<AuthResult>('/api/auth/password', { method: 'PUT', body }),
@@ -79,6 +86,14 @@ export const api = {
     request<AuthResult>('/api/auth/reset', { method: 'POST', body }),
   refreshSession: () => request<AuthResult>('/api/auth/refresh', { method: 'POST' }),
   loginHistory: (limit?: number) => request<LoginEvent[]>('/api/auth/logins', { query: { limit } }),
+  totpStatus: () => request<TotpStatus>('/api/auth/totp'),
+  totpSetup: () => request<TotpEnrollment>('/api/auth/totp/setup', { method: 'POST' }),
+  totpEnable: (code: string) =>
+    request<TotpActivation>('/api/auth/totp/enable', { method: 'POST', body: { code } }),
+  totpDisable: (body: TotpDisableInput) =>
+    request<AuthResult>('/api/auth/totp/disable', { method: 'POST', body }),
+  totpRecoveryCodes: (code: string) =>
+    request<{ recovery_codes: string[] }>('/api/auth/totp/recovery-codes', { method: 'POST', body: { code } }),
 
   // Membres
   members: () => request<Member[]>('/api/members'),
