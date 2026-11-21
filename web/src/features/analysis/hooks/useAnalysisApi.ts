@@ -53,6 +53,17 @@ export function useLoanSchedules(accountIds: readonly string[]) {
   })
 }
 
+/** Estimations datées des biens donnés, dans l'ordre des identifiants. */
+export function useValuationsOf(accountIds: readonly string[]) {
+  return useQueries({
+    queries: accountIds.map((id) => ({
+      queryKey: ['valuations', id],
+      queryFn: () => api.valuations(id),
+    })),
+    combine: combineAll,
+  })
+}
+
 /** Performance (TWR, MWR) de la vue sur la période ; désactivée tant que la période est invalide. */
 export function usePerformance(bounds: { from?: string; to?: string } | null) {
   const { memberId } = useView()

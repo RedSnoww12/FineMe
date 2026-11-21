@@ -6,6 +6,7 @@ import type { RealEstateItem } from '@/shared/api/types'
 import { AccountEditor } from '../components/AccountEditor'
 import { ScheduleModal } from '../components/ScheduleModal'
 import { Simulators } from '../components/Simulators'
+import { ValuationHistory } from '../components/ValuationHistory'
 import {
   Badge,
   Button,
@@ -40,6 +41,8 @@ function PropertyCard({
   onDelete: (accountId: string, name: string, isLoan: boolean) => void
 }) {
   const { account, property } = item
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const historyId = `historique-${account.id}`
   return (
     <section className="panel">
       <header className="flex flex-wrap items-start justify-between gap-3 px-4 pt-4 sm:px-5">
@@ -86,6 +89,18 @@ function PropertyCard({
         ) : (
           <Stat label="Location" value="Non loué" />
         )}
+      </div>
+
+      <div className="border-t border-line px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-[14.5px] font-semibold">Historique de la valeur</h3>
+          <Button size="sm" icon="table" aria-expanded={historyOpen} aria-controls={historyId} onClick={() => setHistoryOpen((open) => !open)}>
+            {historyOpen ? 'Masquer l’historique' : 'Voir l’historique'}
+          </Button>
+        </div>
+        <div id={historyId} className={historyOpen ? 'mt-3' : undefined}>
+          {historyOpen ? <ValuationHistory item={item} /> : null}
+        </div>
       </div>
 
       <div className="border-t border-line px-4 py-3 sm:px-5">

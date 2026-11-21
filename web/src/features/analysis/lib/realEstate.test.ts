@@ -50,4 +50,21 @@ describe('immobilier dans le temps', () => {
     const rows = equitySeries([item], [timeline()], 'eur')
     expect(yearlyRows(rows).map((row) => row.date)).toEqual(['2026-01-01', '2027-01-01'])
   })
+
+  it('suit les estimations datées des biens, pondérées comme leur valeur détenue', () => {
+    const estimate = (valued_on: string, value: number) => ({
+      id: valued_on, account_id: 'a-maison', valued_on, value, source: 'manual' as const,
+      price_per_m2: null, note: null, recorded_at: `${valued_on}T10:00:00Z`,
+    })
+    // Bien détenu à moitié : valeur actuelle 2 000 €, part détenue 1 000 €.
+    const half = buildRealEstateItem({ account: { ...item.account, owned_value: 1000 } })
+    const valuations = new Map([['a-maison', [estimate('2025-01-01', 1600), estimate('2026-03-15', 2000)]]])
+    const rows = equitySeries([half], [timeline()], 'eur', valuations)
+    expect(rows[0]).toMatchObject({ date: '2026-01-01', value: 800, equity: 800 - 1200 })
+    expect(rows[2]).toMatchObject({ date: '2026-03-01', value: 1000 })
+    expect(rows[rows.length - 1]).toMatchObject({ value: 1000, equity: 1000 })
+    // Sans estimation à la date, la valeur actuelle détenue est retenue.
+    const early = new Map([['a-maison', [estimate('2030-01-01', 9999)]]])
+    expect(equitySeries([half], [timeline()], 'eur', early)[0].value).toBe(1000)
+  })
 })
