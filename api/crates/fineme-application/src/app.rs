@@ -178,6 +178,8 @@ impl App {
             },
             real_estate: RealEstateService {
                 reader: reader.clone(),
+                repo: ports.portfolio.clone(),
+                clock: ports.clock.clone(),
             },
             goals: GoalService {
                 reader: reader.clone(),

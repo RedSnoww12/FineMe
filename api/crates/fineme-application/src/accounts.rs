@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use fineme_domain::DomainError;
 use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::error::{finite, non_negative};
 use fineme_domain::fx::Currency;
@@ -10,6 +11,7 @@ use fineme_domain::member::Member;
 use fineme_domain::ownership::Ownership;
 use fineme_domain::portfolio::{AccountDetail, AccountView};
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
+use fineme_domain::valuation::{EstimatedValue, Valuation};
 use uuid::Uuid;
 
 use crate::commands::{AccountInput, LoanInput, OwnerInput, PropertyInput, clean};
@@ -52,7 +54,12 @@ pub(crate) fn ownership(owners: &[OwnerInput], members: &[Member]) -> AppResult<
 }
 
 /// Fusionne l'entrée avec le bien existant, ou en crée un (prix d'achat ou valeur actuelle requis).
-fn merge_property(existing: Option<&Property>, input: &PropertyInput) -> AppResult<Property> {
+/// Une valeur actuelle nouvelle ou modifiée est enregistrée comme estimation manuelle datée du jour.
+fn merge_property(
+    existing: Option<&Property>,
+    input: &PropertyInput,
+    now: DateTime<Utc>,
+) -> AppResult<Property> {
     let mut property = match existing {
         Some(property) => property.clone(),
         None => {
@@ -72,6 +79,7 @@ fn merge_property(existing: Option<&Property>, input: &PropertyInput) -> AppResu
                 purchase_fees: 0.0,
                 purchased_at: None,
                 current_value: base,
+                valuations: Vec::new(),
                 monthly_rent: 0.0,
                 monthly_charges: 0.0,
                 yearly_property_tax: 0.0,
@@ -105,11 +113,6 @@ fn merge_property(existing: Option<&Property>, input: &PropertyInput) -> AppResu
             "purchase_fees",
         ),
         (
-            &mut property.current_value,
-            input.current_value,
-            "current_value",
-        ),
-        (
             &mut property.monthly_rent,
             input.monthly_rent,
             "monthly_rent",
@@ -128,6 +131,22 @@ fn merge_property(existing: Option<&Property>, input: &PropertyInput) -> AppResu
         if let Some(value) = value {
             *target = non_negative(value, field)?;
         }
+    }
+    let declared = match existing {
+        None => Some(property.current_value).filter(|value| *value > 0.0),
+        Some(_) => input
+            .current_value
+            .map(|value| non_negative(value, "current_value"))
+            .transpose()?
+            .filter(|value| *value != property.current_value),
+    };
+    if let Some(value) = declared {
+        let value =
+            EstimatedValue::new(value).map_err(|_| DomainError::NotPositive("current_value"))?;
+        property
+            .valuations
+            .push(Valuation::manual_today(value, now));
+        property.refresh_current_value(now.date_naive());
     }
     property.check()?;
     Ok(property)
@@ -259,7 +278,7 @@ pub(crate) fn build_account(
     // Bien et prêt : présents si et seulement si le type du compte l'exige.
     if kind == AccountKind::RealEstate {
         if let Some(property) = &input.property {
-            account.property = Some(merge_property(account.property.as_ref(), property)?);
+            account.property = Some(merge_property(account.property.as_ref(), property, now)?);
         }
     } else if input.property.is_some() {
         return Err(AppError::invalid(

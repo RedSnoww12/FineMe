@@ -65,6 +65,8 @@ import type {
   TransactionsBulkInput,
   TransactionsBulkResult,
   User,
+  Valuation,
+  ValuationInput,
 } from '@/shared/api/types'
 
 /** `member_id` absent = vue foyer. */
@@ -162,6 +164,12 @@ export const api = {
   realEstate: (view: View) => request<RealEstate>('/api/real-estate', { query: view }),
   loanSchedule: (accountId: string, view: View) =>
     request<LoanSchedule>(`/api/loans/${accountId}/schedule`, { query: view }),
+  valuations: (accountId: string) => request<Valuation[]>(`/api/accounts/${accountId}/valuations`),
+  createValuation: (accountId: string, body: ValuationInput) =>
+    request<Valuation>(`/api/accounts/${accountId}/valuations`, { method: 'POST', body }),
+  updateValuation: (id: string, body: ValuationInput) =>
+    request<Valuation>(`/api/valuations/${id}`, { method: 'PUT', body }),
+  deleteValuation: (id: string) => request<void>(`/api/valuations/${id}`, { method: 'DELETE' }),
 
   // Vue d'ensemble
   overview: (view: View) => request<Overview>('/api/overview', { query: view }),

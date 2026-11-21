@@ -12,7 +12,7 @@ use fineme_domain::goal::{Goal, GoalKind};
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
     AccountId, BudgetRuleId, ConnectionId, GoalId, HoldingId, LoanId, MemberId, OperationId,
-    PropertyId, TransactionId,
+    PropertyId, TransactionId, ValuationId,
 };
 use fineme_domain::import_profile::{ImportKind, ImportProfile};
 use fineme_domain::loan::{Loan, LoanTerms};
@@ -22,6 +22,7 @@ use fineme_domain::ownership::Ownership;
 use fineme_domain::portfolio::AccountSnapshot;
 use fineme_domain::property::{BuildingType, Property, PropertyCategory};
 use fineme_domain::transaction::Transaction;
+use fineme_domain::valuation::{EstimatedValue, Valuation, ValuationDate, ValuationSource};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -180,9 +181,39 @@ impl TryFrom<PropertyRow> for Property {
             purchase_fees: row.purchase_fees,
             purchased_at: row.purchased_at,
             current_value: row.current_value,
+            valuations: Vec::new(),
             monthly_rent: row.monthly_rent,
             monthly_charges: row.monthly_charges,
             yearly_property_tax: row.yearly_property_tax,
+        })
+    }
+}
+
+#[derive(FromRow)]
+pub(super) struct ValuationRow {
+    id: Uuid,
+    pub account_id: Uuid,
+    valued_on: NaiveDate,
+    value: f64,
+    source: String,
+    price_per_m2: Option<f64>,
+    note: Option<String>,
+    recorded_at: DateTime<Utc>,
+}
+
+impl TryFrom<ValuationRow> for Valuation {
+    type Error = RepoError;
+
+    fn try_from(row: ValuationRow) -> RepoResult<Self> {
+        let invalid = corrupt("property_valuations", row.id);
+        Ok(Valuation {
+            id: ValuationId::from_uuid(row.id),
+            valued_on: ValuationDate::restore(row.valued_on),
+            value: EstimatedValue::new(row.value).map_err(&invalid)?,
+            source: ValuationSource::parse(&row.source).map_err(&invalid)?,
+            price_per_m2: row.price_per_m2,
+            note: row.note,
+            recorded_at: row.recorded_at,
         })
     }
 }

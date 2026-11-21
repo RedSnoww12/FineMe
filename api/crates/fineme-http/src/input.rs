@@ -4,10 +4,13 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use fineme_application::alerts::{AlertPatch, RulePatch};
-use fineme_application::bundle::{Bundle, BundleAccount, BundleGoal, BundleMember, BundleOwner};
+use fineme_application::bundle::{
+    Bundle, BundleAccount, BundleGoal, BundleMember, BundleOwner, BundleValuation,
+};
 use fineme_application::commands::{
     AccountInput, GoalInput, HoldingInput, LoanInput, OperationImportInput, OperationInput,
     OwnerInput, Patch, PropertyInput, SecurityRef, TransactionInput, TransactionPatch,
+    ValuationInput,
 };
 use fineme_application::performance::BenchmarkInput;
 use serde::{Deserialize, Deserializer};
@@ -192,6 +195,28 @@ impl From<PropertyBody> for PropertyInput {
             monthly_rent: b.monthly_rent,
             monthly_charges: b.monthly_charges,
             yearly_property_tax: b.yearly_property_tax,
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+pub struct ValuationBody {
+    value: Option<f64>,
+    price_per_m2: Option<f64>,
+    valued_on: Option<NaiveDate>,
+    source: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    note: Patch<String>,
+}
+
+impl From<ValuationBody> for ValuationInput {
+    fn from(b: ValuationBody) -> Self {
+        Self {
+            value: b.value,
+            price_per_m2: b.price_per_m2,
+            valued_on: b.valued_on,
+            source: b.source,
+            note: b.note,
         }
     }
 }
@@ -549,8 +574,18 @@ struct BundleAccountBody {
     external_id: String,
     owners: Vec<BundleOwnerBody>,
     holdings: Option<Vec<HoldingBody>>,
+    valuations: Option<Vec<BundleValuationBody>>,
     #[serde(flatten)]
     account: AccountBody,
+}
+
+#[derive(Deserialize)]
+struct BundleValuationBody {
+    valued_on: NaiveDate,
+    value: f64,
+    source: Option<String>,
+    price_per_m2: Option<f64>,
+    note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -608,6 +643,17 @@ impl From<BundleBody> for Bundle {
                     holdings: a
                         .holdings
                         .map(|list| list.into_iter().map(HoldingInput::from).collect()),
+                    valuations: a.valuations.map(|list| {
+                        list.into_iter()
+                            .map(|v| BundleValuation {
+                                valued_on: v.valued_on,
+                                value: v.value,
+                                source: v.source,
+                                price_per_m2: v.price_per_m2,
+                                note: v.note,
+                            })
+                            .collect()
+                    }),
                     account: a.account.into(),
                 })
                 .collect(),

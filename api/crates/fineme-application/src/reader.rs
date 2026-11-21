@@ -20,8 +20,13 @@ pub struct PortfolioReader {
 
 impl PortfolioReader {
     pub async fn load(&self) -> AppResult<Portfolio> {
-        let data = self.repo.load().await?;
+        let mut data = self.repo.load().await?;
         let (rates, _) = self.fx.rates().await?;
+        let today = self.clock.today();
+        // La valeur d'un bien est celle de son estimation en vigueur ce jour.
+        for property in data.accounts.iter_mut().filter_map(|a| a.property.as_mut()) {
+            property.refresh_current_value(today);
+        }
         let mut holdings: HashMap<AccountId, Vec<Holding>> = HashMap::new();
         for holding in data.holdings {
             holdings
@@ -34,7 +39,7 @@ impl PortfolioReader {
             accounts: data.accounts,
             holdings,
             rates,
-            today: self.clock.today(),
+            today,
         };
         warn_missing_rates(&portfolio);
         Ok(portfolio)

@@ -46,3 +46,4 @@ typed_id!(ConnectionId);
 typed_id!(BudgetRuleId);
 typed_id!(OperationId);
 typed_id!(AlertId);
+typed_id!(ValuationId);

@@ -16,7 +16,7 @@ import { date, money, todayIso } from '@/shared/lib/format'
 import type { DailyHistoryPoint } from '@/shared/lib/history'
 import { Legend } from '@/shared/ui/charts'
 import { Panel, SelectField, Stat } from '@/shared/ui/ui'
-import { useLoanSchedules, useRealEstate } from '../hooks/useAnalysisApi'
+import { useLoanSchedules, useRealEstate, useValuationsOf } from '../hooks/useAnalysisApi'
 import { gapToPlan, goalChartRows, goalPlannedSeries, goalRealSeries } from '../lib/goals'
 import { formatAxis, formatUnit, type Unit } from '../lib/period'
 import { viewFraction } from '../lib/performance'
@@ -43,14 +43,16 @@ export function RealEstatePanel({
   const items = useMemo(() => realEstate.data?.properties ?? [], [realEstate.data])
   const loans = useMemo(() => items.flatMap((item) => item.loans), [items])
   const schedules = useLoanSchedules(loans.map((loan) => loan.account_id))
+  const valuations = useValuationsOf(items.map((item) => item.account.id))
   const rows = useMemo(() => {
-    if (!schedules.data) return []
+    if (!schedules.data || !valuations.data) return []
+    const byProperty = new Map(items.map((item, i) => [item.account.id, valuations.data?.[i] ?? []]))
     const timelines: LoanTimeline[] = loans.map((loan, i) => {
       const owners = accounts.find((account) => account.id === loan.account_id)?.owners ?? []
       return { loan, fraction: viewFraction(owners, memberId), rows: schedules.data?.[i]?.rows ?? [] }
     })
-    return equitySeries(items, timelines, unit)
-  }, [schedules.data, loans, accounts, memberId, items, unit])
+    return equitySeries(items, timelines, unit, byProperty)
+  }, [schedules.data, valuations.data, loans, accounts, memberId, items, unit])
   const thisMonth = `${todayIso().slice(0, 7)}-01`
   const current = rows.find((row) => row.date === thisMonth)
   const legend = EQUITY_SERIES.map((s) => ({ key: s.key, label: s.label, color: s.color }))
@@ -59,16 +61,17 @@ export function RealEstatePanel({
     <Panel title="Immobilier et prêts">
       <ChartIntro>
         Au fil des échéances, le capital remboursé grandit et le restant dû diminue : la valeur nette de vos biens (valeur
-        moins restant dû) augmente. La valeur des biens est leur valeur actuelle, supposée constante.
+        moins restant dû) augmente. La valeur des biens suit leurs estimations datées, puis reste à la dernière.
         {unit === 'pct' ? ' En pourcentage de la valeur des biens.' : ''}
       </ChartIntro>
       <PanelState
-        isPending={isPending || realEstate.isPending || (loans.length > 0 && schedules.isPending)}
-        error={error ?? realEstate.error ?? schedules.error}
+        isPending={isPending || realEstate.isPending || (loans.length > 0 && schedules.isPending) || valuations.isPending}
+        error={error ?? realEstate.error ?? schedules.error ?? valuations.error}
         onRetry={() => {
           onRetry()
           void realEstate.refetch()
           schedules.refetch()
+          valuations.refetch()
         }}
         empty={
           items.length === 0

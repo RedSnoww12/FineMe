@@ -23,5 +23,6 @@ pub mod property;
 pub mod throttle;
 pub mod totp;
 pub mod transaction;
+pub mod valuation;
 
 pub use error::DomainError;

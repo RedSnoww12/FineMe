@@ -133,6 +133,7 @@ mod tests {
             purchase_fees: 0.0,
             purchased_at: None,
             current_value: 100.0,
+            valuations: Vec::new(),
             monthly_rent: 0.0,
             monthly_charges: 0.0,
             yearly_property_tax: 0.0,
