@@ -752,6 +752,7 @@ type Bundle = {
 
 ## Simulateurs
 
-Projection financière, indépendance financière, simulateur de frais (contrats, ETF, autres) et simulateur de prêt
-sont calculés **côté front** (pur TypeScript, instantané). Ils se pré-remplissent depuis `/api/overview`, `/api/goals`
-et `weighted_expense_ratio`.
+Projection financière, indépendance financière, simulateur de frais (contrats, ETF, autres), simulateur de prêt et
+simulateur « Et si ? » (scénario appliqué au patrimoine réel, sans rien enregistrer) sont calculés **côté front** (pur
+TypeScript, instantané). Ils se pré-remplissent depuis `/api/overview`, `/api/goals`, `/api/accounts` et
+`weighted_expense_ratio`.

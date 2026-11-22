@@ -19,6 +19,7 @@ const NAV: NavItem[] = [
   { to: '/immobilier', label: 'Immobilier', icon: 'home' },
   { to: '/objectifs', label: 'Objectifs', icon: 'goal' },
   { to: '/projection', label: 'Projection', icon: 'projection' },
+  { to: '/et-si', label: 'Et si ?', icon: 'scenario' },
   { to: '/frais', label: 'Simulateur de frais', icon: 'fees' },
   { to: '/connexions', label: 'Connexions', icon: 'link' },
   { to: '/parametres', label: 'Paramètres', icon: 'settings' },
