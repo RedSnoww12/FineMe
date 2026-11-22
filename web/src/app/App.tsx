@@ -15,6 +15,7 @@ const BudgetPage = lazy(() => import('@/features/budget/pages/BudgetPage'))
 const RealEstatePage = lazy(() => import('@/features/real-estate/pages/RealEstatePage'))
 const GoalsPage = lazy(() => import('@/features/goals/pages/GoalsPage'))
 const ProjectionPage = lazy(() => import('@/features/projection/pages/ProjectionPage'))
+const ScenariosPage = lazy(() => import('@/features/scenarios/pages/ScenariosPage'))
 const FeesPage = lazy(() => import('@/features/fees/pages/FeesPage'))
 const ConnectionsPage = lazy(() => import('@/features/connections/pages/ConnectionsPage'))
 const SettingsPage = lazy(() => import('@/features/settings/pages/SettingsPage'))
@@ -55,6 +56,7 @@ export default function App() {
             <Route path="immobilier" element={<RealEstatePage />} />
             <Route path="objectifs" element={<GoalsPage />} />
             <Route path="projection" element={<ProjectionPage />} />
+            <Route path="et-si" element={<ScenariosPage />} />
             <Route path="frais" element={<FeesPage />} />
             <Route path="connexions" element={<ConnectionsPage />} />
             <Route path="parametres" element={<SettingsPage />} />
