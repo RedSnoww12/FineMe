@@ -260,6 +260,8 @@ pub struct AccountBody {
     #[serde(default, deserialize_with = "nullable")]
     annual_yield_pct: Patch<f64>,
     #[serde(default, deserialize_with = "nullable")]
+    management_fee_pct: Patch<f64>,
+    #[serde(default, deserialize_with = "nullable")]
     opened_at: Patch<NaiveDate>,
     #[serde(default)]
     owners: Option<Vec<OwnerBody>>,
@@ -279,6 +281,7 @@ impl From<AccountBody> for AccountInput {
             currency: b.currency,
             cash_balance: b.cash_balance,
             annual_yield_pct: b.annual_yield_pct,
+            management_fee_pct: b.management_fee_pct,
             opened_at: b.opened_at,
             owners: b.owners.map(|owners| {
                 owners
@@ -681,11 +684,12 @@ mod tests {
             .unwrap()
             .into();
         assert_eq!(absent, AccountInput::default());
-        let body = json!({ "institution": null, "envelope": "pea", "annual_yield_pct": 1.7, "opened_at": null });
+        let body = json!({ "institution": null, "envelope": "pea", "annual_yield_pct": 1.7, "management_fee_pct": null, "opened_at": null });
         let input: AccountInput = serde_json::from_value::<AccountBody>(body).unwrap().into();
         assert_eq!(input.institution, Some(None));
         assert_eq!(input.envelope, Some(Some("pea".into())));
         assert_eq!(input.annual_yield_pct, Some(Some(1.7)));
+        assert_eq!(input.management_fee_pct, Some(None));
         assert_eq!(input.opened_at, Some(None));
         assert_eq!(input.name, None);
     }

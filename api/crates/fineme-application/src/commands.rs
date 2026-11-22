@@ -57,6 +57,7 @@ pub struct AccountInput {
     pub currency: Option<String>,
     pub cash_balance: Option<f64>,
     pub annual_yield_pct: Patch<f64>,
+    pub management_fee_pct: Patch<f64>,
     pub opened_at: Patch<NaiveDate>,
     pub owners: Option<Vec<OwnerInput>>,
     pub property: Option<PropertyInput>,

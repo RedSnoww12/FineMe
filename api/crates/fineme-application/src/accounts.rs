@@ -243,6 +243,7 @@ pub(crate) fn build_account(
             currency: Currency::eur(),
             cash_balance: 0.0,
             annual_yield_pct: None,
+            management_fee_pct: None,
             source: origin.source,
             external_id: origin.external_id,
             connection_id: None,
@@ -270,6 +271,9 @@ pub(crate) fn build_account(
     }
     if let Some(annual_yield_pct) = input.annual_yield_pct {
         account.annual_yield_pct = annual_yield_pct;
+    }
+    if let Some(management_fee_pct) = input.management_fee_pct {
+        account.management_fee_pct = management_fee_pct;
     }
     if let Some(opened_at) = input.opened_at {
         account.opened_at = opened_at;

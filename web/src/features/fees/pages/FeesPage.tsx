@@ -15,7 +15,9 @@ import {
   TextField,
 } from '@/shared/ui/ui'
 import { parseFrNumber } from '@/shared/lib/parse'
+import { RealFeesPanel } from '../components/RealFeesPanel'
 import { simulateFees } from '../lib/fees'
+import type { AccountCost } from '../lib/portfolioFees'
 import { money, moneyCompact, pct, pctFromFraction, toInput } from '@/shared/lib/format'
 
 type ScenarioForm = {
@@ -151,14 +153,32 @@ export default function FeesPage() {
     setPrefilled(true)
   }
 
+  // Le premier scénario reprend un compte réel, pour le comparer à une alternative.
+  const testAccount = (account: AccountCost) => {
+    setInitial(toInput(Math.max(0, account.value), 0))
+    setScenarios((list) => {
+      const mine: ScenarioForm = {
+        ...list[0],
+        name: account.name,
+        managementFee: toInput(account.envelopePct ?? 0, 3),
+        ter: toInput(account.value > 0 ? (account.fundsCost / account.value) * 100 : 0, 3),
+        entryFee: '0',
+        performanceFee: '0',
+      }
+      return [mine, ...list.slice(1)]
+    })
+    setPrefilled(false)
+  }
+
   return (
     <>
       <PageHeader
         title="Simulateur de frais"
-        description="Comparez ce que des frais différents coûtent sur la durée, à versements identiques."
+        description="Ce que coûtent vos frais réels, et ce que des frais différents coûteraient sur la durée."
       />
 
       <div className="flex flex-col gap-4 sm:gap-5">
+        <RealFeesPanel onTest={testAccount} />
         <Panel title="Versements">
           <div className="grid gap-4 sm:grid-cols-3">
             <NumberField label="Montant initial" value={initial} onChange={setInitial} suffix="€" />

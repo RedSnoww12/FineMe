@@ -50,6 +50,8 @@ export type Account = {
   currency: string
   cash_balance: number
   annual_yield_pct: number | null
+  /** Frais de gestion annuels de l'enveloppe (assurance-vie, PER…), en % de l'encours. */
+  management_fee_pct: number | null
   source: 'manual' | 'csv' | 'aggregator' | 'import'
   external_id: string | null
   connection_id: string | null
@@ -186,6 +188,7 @@ export type AccountInput = {
   currency?: string
   cash_balance?: number
   annual_yield_pct?: number | null
+  management_fee_pct?: number | null
   opened_at?: string | null
   owners: OwnerInput[]
   property?: PropertyInput

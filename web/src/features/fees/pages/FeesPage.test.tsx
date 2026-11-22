@@ -1,7 +1,7 @@
 import { waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { money } from '@/shared/lib/format'
-import { buildOverview } from '@/test/fixtures'
+import { buildAccountDetail, buildHolding, buildOverview, camille } from '@/test/fixtures'
 import { mockShell } from '@/test/handlers'
 import { pageText, renderApp, screen } from '@/test/render'
 import { mockJson, mockUnreachable } from '@/test/server'
@@ -89,5 +89,55 @@ describe('simulateur de frais', () => {
     await user.type(screen.getByLabelText('Montant initial'), '5000')
     const expected = simulateFees({ ...firstScenario, initial: 5_000, monthly: 0 })
     await waitFor(() => expect(pageText()).toContain(plain(money(expected.finalValue))))
+  })
+
+  describe('frais réels', () => {
+    const lifeInsurance = buildAccountDetail({
+      id: 'av',
+      name: 'Assurance-vie',
+      kind: 'investment',
+      management_fee_pct: 0.6,
+      value: 40_000,
+      owners: [{ member_id: camille.id, name: camille.name, share: 1 }],
+      holdings: [buildHolding({ id: 'h-actif', name: 'Fonds actif', value: 30_000, expense_ratio: 0.018 })],
+    })
+
+    function mockRealFees() {
+      mockShell()
+      mockJson('get', '/api/overview', buildOverview())
+      mockJson('get', '/api/accounts', [lifeInsurance])
+      mockJson('get', '/api/accounts/av', lifeInsurance)
+    }
+
+    it('affiche le coût annuel total et rattache chaque frais à sa source', async () => {
+      mockRealFees()
+      renderApp('/frais')
+      // 0,6 % × 40 000 = 240 € d'enveloppe, 1,8 % × 30 000 = 540 € de fonds.
+      const total = await screen.findByText('Coût annuel total')
+      expect(total.nextElementSibling).toHaveTextContent('780 €')
+      const row = screen.getByRole('row', { name: /^Assurance-vie/ })
+      expect(row).toHaveTextContent('240 €')
+      expect(row).toHaveTextContent('540 €')
+      expect(screen.getByRole('row', { name: /Fonds actif/ })).toHaveTextContent('Au-dessus du seuil')
+      expect(pageText()).toMatch(/sur 10 ans.*sur 20 ans.*sur 30 ans/)
+    })
+
+    it('ne signale plus la position quand le seuil est relevé', async () => {
+      mockRealFees()
+      const { user } = renderApp('/frais')
+      const field = await screen.findByLabelText('Seuil de frais courants')
+      await user.clear(field)
+      await user.type(field, '2')
+      expect(screen.getByRole('row', { name: /Fonds actif/ })).not.toHaveTextContent('Au-dessus du seuil')
+    })
+
+    it('préremplit le simulateur avec un compte réel', async () => {
+      mockRealFees()
+      const { user } = renderApp('/frais')
+      await user.click(await screen.findByRole('button', { name: 'Tester une alternative' }))
+      expect(screen.getByLabelText('Montant initial')).toHaveValue('40000')
+      expect(screen.getAllByLabelText('Gestion du contrat')[0]).toHaveValue('0,6')
+      expect(screen.getAllByLabelText('Frais courants des fonds')[0]).toHaveValue('1,35')
+    })
   })
 })

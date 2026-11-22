@@ -62,6 +62,7 @@ pub fn account(view: &AccountView) -> Value {
         "currency": a.currency.as_str(),
         "cash_balance": a.cash_balance,
         "annual_yield_pct": a.annual_yield_pct,
+        "management_fee_pct": a.management_fee_pct,
         "source": a.source.as_str(),
         "external_id": a.external_id,
         "connection_id": a.connection_id.map(|id| id.as_uuid()),
@@ -600,6 +601,7 @@ fn bundle_account_fields(a: &AccountInput) -> Map<String, Value> {
         "currency": a.currency,
         "cash_balance": a.cash_balance,
         "annual_yield_pct": a.annual_yield_pct,
+        "management_fee_pct": a.management_fee_pct,
         "opened_at": a.opened_at,
     }))
 }

@@ -16,6 +16,7 @@ function account(id: string, kind: Account['kind'], owned: number, memberIds = [
     currency: 'EUR',
     cash_balance: 0,
     annual_yield_pct: null,
+    management_fee_pct: null,
     source: 'manual',
     external_id: null,
     connection_id: null,

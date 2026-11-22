@@ -560,6 +560,7 @@ mod tests {
             currency: Currency::eur(),
             cash_balance: cash,
             annual_yield_pct: None,
+            management_fee_pct: None,
             source: AccountSource::Manual,
             external_id: None,
             connection_id: None,
