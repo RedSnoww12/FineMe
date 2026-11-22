@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { useAccounts, useGoals, useMembers } from '@/shared/api/queries'
+import { useAccounts, useGoals, useMembers, useOverview } from '@/shared/api/queries'
 import { useDeleteGoal, useSaveGoal } from '../hooks/useGoalsApi'
 import type { Account, Goal, GoalInput, GoalKind, Member } from '@/shared/api/types'
 import {
@@ -21,6 +21,22 @@ import {
 import { parseFrNumber } from '@/shared/lib/parse'
 import { date, money, number, pct, toInput } from '@/shared/lib/format'
 import { GOAL_STATUS } from '@/shared/lib/labels'
+import { ProfilePanel } from '../components/ProfilePanel'
+import { coverageVerdict, readProfile, safetyNetRange, saveProfile, type Profile, type SafetyRange } from '../lib/profile'
+
+function deviceStorage(): Storage | undefined {
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
+  }
+}
+
+const VERDICT = {
+  below: 'en dessous de la fourchette recommandée',
+  within: 'dans la fourchette recommandée',
+  above: 'au-dessus de la fourchette recommandée',
+}
 
 type FormState = {
   name: string
@@ -287,10 +303,12 @@ function GoalCard({
   members,
   onEdit,
   onDelete,
+  range,
 }: {
   goal: Goal
   accounts: Account[]
   members: Member[]
+  range: SafetyRange
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -350,9 +368,18 @@ function GoalCard({
             </Fact>
             <Fact label="Couverture visée">{goal.coverage_months !== null ? `${number(goal.coverage_months, 1)} mois` : '–'}</Fact>
             <Fact label="Dépenses mensuelles">{money(goal.monthly_expenses)}</Fact>
+            <Fact label="Recommandé pour votre profil">
+              {range.min} à {range.max} mois
+            </Fact>
           </>
         )}
       </dl>
+
+      {goal.kind === 'safety_net' && goal.coverage_months !== null ? (
+        <p className="text-[14px] text-muted">
+          Votre couverture visée est {VERDICT[coverageVerdict(goal.coverage_months, range) ?? 'within']}.
+        </p>
+      ) : null}
 
       {goal.kind === 'project' && required !== null && expected !== null ? (
         <p className="text-[14px] text-muted">
@@ -378,6 +405,13 @@ export default function GoalsPage() {
   const [editing, setEditing] = useState<Goal | null>(null)
   const [deleting, setDeleting] = useState<Goal | null>(null)
   const remove = useDeleteGoal(() => setDeleting(null))
+  const overview = useOverview()
+  const [profile, setProfile] = useState<Profile>(() => readProfile(deviceStorage()))
+  const range = safetyNetRange(profile)
+  const changeProfile = (next: Profile) => {
+    setProfile(next)
+    saveProfile(deviceStorage(), next)
+  }
 
   const addButton = (
     <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
@@ -392,6 +426,8 @@ export default function GoalsPage() {
         description="Affectez des comptes à un projet ou à votre matelas de sécurité et suivez où vous en êtes."
         actions={goals.isSuccess && goals.data.length > 0 ? addButton : undefined}
       />
+
+      <ProfilePanel profile={profile} onChange={changeProfile} range={range} overview={overview.data} />
 
       {goals.isPending ? (
         <LoadingBlock rows={3} />
@@ -410,6 +446,7 @@ export default function GoalsPage() {
               goal={goal}
               accounts={accounts.data ?? []}
               members={members.data ?? []}
+              range={range}
               onEdit={() => setEditing(goal)}
               onDelete={() => {
                 remove.reset()

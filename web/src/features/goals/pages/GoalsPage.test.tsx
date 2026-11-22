@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAccount, buildGoal } from '@/test/fixtures'
+import { buildAccount, buildGoal, buildOverview } from '@/test/fixtures'
 import { mockShell } from '@/test/handlers'
 import { pageText, renderApp, screen } from '@/test/render'
 import { mockJson, mockUnreachable } from '@/test/server'
@@ -76,5 +76,52 @@ describe('objectifs', () => {
     mockUnreachable('get', '/api/goals')
     renderApp('/objectifs')
     expect(await screen.findByRole('alert')).toHaveTextContent('API injoignable')
+  })
+
+  describe('profil investisseur', () => {
+    function mockProfileScreen() {
+      mockShell()
+      mockJson('get', '/api/accounts', [buildAccount()])
+      mockJson('get', '/api/goals', [safetyNet])
+      mockJson('get', '/api/overview', buildOverview())
+    }
+
+    it('affiche la fourchette recommandée à côté de l’objectif de matelas', async () => {
+      mockProfileScreen()
+      renderApp('/objectifs')
+      expect(await screen.findByText('Matelas recommandé : 3 à 6 mois de dépenses')).toBeInTheDocument()
+      expect((await screen.findByText('Recommandé pour votre profil')).nextElementSibling).toHaveTextContent('3 à 6 mois')
+      expect(await screen.findByText(/dans la fourchette recommandée/)).toBeInTheDocument()
+      expect(pageText()).toContain('Votre couverture visée est dans la fourchette recommandée.')
+      expect(pageText()).toContain('ce n’est pas un conseil en investissement')
+    })
+
+    it('recalcule la fourchette selon les réponses et la garde sur l’appareil', async () => {
+      mockProfileScreen()
+      const { user, unmount } = renderApp('/objectifs')
+      await user.selectOptions(await screen.findByLabelText('Stabilité des revenus'), 'variable')
+      await user.click(screen.getByLabelText('Propriétaire de votre logement'))
+      // Revenus variables et propriétaire : 3 + 3 + 0 = 6 à 6 + 6 + 1 = 13 mois.
+      expect(screen.getByText('Matelas recommandé : 6 à 13 mois de dépenses')).toBeInTheDocument()
+      expect(screen.getByText('Propriétaire : travaux et gros entretien')).toBeInTheDocument()
+      // Trois personnes à charge : 8 à 16 mois, les 6 mois visés sont en dessous.
+      await user.selectOptions(screen.getByLabelText('Personnes à charge'), 'many')
+      expect(await screen.findByText(/en dessous de la fourchette/)).toBeInTheDocument()
+      expect(pageText()).toContain('Votre couverture visée est en dessous de la fourchette recommandée.')
+
+      unmount()
+      mockProfileScreen()
+      renderApp('/objectifs')
+      expect(await screen.findByText('Matelas recommandé : 8 à 16 mois de dépenses')).toBeInTheDocument()
+    })
+
+    it('compare l’allocation actuelle au profil déclaré', async () => {
+      mockProfileScreen()
+      const { user } = renderApp('/objectifs')
+      // 33 000 de titres pour 12 000 d'épargne : 73 % ; profil moyen à moyen terme : 50 %.
+      expect(await screen.findByText(/Titres et crypto/)).toHaveTextContent('73 % aujourd’hui, environ 50 % pour ce profil')
+      await user.selectOptions(screen.getByLabelText('Tolérance au risque'), 'low')
+      expect(screen.getByText(/Titres et crypto/)).toHaveTextContent('environ 25 % pour ce profil')
+    })
   })
 })
