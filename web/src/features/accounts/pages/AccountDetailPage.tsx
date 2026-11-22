@@ -8,6 +8,7 @@ import { AccountEditor } from '../components/AccountEditor'
 import { CsvImportModal } from '../components/CsvImport'
 import { HoldingFormModal } from '../components/HoldingForm'
 import { OperationsJournal } from '../components/OperationsJournal'
+import { assetKey } from '../lib/consolidation'
 import { Icon } from '@/shared/ui/Icon'
 import {
   Badge,
@@ -138,7 +139,9 @@ function HoldingsPanel({ account, onImport }: { account: AccountDetail; onImport
               {holdings.map((holding) => (
                 <tr key={holding.id}>
                   <td className="min-w-[180px]">
-                    <div className="font-medium">{holding.name}</div>
+                    <Link to={`/comptes/positions/${encodeURIComponent(assetKey(holding))}`} className="font-medium hover:underline">
+                      {holding.name}
+                    </Link>
                     <div className="num text-[13px] text-muted">
                       {[holding.symbol, holding.isin].filter(Boolean).join(', ') || '–'}
                     </div>

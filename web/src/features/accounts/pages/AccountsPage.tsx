@@ -93,7 +93,16 @@ export default function AccountsPage() {
       <PageHeader
         title="Comptes"
         description="Chaque compte appartient à un ou plusieurs membres du foyer, selon leurs parts."
-        actions={accounts.isSuccess && accounts.data.length > 0 ? addButton : undefined}
+        actions={
+          accounts.isSuccess && accounts.data.length > 0 ? (
+            <>
+              <Link to="/comptes/positions" className="inline-flex min-h-10 items-center rounded-[9px] border border-line bg-surface px-4 font-medium">
+                Positions consolidées
+              </Link>
+              {addButton}
+            </>
+          ) : undefined
+        }
       />
 
       {accounts.isPending ? (
