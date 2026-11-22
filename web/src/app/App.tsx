@@ -10,6 +10,8 @@ import { useDiscreet } from '@/shared/state/discreet'
 const OverviewPage = lazy(() => import('@/features/overview/pages/OverviewPage'))
 const AnalysisPage = lazy(() => import('@/features/analysis/pages/AnalysisPage'))
 const AccountsPage = lazy(() => import('@/features/accounts/pages/AccountsPage'))
+const PositionsPage = lazy(() => import('@/features/accounts/pages/PositionsPage'))
+const AssetPage = lazy(() => import('@/features/accounts/pages/AssetPage'))
 const AccountDetailPage = lazy(() => import('@/features/accounts/pages/AccountDetailPage'))
 const BudgetPage = lazy(() => import('@/features/budget/pages/BudgetPage'))
 const RealEstatePage = lazy(() => import('@/features/real-estate/pages/RealEstatePage'))
@@ -50,6 +52,8 @@ export default function App() {
             <Route index element={<OverviewPage />} />
             <Route path="analyse" element={<AnalysisPage />} />
             <Route path="comptes" element={<AccountsPage />} />
+            <Route path="comptes/positions" element={<PositionsPage />} />
+            <Route path="comptes/positions/:key" element={<AssetPage />} />
             <Route path="comptes/:id" element={<AccountDetailPage />} />
             <Route path="budget" element={<BudgetPage />} />
             <Route path="immobilier" element={<RealEstatePage />} />

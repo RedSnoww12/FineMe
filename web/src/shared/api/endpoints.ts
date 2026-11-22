@@ -35,6 +35,7 @@ import type {
   HistoryReviewPoint,
   Holding,
   HoldingInput,
+  HoldingPrices,
   ImportResult,
   LoanSchedule,
   LoginEvent,
@@ -120,6 +121,8 @@ export const api = {
   updateHolding: (id: string, body: Partial<HoldingInput>) =>
     request<Holding>(`/api/holdings/${id}`, { method: 'PUT', body }),
   deleteHolding: (id: string) => request<void>(`/api/holdings/${id}`, { method: 'DELETE' }),
+  holdingPrices: (id: string, range: HistoryRange) =>
+    request<HoldingPrices>(`/api/holdings/${id}/prices`, { query: { range } }),
   refreshPrices: () => request<PricesRefresh>('/api/prices/refresh', { method: 'POST' }),
   fx: () => request<Fx>('/api/fx'),
 

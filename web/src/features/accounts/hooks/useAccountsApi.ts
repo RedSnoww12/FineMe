@@ -1,6 +1,7 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/shared/api/endpoints'
-import { useApiMutation } from '@/shared/api/queries'
+import { useAccounts, useApiMutation } from '@/shared/api/queries'
+import { useView } from '@/shared/state/view'
 import type {
   HoldingInput,
   ImportKind,
@@ -104,5 +105,53 @@ export function useSaveImportProfile(accountId: string) {
     mutationFn: ({ kind, ...body }: ImportProfileInput & { kind: ImportKind }) =>
       api.saveImportProfile(accountId, kind, body),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['import-profiles', accountId] }),
+  })
+}
+
+/** Détail (positions comprises) de tous les comptes pouvant porter des positions. Clé partagée avec la fiche d'un compte. */
+export function useAllAccountDetails() {
+  const { memberId } = useView()
+  const accounts = useAccounts()
+  const ids = (accounts.data ?? []).filter((a) => a.kind !== 'real_estate' && a.kind !== 'loan').map((a) => a.id)
+  const details = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ['account', id, memberId],
+      queryFn: () => api.account(id, { member_id: memberId }),
+    })),
+    combine: (results) => ({
+      data: results.every((r) => r.data) ? results.flatMap((r) => (r.data ? [r.data] : [])) : undefined,
+      isPending: results.some((r) => r.isPending),
+      error: results.find((r) => r.error)?.error ?? null,
+      refetch: () => results.forEach((r) => void r.refetch()),
+    }),
+  })
+  return {
+    data: accounts.data ? details.data : undefined,
+    isPending: accounts.isPending || details.isPending,
+    error: accounts.error ?? details.error,
+    refetch: () => {
+      void accounts.refetch()
+      details.refetch()
+    },
+  }
+}
+
+/** Journaux d'opérations des comptes donnés, réunis. Clé partagée avec le journal d'un compte. */
+export function useOperationsOf(accountIds: readonly string[]) {
+  return useQueries({
+    queries: accountIds.map((id) => ({ queryKey: ['operations', id], queryFn: () => api.operations(id) })),
+    combine: (results) => ({
+      data: results.every((r) => r.data) ? results.flatMap((r) => r.data ?? []) : undefined,
+      isPending: results.some((r) => r.isPending),
+      error: results.find((r) => r.error)?.error ?? null,
+    }),
+  })
+}
+
+export function useHoldingPrices(holdingId: string | undefined) {
+  return useQuery({
+    queryKey: ['holding-prices', holdingId],
+    queryFn: () => api.holdingPrices(holdingId as string, 'all'),
+    enabled: Boolean(holdingId),
   })
 }

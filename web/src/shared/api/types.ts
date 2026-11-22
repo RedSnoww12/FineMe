@@ -197,6 +197,9 @@ export type PricesRefresh = {
   failed: { holding_id: string; name: string; reason: string }[]
 }
 
+/** Historique des cours relevés automatiquement d'une position, du plus ancien au plus récent. */
+export type HoldingPrices = { points: { date: string; price: number; currency: string }[] }
+
 export type Fx = { base: 'EUR'; rates: Record<string, number>; updated_at: string }
 
 export type Transaction = {
