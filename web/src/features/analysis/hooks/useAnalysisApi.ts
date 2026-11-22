@@ -96,3 +96,14 @@ export function useAccountDetails(accountIds: readonly string[]) {
     combine: combineAll,
   })
 }
+
+/** Historique complet de chaque membre donné, dans l'ordre des identifiants. Clé partagée avec la vue d'un membre. */
+export function useMemberHistories(memberIds: readonly string[]) {
+  return useQueries({
+    queries: memberIds.map((id) => ({
+      queryKey: ['history', 'all', id],
+      queryFn: () => api.history('all', { member_id: id }),
+    })),
+    combine: combineAll,
+  })
+}

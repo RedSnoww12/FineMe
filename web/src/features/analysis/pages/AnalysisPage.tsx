@@ -157,7 +157,15 @@ export default function AnalysisPage() {
 
   return (
     <>
-      <PageHeader title="Analyse" description={description} />
+      <PageHeader
+        title="Analyse"
+        description={description}
+        actions={
+          <Link to="/analyse/date" className="inline-flex min-h-10 items-center rounded-[9px] border border-line bg-surface px-4 font-medium">
+            Patrimoine à une date
+          </Link>
+        }
+      />
       <Controls period={period} onPeriod={setPeriod} unit={unit} onUnit={setUnit} />
       <div className="flex flex-col gap-4 sm:gap-5">
         <CategoryEvolutionPanel series={series} unit={unit} {...historyState} />
