@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useView } from '@/shared/state/view'
 import { api } from '@/shared/api/endpoints'
 import type { AccountDetail, AccountInput } from '@/shared/api/types'
@@ -85,5 +85,33 @@ export function useAccountEditor(accountId: string | undefined, onSaved: () => v
     onSubmit: save.mutate,
     saving: save.isPending,
     saveError: save.error,
+  }
+}
+
+/** Détail (positions comprises) de tous les comptes pouvant porter des positions. Clé partagée avec la fiche d'un compte. */
+export function useAllAccountDetails() {
+  const { memberId } = useView()
+  const accounts = useAccounts()
+  const ids = (accounts.data ?? []).filter((a) => a.kind !== 'real_estate' && a.kind !== 'loan').map((a) => a.id)
+  const details = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ['account', id, memberId],
+      queryFn: () => api.account(id, { member_id: memberId }),
+    })),
+    combine: (results) => ({
+      data: results.every((r) => r.data) ? results.flatMap((r) => (r.data ? [r.data] : [])) : undefined,
+      isPending: results.some((r) => r.isPending),
+      error: results.find((r) => r.error)?.error ?? null,
+      refetch: () => results.forEach((r) => void r.refetch()),
+    }),
+  })
+  return {
+    data: accounts.data ? details.data : undefined,
+    isPending: accounts.isPending || details.isPending,
+    error: accounts.error ?? details.error,
+    refetch: () => {
+      void accounts.refetch()
+      details.refetch()
+    },
   }
 }

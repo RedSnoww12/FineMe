@@ -48,6 +48,8 @@ pub struct Account {
     /// Solde espèces dans la devise du compte.
     pub cash_balance: f64,
     pub annual_yield_pct: Option<f64>,
+    /// Frais de gestion annuels de l'enveloppe (assurance-vie, PER…), en % de l'encours : 0.6 pour 0,6 %.
+    pub management_fee_pct: Option<f64>,
     pub source: AccountSource,
     pub external_id: Option<String>,
     pub connection_id: Option<ConnectionId>,
@@ -67,6 +69,13 @@ impl Account {
         finite(self.cash_balance, "cash_balance")?;
         if let Some(yield_pct) = self.annual_yield_pct {
             finite(yield_pct, "annual_yield_pct")?;
+        }
+        if let Some(fee) = self.management_fee_pct
+            && !(0.0..=100.0).contains(&fee)
+        {
+            return Err(DomainError::Rule(
+                "Les frais de gestion doivent être compris entre 0 et 100 %",
+            ));
         }
         match (self.kind, &self.property) {
             (AccountKind::RealEstate, None) => {
@@ -111,6 +120,7 @@ mod tests {
             currency: Currency::eur(),
             cash_balance: 0.0,
             annual_yield_pct: None,
+            management_fee_pct: None,
             source: AccountSource::Manual,
             external_id: None,
             connection_id: None,
@@ -185,6 +195,20 @@ mod tests {
             .check()
             .is_err()
         );
+    }
+
+    #[test]
+    fn management_fee_lies_between_0_and_100_pct() {
+        let with_fee = |fee| Account {
+            management_fee_pct: Some(fee),
+            ..account(AccountKind::Investment)
+        };
+        assert!(with_fee(0.0).check().is_ok());
+        assert!(with_fee(0.6).check().is_ok());
+        assert!(with_fee(100.0).check().is_ok());
+        for fee in [-0.1, 100.1, f64::NAN, f64::INFINITY] {
+            assert!(with_fee(fee).check().is_err(), "{fee}");
+        }
     }
 
     #[test]

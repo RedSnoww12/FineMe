@@ -147,6 +147,7 @@ impl ConnectionService {
                     currency: Currency::parse(&bank_account.currency)?,
                     cash_balance: bank_account.balance,
                     annual_yield_pct: None,
+                    management_fee_pct: None,
                     source: AccountSource::Aggregator,
                     external_id: Some(external_id),
                     connection_id: Some(connection.id),

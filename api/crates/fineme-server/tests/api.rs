@@ -649,6 +649,44 @@ async fn daily_job_requires_its_secret_and_records_todays_snapshot() {
 }
 
 #[tokio::test]
+async fn management_fee_is_saved_exported_and_cleared() {
+    let (api, alice, _) = Api::household().await;
+    let owners = json!([{ "member_id": alice, "share": 1 }]);
+    let created = api
+        .post(
+            "/api/accounts",
+            json!({ "name": "Assurance-vie", "kind": "investment", "envelope": "assurance_vie",
+                    "management_fee_pct": 0.6, "owners": owners }),
+        )
+        .await;
+    assert_eq!(created["management_fee_pct"], json!(0.6));
+    let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        api.get("/api/accounts").await[0]["management_fee_pct"],
+        json!(0.6)
+    );
+
+    let exported = api.get("/api/export").await;
+    let account = exported["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "Assurance-vie")
+        .unwrap();
+    assert_eq!(account["management_fee_pct"], json!(0.6));
+
+    let (status, cleared) = api
+        .call(
+            "PUT",
+            &format!("/api/accounts/{id}"),
+            Some(json!({ "management_fee_pct": null })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["management_fee_pct"], Value::Null);
+}
+
+#[tokio::test]
 async fn error_responses_share_one_shape() {
     let (api, alice, _) = Api::household().await;
     assert_eq!(
@@ -753,6 +791,10 @@ async fn error_responses_share_one_shape() {
         (
             json!({ "name": "X", "kind": "savings", "currency": "euros", "owners": owners }),
             "Devise invalide (code ISO à 3 lettres attendu)",
+        ),
+        (
+            json!({ "name": "X", "kind": "investment", "management_fee_pct": 101, "owners": owners }),
+            "Les frais de gestion doivent être compris entre 0 et 100 %",
         ),
     ];
     for (body, message) in cases {

@@ -263,11 +263,12 @@ async fn save_account(conn: &mut PgConnection, write: &AccountWrite) -> RepoResu
     let id = a.id.as_uuid();
     sqlx::query(
         "INSERT INTO accounts (id, name, institution, kind, envelope, currency, cash_balance, annual_yield_pct, \
-         source, external_id, connection_id, opened_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+         management_fee_pct, source, external_id, connection_id, opened_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, institution = EXCLUDED.institution, \
          kind = EXCLUDED.kind, envelope = EXCLUDED.envelope, currency = EXCLUDED.currency, \
          cash_balance = EXCLUDED.cash_balance, annual_yield_pct = EXCLUDED.annual_yield_pct, \
+         management_fee_pct = EXCLUDED.management_fee_pct, \
          source = EXCLUDED.source, external_id = EXCLUDED.external_id, connection_id = EXCLUDED.connection_id, \
          opened_at = EXCLUDED.opened_at, updated_at = EXCLUDED.updated_at",
     )
@@ -279,6 +280,7 @@ async fn save_account(conn: &mut PgConnection, write: &AccountWrite) -> RepoResu
     .bind(a.currency.as_str())
     .bind(a.cash_balance)
     .bind(a.annual_yield_pct)
+    .bind(a.management_fee_pct)
     .bind(a.source.as_str())
     .bind(&a.external_id)
     .bind(a.connection_id.map(|c| c.as_uuid()))
@@ -714,8 +716,8 @@ impl PortfolioRepository for PgStore {
     async fn load(&self) -> RepoResult<PortfolioData> {
         let pool = &self.pool;
         let account_rows = sqlx::query_as::<_, AccountRow>(
-            "SELECT id, name, institution, kind, envelope, currency, cash_balance, annual_yield_pct, source, \
-             external_id, connection_id, opened_at, updated_at FROM accounts ORDER BY created_at, name",
+            "SELECT id, name, institution, kind, envelope, currency, cash_balance, annual_yield_pct, \
+             management_fee_pct, source, external_id, connection_id, opened_at, updated_at FROM accounts ORDER BY created_at, name",
         )
         .fetch_all(pool)
         .await

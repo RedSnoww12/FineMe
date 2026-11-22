@@ -38,6 +38,7 @@ type FormState = {
   currency: string
   cash_balance: string
   annual_yield_pct: string
+  management_fee_pct: string
   opened_at: string
   owners: OwnerRow[]
   // bien immobilier
@@ -80,6 +81,7 @@ function initialState(
     currency: detail?.currency ?? 'EUR',
     cash_balance: detail ? toInput(detail.cash_balance, 2) : '',
     annual_yield_pct: toInput(detail?.annual_yield_pct),
+    management_fee_pct: toInput(detail?.management_fee_pct),
     opened_at: detail?.opened_at ?? '',
     owners: detail
       ? detail.owners.map((owner) => ({ member_id: owner.member_id, share: toInput(owner.share * 100, 4) }))
@@ -234,6 +236,8 @@ function AccountFormInner({
     if (isPlain) {
       const cash = readNumber(form, next, 'cash_balance')
       const yieldPct = readNumber(form, next, 'annual_yield_pct', { min: 0 })
+      const feePct = readNumber(form, next, 'management_fee_pct', { min: 0 })
+      if (feePct !== null && feePct > 100) next.management_fee_pct = 'Saisissez un pourcentage entre 0 et 100.'
       const currency = form.currency.trim().toUpperCase()
       if (!/^[A-Z]{3}$/.test(currency)) next.currency = 'Code devise sur 3 lettres, par exemple EUR.'
       input.institution = form.institution.trim() || null
@@ -241,6 +245,7 @@ function AccountFormInner({
       input.currency = currency
       input.cash_balance = cash ?? 0
       input.annual_yield_pct = yieldPct
+      if (kind === 'investment') input.management_fee_pct = feePct
       input.opened_at = form.opened_at || null
     }
 
@@ -377,6 +382,16 @@ function AccountFormInner({
                 suffix="%"
                 hint="Facultatif, par exemple le taux d’un livret."
               />
+              {kind === 'investment' ? (
+                <NumberField
+                  label="Frais de gestion de l’enveloppe"
+                  value={form.management_fee_pct}
+                  onChange={text('management_fee_pct')}
+                  error={errors.management_fee_pct}
+                  suffix="%"
+                  hint="Facultatif : frais annuels d’une assurance-vie ou d’un PER, en % de l’encours."
+                />
+              ) : null}
             </div>
             <TextField label="Date d’ouverture" type="date" value={form.opened_at} onChange={text('opened_at')} hint="Facultatif." />
           </>

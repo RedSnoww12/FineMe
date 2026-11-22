@@ -98,6 +98,7 @@ fn account(kind: AccountKind, name: &str, owners: &[(MemberId, f64)]) -> Account
         currency: Currency::eur(),
         cash_balance: 1500.5,
         annual_yield_pct: Some(1.7),
+        management_fee_pct: Some(0.6),
         source: AccountSource::Manual,
         external_id: None,
         connection_id: None,

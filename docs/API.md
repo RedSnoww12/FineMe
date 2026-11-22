@@ -137,6 +137,7 @@ type Account = {
   currency: string;            // ISO, défaut "EUR"
   cash_balance: number;        // solde espèces dans la devise du compte
   annual_yield_pct: number | null; // ex. 1.7 pour un livret
+  management_fee_pct: number | null; // frais de gestion annuels de l'enveloppe (assurance-vie, PER…), % de l'encours, ex. 0.6 ; dans [0, 100]
   source: "manual" | "csv" | "aggregator" | "import";
   external_id: string | null;
   connection_id: string | null;
@@ -159,7 +160,7 @@ Calcul de `value` :
 
 Routes :
 - GET `/api/accounts` → `Account[]`
-- POST `/api/accounts` `{ name, institution?, kind, envelope?, currency?, cash_balance?, annual_yield_pct?, opened_at?, owners: [{member_id, share}], property?: PropertyInput, loan?: LoanInput }` → `AccountDetail`
+- POST `/api/accounts` `{ name, institution?, kind, envelope?, currency?, cash_balance?, annual_yield_pct?, management_fee_pct?, opened_at?, owners: [{member_id, share}], property?: PropertyInput, loan?: LoanInput }` → `AccountDetail`
   (`property` requis si `kind = real_estate`, `loan` requis si `kind = loan`)
 - GET `/api/accounts/:id` → `AccountDetail` = `Account & { holdings: Holding[], property: Property | null, loan: Loan | null }`
 - PUT `/api/accounts/:id` (mêmes champs, tous optionnels ; `owners` remplace la liste) → `AccountDetail`
@@ -739,7 +740,7 @@ type Bundle = {
   members: { name: string; color?: string; is_primary?: boolean }[];
   accounts: {
     external_id: string; name: string; institution?: string; kind: AccountKind; envelope?: Envelope;
-    currency?: string; cash_balance?: number; annual_yield_pct?: number; opened_at?: string;
+    currency?: string; cash_balance?: number; annual_yield_pct?: number; management_fee_pct?: number; opened_at?: string;
     owners: { member: string; share: number }[];      // member = nom
     holdings?: HoldingInput[]; property?: PropertyInput;
     // bien : historique des estimations, du plus ancien au plus récent ; non vide, il remplace celui du bien
@@ -754,5 +755,6 @@ type Bundle = {
 
 Projection financière, indépendance financière, simulateur de frais (contrats, ETF, autres), simulateur de prêt et
 simulateur « Et si ? » (scénario appliqué au patrimoine réel, sans rien enregistrer) sont calculés **côté front** (pur
-TypeScript, instantané). Ils se pré-remplissent depuis `/api/overview`, `/api/goals`, `/api/accounts` et
+TypeScript, instantané). Le simulateur de frais affiche aussi le coût réel du portefeuille : `management_fee_pct` des
+comptes d'investissement et `expense_ratio` des positions, rapportés à la valeur détenue par la vue. Ils se pré-remplissent depuis `/api/overview`, `/api/goals`, `/api/accounts` et
 `weighted_expense_ratio`.

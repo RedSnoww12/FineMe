@@ -229,6 +229,7 @@ fn export_account(account: &Account, portfolio: &Portfolio) -> BundleAccount {
             currency: Some(account.currency.as_str().to_string()),
             cash_balance: Some(account.cash_balance),
             annual_yield_pct: Some(account.annual_yield_pct),
+            management_fee_pct: Some(account.management_fee_pct),
             opened_at: Some(account.opened_at),
             owners: None,
             property,

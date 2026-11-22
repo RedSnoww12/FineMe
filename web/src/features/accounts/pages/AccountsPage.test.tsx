@@ -135,6 +135,28 @@ describe('création d’un compte', () => {
     expect(pageText()).toContain('1 235 €')
   })
 
+  it('envoie les frais de gestion d’un compte d’investissement, entre 0 et 100 %', async () => {
+    mockJson('get', '/api/accounts', [])
+    let received: { management_fee_pct?: number } | undefined
+    server.use(
+      http.post(`${API}/api/accounts`, async ({ request }) => {
+        received = (await request.json()) as { management_fee_pct?: number }
+        return HttpResponse.json(buildAccountDetail({ kind: 'investment', management_fee_pct: 0.6 }))
+      }),
+    )
+    const { user, dialog } = await openCreateForm()
+    await user.selectOptions(dialog.getByLabelText('Type de compte'), 'investment')
+    await user.type(dialog.getByLabelText('Nom du compte'), 'Assurance-vie')
+    await user.type(dialog.getByLabelText('Frais de gestion de l’enveloppe'), '120')
+    await user.click(dialog.getByRole('button', { name: 'Ajouter' }))
+    expect(dialog.getByText('Saisissez un pourcentage entre 0 et 100.')).toBeInTheDocument()
+
+    await user.clear(dialog.getByLabelText('Frais de gestion de l’enveloppe'))
+    await user.type(dialog.getByLabelText('Frais de gestion de l’enveloppe'), '0,6')
+    await user.click(dialog.getByRole('button', { name: 'Ajouter' }))
+    await waitFor(() => expect(received?.management_fee_pct).toBe(0.6))
+  })
+
   it('affiche le message de l’API quand l’enregistrement échoue', async () => {
     mockJson('get', '/api/accounts', [])
     mockApiError('post', '/api/accounts', 422, 'Un compte porte déjà ce nom.')

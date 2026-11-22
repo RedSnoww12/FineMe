@@ -2,7 +2,7 @@ import { Link } from 'react-router'
 import { money, number, pct } from '@/shared/lib/format'
 import { useView } from '@/shared/state/view'
 import { EmptyState, ErrorState, LoadingBlock, PageHeader, Panel, Signed } from '@/shared/ui/ui'
-import { useAllAccountDetails } from '../hooks/useAccountsApi'
+import { useAllAccountDetails } from '@/shared/api/queries'
 import { consolidate } from '../lib/consolidation'
 
 const backToAccounts = (
