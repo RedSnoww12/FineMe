@@ -16,6 +16,7 @@ playwright-report/
 # IDE
 .idea/
 *.iml
-# Skills d'agent installés en local
-.claude/skills/
+# Skills d'agent installés en local (sauf ceux du projet)
+.claude/skills/*
+!.claude/skills/rapport-patrimoine/
 skills-lock.json

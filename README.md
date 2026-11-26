@@ -86,6 +86,10 @@ FineMe expose un serveur [MCP](https://modelcontextprotocol.io) **en lecture seu
    personnalisé compris). Par défaut seul `localhost` est accepté ; une fois la variable définie, elle remplace cette
    liste.
 3. Dans Claude Code, `/mcp` liste les six outils. Exemple : « quel est mon patrimoine et sa variation sur 1 mois ? ».
+4. `/rapport-patrimoine [1m|3m|6m|ytd|1y|all]` (skill du dépôt, `.claude/skills/rapport-patrimoine/SKILL.md`)
+   rédige un rapport au format fixe : synthèse en trois lignes, patrimoine et variation (semaine et période),
+   performance face à l'indice, budget face aux cibles, objectifs, alertes, points d'attention. Il n'utilise que
+   les six outils et recopie leurs chiffres sans les recalculer.
 
 Pour appeler chaque outil à la main : `npx @modelcontextprotocol/inspector`, transport *Streamable HTTP*, URL
 `http://localhost:8080/mcp`, en-tête `Authorization: Bearer fm_pat_…`.
