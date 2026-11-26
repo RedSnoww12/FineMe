@@ -13,6 +13,7 @@ Interface en français, devise de référence EUR.
 | `web/` | Front React + Vite + TypeScript | Vercel |
 | `docs/API.md` | Contrat d'API — **source de vérité** entre front et back | – |
 | `seed/private/` | Données personnelles, ignoré par Git | – |
+| `.claude/skills/rapport-patrimoine/` | Skill Claude Code `/rapport-patrimoine` : rapport au format fixe depuis le serveur MCP | – |
 
 Base de données : Postgres (Supabase en production, Docker en local sur le port 5433).
 
