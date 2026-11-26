@@ -12,6 +12,7 @@ export const SECTIONS = [
 ] as const;
 
 const SUMMARY_LINES = 3;
+const MAX_LENGTH = 20_000;
 
 const TITLE = /^# (Rapport de patrimoine — \d{2}\/\d{2}\/\d{4})\s*$/;
 
@@ -41,6 +42,13 @@ export function parseReport(raw: string): Report {
   // Le modèle peut entourer le rapport d'un bloc de code : rien après sa clôture ne fait partie du rapport.
   const fence = lines.findIndex((line, index) => index > start && line.startsWith('```'));
   const body = lines.slice(start, fence < 0 ? undefined : fence);
+  if (body.join('\n').length > MAX_LENGTH) {
+    throw new InvalidReportError('Rapport anormalement long.');
+  }
+  const first = body.slice(1).find((line) => line.trim());
+  if (!first?.startsWith('## ')) {
+    throw new InvalidReportError('Texte inattendu entre le titre et la première section.');
+  }
   const sections = sectionsOf(body.slice(1));
   const headings = sections.map((section) => section.heading);
   if (headings.join('\n') !== SECTIONS.join('\n')) {

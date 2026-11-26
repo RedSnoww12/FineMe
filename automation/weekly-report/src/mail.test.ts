@@ -17,6 +17,14 @@ describe('emails', () => {
     expect(unavailableEmail('x').text).not.toContain('exécution :');
   });
 
+  it('désamorce les liens du rapport et de la cause, tronquée, mais pas celui de l\'exécution', () => {
+    expect(reportEmail({ title: 'T', text: 'voir https://evil.example/x' }).text).toBe('voir [lien retiré]');
+    const { text } = unavailableEmail(`https://evil.example ${'a'.repeat(2000)}`, 'https://github.example.test/run/1');
+    expect(text).not.toContain('evil');
+    expect(text.length).toBeLessThan(800);
+    expect(text).toContain('https://github.example.test/run/1');
+  });
+
   it('masque les secrets', () => {
     expect(redact('refus de fm_pat_x puis fm_pat_x', ['fm_pat_x'])).toBe('refus de *** puis ***');
   });

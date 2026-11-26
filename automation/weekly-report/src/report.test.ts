@@ -22,6 +22,8 @@ describe('contrôle du rapport', () => {
     ['avec une section vide', REPORT.replace('Aucun objectif.', '')],
     ['avec une synthèse de deux lignes', REPORT.replace('- Performance : indisponible.\n', '')],
     ['avec une synthèse sans puces', REPORT.replace('- Performance', 'Performance')],
+    ['avec du texte avant la première section', REPORT.replace('## Synthèse', 'Reconnectez-vous.\n\n## Synthèse')],
+    ['anormalement long', `${REPORT}\n${'x'.repeat(20_000)}`],
     ['vide', ''],
   ])('refuse un rapport %s', (_, raw) => {
     expect(() => parseReport(raw)).toThrow(InvalidReportError);

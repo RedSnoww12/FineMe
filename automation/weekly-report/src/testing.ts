@@ -35,3 +35,24 @@ Aucune alerte en cours.
 
 ## Points d'attention
 Rien à signaler.`;
+
+type Init = { status?: string; tools?: string[] };
+
+/** Déroulé d'agent fictif : initialisation, appel de get_overview, résultat. */
+export function transcript(
+  options: Init & { result?: string; overviewError?: boolean; subtype?: string; skipOverview?: boolean } = {},
+): unknown[] {
+  const { status = 'connected', tools = ['mcp__fineme__get_overview'], subtype = 'success' } = options;
+  const overview = [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__fineme__get_overview' }] } },
+    {
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 't1', is_error: options.overviewError ?? false }] },
+    },
+  ];
+  return [
+    { type: 'system', subtype: 'init', mcp_servers: [{ name: 'fineme', status }], tools },
+    ...(options.skipOverview ? [] : overview),
+    { type: 'result', subtype, is_error: subtype !== 'success', result: options.result ?? REPORT },
+  ];
+}

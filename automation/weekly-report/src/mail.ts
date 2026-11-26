@@ -1,7 +1,10 @@
 // Contenu des emails (texte brut : rien n'est interprété) et port d'envoi.
 
 import type { Env } from './config.ts';
+import { defangLinks } from './links.ts';
 import type { Report } from './report.ts';
+
+const MAX_REASON_LENGTH = 500;
 
 export type Email = { subject: string; text: string };
 
@@ -10,14 +13,15 @@ export interface Mailer {
 }
 
 export function reportEmail(report: Report): Email {
-  return { subject: report.title, text: report.text };
+  return { subject: report.title, text: defangLinks(report.text) };
 }
 
 export function unavailableEmail(reason: string, runUrl?: string): Email {
   const lines = [
-    'Le rapport de patrimoine hebdomadaire n\'a pas pu être produit.',
+    'Le rapport de patrimoine hebdomadaire n\'est pas disponible.',
     '',
-    `Cause : ${reason}`,
+    // La cause peut reprendre le message d'une erreur imprévue ; l'adresse de l'exécution, elle, est la nôtre.
+    `Cause : ${defangLinks(reason).slice(0, MAX_REASON_LENGTH)}`,
   ];
   if (runUrl) {
     lines.push('', `Détail de l'exécution : ${runUrl}`);
