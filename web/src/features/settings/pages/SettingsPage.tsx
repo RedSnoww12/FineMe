@@ -11,6 +11,7 @@ import {
 import { AlertRulesPanel } from '../components/AlertRulesPanel'
 import { ExportPanel } from '../components/ExportPanel'
 import { LoginHistoryPanel } from '../components/LoginHistoryPanel'
+import { AiAccessPanel } from '../components/AiAccessPanel'
 import { TotpPanel } from '../components/TotpPanel'
 import { downloadFile } from '../lib/download'
 import type { Bundle, ImportResult, Member } from '@/shared/api/types'
@@ -398,6 +399,7 @@ export default function SettingsPage() {
         <PasswordPanel />
         <TotpPanel />
         <LoginHistoryPanel />
+        <AiAccessPanel />
         <Panel title="Session">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-muted">

@@ -1,6 +1,11 @@
 const TOKEN_KEY = 'fineme.token'
 const BASE_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
 
+/** Adresse de l'API (`VITE_API_URL`) ; vide quand le front la sert sur la même origine (proxy). */
+export function apiBaseUrl(): string {
+  return BASE_URL
+}
+
 export const UNAUTHORIZED_EVENT = 'fineme:unauthorized'
 
 export const UNREACHABLE_MESSAGE =

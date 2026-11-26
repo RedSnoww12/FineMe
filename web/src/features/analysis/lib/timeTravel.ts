@@ -1,70 +1,62 @@
-// Patrimoine à une date passée et comparaison de deux dates, à partir des instantanés quotidiens.
-import type { AllocationCategory, HistoryPoint } from '@/shared/api/types'
+// Patrimoine à une date et comparaison de deux dates : les écarts sont calculés par l'API
+// (`GET /api/history/compare`) ; ce module ne fait que les présenter (libellés, raccourcis de date).
+import type { HistoryComparison } from '@/shared/api/types'
 import { ACCOUNT_KIND_PLURAL } from '@/shared/lib/labels'
-import { ASSET_CATEGORIES } from './evolution'
 
-/** Instantané en vigueur à `date` : le dernier relevé ce jour-là ou avant ; null si l'historique commence après. */
-export function snapshotAt(points: readonly HistoryPoint[], date: string): HistoryPoint | null {
-  let found: HistoryPoint | null = null
-  for (const point of points) {
-    if (point.date <= date && (found === null || point.date > found.date)) found = point
-  }
-  return found
+export type DeltaRow = {
+  key: string
+  label: string
+  from: number
+  to: number
+  delta: number
 }
 
-export type DeltaRow = { key: string; label: string; from: number; to: number; delta: number }
-
-function deltaRow(key: string, label: string, from: number, to: number): DeltaRow {
-  return { key, label, from, to, delta: to - from }
-}
-
-export type Comparison = {
+export type LabeledComparison = {
   totals: DeltaRow[]
   /** null : l'un des deux instantanés n'a pas de détail par compte. */
   categories: DeltaRow[] | null
   accounts: DeltaRow[] | null
+  /** Vue foyer seulement. */
+  members: DeltaRow[] | null
 }
 
-function byCategory(point: HistoryPoint): Record<AllocationCategory, number> {
-  const values = { checking: 0, savings: 0, investment: 0, crypto: 0, real_estate: 0, other: 0 }
-  for (const account of point.accounts ?? []) {
-    if (account.kind !== 'loan') values[account.kind] += account.value
-  }
-  return values
+const TOTAL_LABELS: Record<string, string> = {
+  gross_assets: 'Actifs bruts',
+  liabilities: 'Dettes',
+  net_worth: 'Patrimoine net',
 }
 
-/**
- * Écarts entre deux instantanés : totaux, catégories d'actifs et comptes (un prêt compte en négatif). Un compte
- * présent à une seule date vaut 0 à l'autre ; il garde le nom de son dernier relevé.
- */
-export function compareSnapshots(from: HistoryPoint, to: HistoryPoint): Comparison {
-  const totals = [
-    deltaRow('gross_assets', 'Actifs bruts', from.gross_assets, to.gross_assets),
-    deltaRow('liabilities', 'Dettes', from.liabilities, to.liabilities),
-    deltaRow('net_worth', 'Patrimoine net', from.net_worth, to.net_worth),
-  ]
-  if (from.accounts === null || to.accounts === null) return { totals, categories: null, accounts: null }
+const CATEGORY_LABELS: Record<string, string> = ACCOUNT_KIND_PLURAL
 
-  const before = byCategory(from)
-  const after = byCategory(to)
-  const categories = ASSET_CATEGORIES.filter((c) => before[c] !== 0 || after[c] !== 0).map((c) =>
-    deltaRow(c, ACCOUNT_KIND_PLURAL[c], before[c], after[c]),
-  )
-
-  const rows = new Map<string, { label: string; from: number; to: number }>()
-  const signed = (kind: string, value: number) => (kind === 'loan' ? -value : value)
-  for (const account of from.accounts) {
-    rows.set(account.account_id, { label: account.name, from: signed(account.kind, account.value), to: 0 })
+/** Libellés des lignes d'une comparaison ; null si l'une des deux dates n'a pas d'instantané. */
+export function labelComparison(comparison: HistoryComparison): LabeledComparison | null {
+  if (comparison.totals === null) return null
+  const withLabel =
+    (labels: Record<string, string>) =>
+    (row: { key: string; from: number; to: number; delta: number }): DeltaRow => ({
+      ...row,
+      label: labels[row.key] ?? row.key,
+    })
+  const named = (row: { key: string; name: string; from: number; to: number; delta: number }): DeltaRow => ({
+    key: row.key,
+    label: row.name,
+    from: row.from,
+    to: row.to,
+    delta: row.delta,
+  })
+  return {
+    totals: comparison.totals.map(withLabel(TOTAL_LABELS)),
+    categories: comparison.categories?.map(withLabel(CATEGORY_LABELS)) ?? null,
+    accounts: comparison.accounts?.map(named) ?? null,
+    members: comparison.members?.map(named) ?? null,
   }
-  for (const account of to.accounts) {
-    const row = rows.get(account.account_id) ?? { label: account.name, from: 0, to: 0 }
-    rows.set(account.account_id, { ...row, label: account.name, to: signed(account.kind, account.value) })
-  }
-  const accounts = [...rows.entries()]
-    .map(([key, row]) => deltaRow(key, row.label, row.from, row.to))
-    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+}
 
-  return { totals, categories, accounts }
+/** Vrai pour une date AAAA-MM-JJ qui existe au calendrier (un champ date vidé donne une chaîne vide). */
+export function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
 /** Raccourcis de date : 1er janvier de l'année, il y a un mois, il y a un an. */

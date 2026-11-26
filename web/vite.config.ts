@@ -41,7 +41,7 @@ const pwa = VitePWA({
     globPatterns: ['**/*.{js,css,html,svg,woff2,ico}', 'pwa-*.png', 'apple-touch-icon.png'],
     navigateFallback: '/index.html',
     // Les appels à l'API (même origine via proxy ou réécriture) ne sont jamais servis par la coquille.
-    navigateFallbackDenylist: [/^\/api\//],
+    navigateFallbackDenylist: [/^\/api\//, /^\/mcp/],
     runtimeCaching: [],
     cleanupOutdatedCaches: true,
   },
@@ -56,6 +56,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': { target: process.env.API_PROXY_TARGET ?? 'http://localhost:8080', changeOrigin: true },
+      // Serveur MCP (client IA) : même cible que l'API.
+      '/mcp': { target: process.env.API_PROXY_TARGET ?? 'http://localhost:8080', changeOrigin: true },
     },
   },
   test: {

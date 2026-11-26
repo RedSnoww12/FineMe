@@ -8,6 +8,9 @@ export function mockShell() {
   mockJson('get', '/api/alerts', [])
   // Panneau du second facteur (Paramètres) : désactivé par défaut.
   mockJson('get', '/api/auth/totp', { enabled: false, recovery_codes_remaining: 0 })
+  // Panneau Accès IA (Paramètres) : aucun jeton, aucun appel.
+  mockJson('get', '/api/access-tokens', [])
+  mockJson('get', '/api/access-tokens/calls', [])
 }
 
 /** Requêtes de la vue d'ensemble, sans historique. */

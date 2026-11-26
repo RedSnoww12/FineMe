@@ -1,7 +1,7 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { PersistQueryClientProvider, type Persister } from '@tanstack/react-query-persist-client'
 import type { ReactNode } from 'react'
-import { PERSISTED_CACHE_BUSTER, PERSISTED_CACHE_MAX_AGE_MS } from '@/shared/api/persistence'
+import { PERSISTED_CACHE_BUSTER, PERSISTED_CACHE_MAX_AGE_MS, PERSISTED_DEHYDRATE_OPTIONS } from '@/shared/api/persistence'
 import { AuthProvider } from '@/shared/state/auth'
 import { DiscreetProvider } from '@/shared/state/discreet'
 import { ThemeProvider } from '@/shared/state/theme'
@@ -19,7 +19,12 @@ function QueryProvider({ queryClient, persister, children }: Omit<Props, 'childr
   return (
     <PersistQueryClientProvider
       client={queryClient}
-      persistOptions={{ persister, maxAge: PERSISTED_CACHE_MAX_AGE_MS, buster: PERSISTED_CACHE_BUSTER }}
+      persistOptions={{
+        persister,
+        maxAge: PERSISTED_CACHE_MAX_AGE_MS,
+        buster: PERSISTED_CACHE_BUSTER,
+        dehydrateOptions: PERSISTED_DEHYDRATE_OPTIONS,
+      }}
     >
       {children}
     </PersistQueryClientProvider>
