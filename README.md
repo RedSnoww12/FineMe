@@ -106,6 +106,47 @@ Sécurité :
 - les libellés de transactions et les noms importés sont présentés à l'assistant comme des données, jamais comme
   des instructions.
 
+## Rapport hebdomadaire par email
+
+Chaque lundi, le workflow `.github/workflows/weekly-report.yml` lance un agent
+([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), `automation/weekly-report/`) qui lit le serveur
+MCP de production et envoie le rapport au même format que `/rapport-patrimoine`. L'agent n'a que les six outils FineMe :
+ni terminal, ni fichiers, ni web. Si l'API ne répond pas (réveil de Render compris), si le jeton est refusé ou si le
+rapport est mal formé, un email « Rapport de patrimoine indisponible » part et l'exécution apparaît en échec.
+
+1. Sur Render, `MCP_ALLOWED_HOSTS` doit contenir l'hôte public de l'API (voir ci-dessus).
+2. Dans FineMe, *Paramètres > Accès IA* : créer un jeton dédié (« Rapport hebdo »), révocable à part.
+3. Dans un terminal, `claude setup-token` produit le jeton de l'abonnement Claude utilisé par l'agent.
+4. Dans GitHub, *Settings > Secrets and variables > Actions* :
+
+   | Type | Nom | Valeur |
+   |---|---|---|
+   | variable | `FINEME_API_URL` | URL https de l'API (déjà définie pour la mise à jour quotidienne) |
+   | secret | `FINEME_MCP_TOKEN` | jeton `fm_pat_…` de l'étape 2 |
+   | secret | `CLAUDE_CODE_OAUTH_TOKEN` | jeton de l'étape 3 |
+   | secret | `SMTP_HOST`, `SMTP_PORT` | serveur d'envoi, ex. `smtp.gmail.com` et `587` (TLS obligatoire) |
+   | secret | `SMTP_USER`, `SMTP_PASSWORD` | compte d'envoi ; Gmail : un [mot de passe d'application](https://myaccount.google.com/apppasswords) |
+   | secret | `REPORT_EMAIL_TO` | destinataire |
+   | secret (facultatif) | `REPORT_EMAIL_FROM` | expéditeur, par défaut `SMTP_USER` |
+   | variable (facultatif) | `REPORT_MODEL` | modèle, par défaut `claude-opus-5-5` |
+
+   Préférer un **compte d'envoi dédié**, sans autre usage : un mot de passe d'application Gmail ouvre aussi la lecture
+   de la boîte (IMAP, POP). Le révoquer au moindre doute.
+
+5. *Actions > Rapport hebdomadaire > Run workflow* pour un premier envoi.
+
+Un libellé importé ne doit pas pouvoir faire écrire un lien cliquable : dans l'email, les adresses contenant `://`, les
+adresses email et les liens `mailto:`, `tel:`, `sms:` sont remplacés par « [lien retiré] », et les domaines ou adresses
+IP seuls sont désamorcés (`example[.]com`).
+
+À savoir : le rapport contient des données financières et circule en email (texte brut) ; il passe aussi par l'API
+d'Anthropic. Le dépôt étant public, l'agent n'écrit dans les journaux que des messages fixes, jamais le rapport ; la variable
+`FINEME_API_URL` y reste visible (GitHub ne masque que les secrets), comme pour la mise à jour quotidienne. GitHub
+suspend les workflows planifiés d'un dépôt public après 60 jours sans activité (réactivables depuis l'onglet Actions).
+
+En local (Node 24 ou plus) : copier `automation/weekly-report/.env.example` en `.env`, puis
+`cd automation/weekly-report && npm install && node --env-file=.env src/main.ts`.
+
 ## Connexions bancaires
 
 Aucun agrégateur n'est branché. L'application fonctionne en saisie manuelle et import CSV ; ajouter un agrégateur

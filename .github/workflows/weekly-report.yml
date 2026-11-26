@@ -1,0 +1,58 @@
+name: Rapport hebdomadaire
+
+# Chaque lundi : un agent Claude lit le serveur MCP de FineMe (lecture seule) et envoie le rapport de patrimoine par
+# email (voir README, « Rapport hebdomadaire par email »). En cas d'échec, l'exécution apparaît en échec et, quand
+# l'envoi reste possible, un email « rapport indisponible » part. Le dépôt est public : le rapport n'est jamais écrit
+# dans les journaux.
+#
+# À configurer dans Settings > Secrets and variables > Actions du dépôt :
+#   - variable FINEME_API_URL          : la même que pour la mise à jour quotidienne
+#   - secret   FINEME_MCP_TOKEN        : jeton d'accès FineMe dédié (Paramètres > Accès IA)
+#   - secret   CLAUDE_CODE_OAUTH_TOKEN : produit par `claude setup-token`
+#   - secrets  SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, REPORT_EMAIL_TO
+#   - facultatifs : secret REPORT_EMAIL_FROM, variable REPORT_MODEL
+on:
+  schedule:
+    # Lundi 6 h 43 UTC (7 h 43 ou 8 h 43 à Paris), après la mise à jour quotidienne.
+    - cron: "43 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Rapport de patrimoine par email
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: automation/weekly-report
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: automation/weekly-report/package-lock.json
+      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      # Les secrets ne sont exposés qu'à cette étape, après l'installation des dépendances.
+      - name: Produire et envoyer le rapport
+        env:
+          FINEME_API_URL: ${{ vars.FINEME_API_URL }}
+          FINEME_MCP_TOKEN: ${{ secrets.FINEME_MCP_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
+          REPORT_MODEL: ${{ vars.REPORT_MODEL }}
+        run: node src/main.ts
