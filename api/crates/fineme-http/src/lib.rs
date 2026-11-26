@@ -4,13 +4,6 @@
 mod auth;
 mod error;
 mod input;
-pub mod origin;
-mod output;
-
-/// Forme JSON du contrat (`docs/API.md`) réutilisée par l'adaptateur MCP, qui en renvoie des sous-ensembles.
-pub mod contract {
-    pub use crate::output::{alert, budget_month, goal, history_comparison, overview, performance};
-}
 mod routes;
 
 use std::sync::Arc;
@@ -19,6 +12,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::http::{HeaderValue, Method, header};
 use fineme_application::App;
+use fineme_inbound::origin;
 use tower_http::cors::CorsLayer;
 use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 use tower_http::trace::TraceLayer;

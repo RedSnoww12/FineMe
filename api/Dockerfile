@@ -12,10 +12,11 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/fineme-domain/Cargo.toml crates/fineme-domain/
 COPY crates/fineme-application/Cargo.toml crates/fineme-application/
 COPY crates/fineme-infra/Cargo.toml crates/fineme-infra/
+COPY crates/fineme-inbound/Cargo.toml crates/fineme-inbound/
 COPY crates/fineme-http/Cargo.toml crates/fineme-http/
 COPY crates/fineme-mcp/Cargo.toml crates/fineme-mcp/
 COPY crates/fineme-server/Cargo.toml crates/fineme-server/
-RUN for crate in domain application infra http mcp server; do \
+RUN for crate in domain application infra inbound http mcp server; do \
         mkdir -p crates/fineme-$crate/src && : > crates/fineme-$crate/src/lib.rs; \
     done \
     && echo "fn main() {}" > crates/fineme-server/src/main.rs \

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::http::header;
 use fineme_application::App;
-use fineme_http::origin::TrustedProxyHops;
+use fineme_inbound::origin::TrustedProxyHops;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;

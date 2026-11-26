@@ -8,11 +8,11 @@ publish.workspace = true
 workspace = true
 
 # Adaptateur entrant MCP (lecture seule) : tools, authentification par jeton d'accès, transport Streamable HTTP.
-# Il réutilise les cas d'usage et, pour l'origine de la requête et la forme JSON du contrat, fineme-http.
+# Il réutilise les cas d'usage et, pour l'origine de la requête et la forme JSON du contrat, fineme-inbound.
 [dependencies]
 fineme-domain = { workspace = true }
 fineme-application = { workspace = true }
-fineme-http = { workspace = true }
+fineme-inbound = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 rmcp = { workspace = true }

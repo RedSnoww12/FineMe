@@ -8,7 +8,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use fineme_application::{App, AppError};
-use fineme_http::origin::ClientOrigin;
+use fineme_inbound::origin::ClientOrigin;
 
 /// En-tête de défi renvoyé avec un 401 (RFC 6750).
 const CHALLENGE: &str = "Bearer realm=\"fineme-mcp\"";

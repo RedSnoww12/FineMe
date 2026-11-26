@@ -815,10 +815,23 @@ dependencies = [
  "chrono",
  "fineme-application",
  "fineme-domain",
+ "fineme-inbound",
  "serde",
  "serde_json",
  "tower-http 0.7.1",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fineme-inbound"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "fineme-application",
+ "fineme-domain",
+ "serde_json",
  "uuid",
 ]
 
@@ -858,7 +871,7 @@ dependencies = [
  "chrono",
  "fineme-application",
  "fineme-domain",
- "fineme-http",
+ "fineme-inbound",
  "rmcp",
  "serde",
  "serde_json",

@@ -45,8 +45,10 @@ fineme-domain        entités, value objects, règles métier pures (aucune E/S,
 fineme-application   cas d'usage + ports (traits) : repositories, PriceProvider, FxProvider, BankProvider, Clock, PasswordHasher, TokenService
    ^
 fineme-infra         adaptateurs sortants : Postgres (sqlx), Yahoo/EODHD/CoinGecko/Frankfurter (reqwest), argon2, JWT
-fineme-http          adaptateur entrant : routes Axum, DTO JSON, extraction d'auth, mapping des erreurs
-fineme-mcp           adaptateur entrant MCP en lecture seule (rmcp, /mcp) : tools → cas d'usage → JSON (+ fineme-http : origin, contract)
+fineme-inbound       briques communes aux adaptateurs entrants : origin (IP du client), contract (forme JSON du contrat)
+   ^
+fineme-http          adaptateur entrant : routes Axum, DTO d'entrée, extraction d'auth, mapping des erreurs
+fineme-mcp           adaptateur entrant MCP en lecture seule (rmcp, /mcp) : tools → cas d'usage → JSON
    ^
 fineme-server        binaire : configuration, composition root (câblage des adaptateurs), migrations
 ```
@@ -60,8 +62,10 @@ Règles :
 - Value objects pour les invariants (part de détention dans ]0,1], taux, identifiants typés) : un état invalide ne doit pas être constructible.
 - Clippy sans avertissement, `cargo fmt`, pas de `unsafe`.
 - Requêtes sqlx à l'exécution (`query`/`query_as`), pas les macros `query!` : le build ne dépend pas d'une base.
-- `fineme-mcp` dépend de `fineme-http` pour deux choses seulement : `origin` (IP du client derrière le proxy) et
-  `contract` (forme JSON du contrat, dont les tools renvoient des sous-ensembles). Aucune règle métier dans les tools.
+- Les adaptateurs entrants ne dépendent jamais les uns des autres : ce que `fineme-http` et `fineme-mcp` partagent
+  vit dans `fineme-inbound`, soit `origin` (IP du client derrière le proxy) et `contract` (forme JSON du contrat :
+  objets complets côté REST, sous-ensembles côté tools). `fineme-inbound` ne contient ni route, ni tool, ni règle
+  métier, et seuls les adaptateurs entrants en dépendent. Aucune règle métier dans les tools.
 
 ## Architecture front : par fonctionnalité
 

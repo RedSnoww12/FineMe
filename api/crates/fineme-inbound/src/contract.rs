@@ -1,4 +1,5 @@
-//! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`.
+//! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`. Source unique de la
+//! sérialisation de chaque type, pour l'API REST comme pour les tools MCP.
 
 use fineme_application::access_tokens::CreatedAccessToken;
 use fineme_application::alerts::EvaluationReport;

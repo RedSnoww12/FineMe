@@ -14,6 +14,7 @@ unsafe_code = "forbid"
 fineme-domain = { path = "crates/fineme-domain" }
 fineme-application = { path = "crates/fineme-application" }
 fineme-infra = { path = "crates/fineme-infra" }
+fineme-inbound = { path = "crates/fineme-inbound" }
 fineme-http = { path = "crates/fineme-http" }
 fineme-mcp = { path = "crates/fineme-mcp" }
 

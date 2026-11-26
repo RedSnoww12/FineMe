@@ -28,8 +28,8 @@ use crate::input::{
     PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody, TotpCodeBody,
     TotpDisableBody, TransactionPatchBody, TransactionsBulkBody, ValuationBody, ViewQuery,
 };
-use crate::origin::ClientOrigin;
-use crate::output;
+use fineme_inbound::contract as output;
+use fineme_inbound::origin::ClientOrigin;
 
 type JsonResponse = ApiResult<axum::Json<Value>>;
 type Created = ApiResult<(StatusCode, axum::Json<Value>)>;

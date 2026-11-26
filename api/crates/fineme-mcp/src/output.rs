@@ -1,5 +1,5 @@
 //! Résultats des tools : JSON compact, sous-ensembles des réponses REST du contrat (`docs/API.md`). La forme de
-//! chaque type vient de `fineme_http::output`, pour n'avoir qu'une sérialisation par type ; ce module ne fait que
+//! chaque type vient de `fineme_inbound::contract`, pour n'avoir qu'une sérialisation par type ; ce module ne fait que
 //! choisir les champs utiles à un client IA.
 
 use fineme_application::budget::BudgetMonth;
@@ -7,7 +7,7 @@ use fineme_application::goals::GoalView;
 use fineme_application::overview::{HistoryComparison, OverviewSummary};
 use fineme_application::performance::PerformanceView;
 use fineme_domain::alert::Alert;
-use fineme_http::contract as rest;
+use fineme_inbound::contract as rest;
 use serde_json::{Map, Value, json};
 
 /// Garde seulement `keys` d'un objet JSON, dans cet ordre.
