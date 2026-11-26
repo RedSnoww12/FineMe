@@ -19,6 +19,8 @@ const INVALID_CHALLENGE: &str = "Étape de connexion expirée : reconnectez-vous
 const WRONG_LOGIN_CODE: &str = "Code de vérification incorrect ou déjà utilisé";
 const WRONG_CODE: &str = "Code de vérification incorrect";
 const WRONG_PASSWORD: &str = "Mot de passe incorrect";
+const CODE_REQUIRED: &str =
+    "Code du second facteur requis : saisissez le code de votre application ou un code de secours";
 const ALREADY_ENABLED: &str = "Le second facteur est déjà activé";
 const NOT_ENABLED: &str = "Le second facteur n'est pas activé";
 const NO_PENDING: &str = "Aucune activation en cours : générez d'abord un QR code";
@@ -259,6 +261,50 @@ impl AuthService {
         Ok(codes)
     }
 
+    /// Confirme l'identité pour une action sensible : mot de passe, puis code TOTP ou de secours si le second
+    /// facteur est activé. Limitée en fréquence ; un refus compte comme un échec.
+    pub(crate) async fn confirm_identity(
+        &self,
+        user: UserId,
+        password: &str,
+        code: Option<&str>,
+        origin: &LoginOrigin,
+    ) -> AppResult<Credentials> {
+        self.check_throttle(origin)?;
+        let result = self.verify_identity(user, password, code).await;
+        self.count_failure(origin, &result);
+        result
+    }
+
+    async fn verify_identity(
+        &self,
+        user: UserId,
+        password: &str,
+        code: Option<&str>,
+    ) -> AppResult<Credentials> {
+        let credentials = self.credentials(user).await?;
+        if !self
+            .hasher
+            .verify(password, &credentials.password_hash)
+            .await
+        {
+            return Err(AppError::Forbidden(WRONG_PASSWORD));
+        }
+        if self.totp_enabled(user).await? {
+            let code = code
+                .map(str::trim)
+                .filter(|code| !code.is_empty())
+                .ok_or(AppError::Forbidden(CODE_REQUIRED))?;
+            if !self
+                .verify_code(user, code, Accepted::TotpOrRecovery)
+                .await?
+            {
+                return Err(AppError::Forbidden(WRONG_CODE));
+            }
+        }
+        Ok(credentials)
+    }
+
     /// Un mauvais code sur une route protégée compte comme un échec pour le limiteur (sans journal).
     fn count_failure<T>(&self, origin: &LoginOrigin, result: &AppResult<T>) {
         if matches!(result, Err(AppError::Forbidden(_))) {
@@ -438,6 +484,35 @@ mod tests {
 
     fn from_ip(ip: &str) -> LoginOrigin {
         LoginOrigin::new(Some(ip), Some("Navigateur de test"))
+    }
+
+    #[tokio::test]
+    async fn access_token_needs_the_second_factor_code_once_enabled() {
+        let t = TestApp::empty().await;
+        let activation = enrolled(&t).await;
+        let user = activation.session.user.id;
+        let origin = from_ip("203.0.113.20");
+        let auth = &t.app.auth;
+
+        let missing = auth
+            .create_access_token(user, "Claude", PASSWORD, None, &origin)
+            .await;
+        assert!(matches!(missing, Err(AppError::Forbidden(CODE_REQUIRED))));
+        let wrong_code = wrong(&t);
+        let wrong = auth
+            .create_access_token(user, "Claude", PASSWORD, Some(&wrong_code), &origin)
+            .await;
+        assert!(matches!(wrong, Err(AppError::Forbidden(WRONG_CODE))));
+
+        let created = auth
+            .create_access_token(user, "Claude", PASSWORD, Some(&code(&t, 0)), &origin)
+            .await
+            .unwrap();
+        // Un code de secours convient aussi pour révoquer.
+        let recovery = activation.recovery_codes[0].clone();
+        auth.revoke_access_token(user, created.token.id, PASSWORD, Some(&recovery), &origin)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

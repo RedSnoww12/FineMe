@@ -1,5 +1,6 @@
 //! Adaptateur Postgres : implémente tous les ports de persistance avec sqlx (requêtes à l'exécution).
 
+mod access_tokens;
 mod alerts;
 mod rows;
 
@@ -444,17 +445,35 @@ impl UserRepository for PgStore {
         Ok(row.map(credentials))
     }
 
-    async fn update_password(&self, id: UserId, password_hash: &str) -> RepoResult<Option<i64>> {
-        // Une seule requête : le hash et la version changent ensemble ou pas du tout.
-        sqlx::query_scalar(
+    async fn update_password(
+        &self,
+        id: UserId,
+        password_hash: &str,
+        revoked_at: DateTime<Utc>,
+    ) -> RepoResult<Option<i64>> {
+        // Une transaction : hash, version de session et révocation des jetons d'accès changent ensemble.
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let version: Option<i64> = sqlx::query_scalar(
             "UPDATE users SET password_hash = $2, session_version = session_version + 1 \
              WHERE id = $1 RETURNING session_version",
         )
         .bind(id.as_uuid())
         .bind(password_hash)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(db)
+        .map_err(db)?;
+        if version.is_some() {
+            sqlx::query(
+                "UPDATE access_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(id.as_uuid())
+            .bind(revoked_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(version)
     }
 
     async fn create_first(

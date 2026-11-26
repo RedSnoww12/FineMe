@@ -1,6 +1,7 @@
 //! Cas d'usage de FineMe et ports (traits) vers l'extérieur.
 //! Cette couche orchestre le domaine ; elle ne connaît ni SQL, ni HTTP, ni JSON.
 
+pub mod access_tokens;
 pub mod accounts;
 pub mod alerts;
 pub mod app;

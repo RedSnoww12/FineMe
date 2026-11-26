@@ -1,6 +1,7 @@
 //! Domaine FineMe : entités, value objects et règles financières pures.
 //! Aucune E/S ici — ni SQL, ni JSON, ni réseau, ni horloge système.
 
+pub mod access_token;
 pub mod account;
 pub mod alert;
 pub mod budget;

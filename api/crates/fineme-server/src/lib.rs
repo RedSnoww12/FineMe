@@ -9,6 +9,7 @@ use fineme_application::auth::MIN_RECOVERY_TOKEN_LEN;
 use fineme_application::daily::MIN_CRON_SECRET_LEN;
 use fineme_application::ports::PriceProvider;
 use fineme_application::{App, Ports, Settings};
+use fineme_infra::access_token::AccessTokenDigest;
 use fineme_infra::clock::SystemClock;
 use fineme_infra::market::{self, CoinGecko, Eodhd, Frankfurter, YahooFinance};
 use fineme_infra::postgres::{self, PgStore};
@@ -117,6 +118,8 @@ pub async fn build_app(
         users: store.clone(),
         second_factor: store.clone(),
         login_journal: store.clone(),
+        access_tokens: store.clone(),
+        mcp_calls: store.clone(),
         portfolio: store.clone(),
         fx_rates: store.clone(),
         transactions: store.clone(),
@@ -134,6 +137,7 @@ pub async fn build_app(
         tokens: Arc::new(JwtTokens::new(jwt_secret)),
         // Secret TOTP chiffré au repos avec une clé dérivée de JWT_SECRET.
         totp: Arc::new(TotpCrypto::new(jwt_secret)),
+        access_crypto: Arc::new(AccessTokenDigest),
         fx_provider: Arc::new(Frankfurter::new(http.clone(), market::FRANKFURTER_URL)),
         price_providers,
         bank_providers: Vec::new(),

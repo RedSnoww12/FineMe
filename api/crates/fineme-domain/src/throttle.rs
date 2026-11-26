@@ -40,6 +40,17 @@ impl ThrottlePolicy {
         }
     }
 
+    /// Pour tout le serveur MCP : seuil très haut et plafond court, pour qu'un flot de faux jetons venu de
+    /// nombreuses IP ne bloque pas longtemps le vrai client (le secret de 256 bits n'est pas devinable).
+    pub fn global_lenient() -> Self {
+        Self {
+            free_failures: 500,
+            base_delay: Duration::seconds(10),
+            max_delay: Duration::minutes(1),
+            forget_after: Duration::hours(1),
+        }
+    }
+
     /// Délai imposé après `failures` échecs consécutifs (aucun tant que le seuil n'est pas dépassé).
     pub fn delay_after(&self, failures: u32) -> Duration {
         if failures <= self.free_failures {

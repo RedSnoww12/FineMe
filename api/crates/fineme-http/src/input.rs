@@ -138,6 +138,19 @@ pub struct TotpDisableBody {
 }
 
 #[derive(Deserialize)]
+pub struct AccessTokenCreateBody {
+    pub name: String,
+    pub password: String,
+    pub code: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AccessTokenRevokeBody {
+    pub password: String,
+    pub code: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct PasswordChangeBody {
     pub current_password: String,
     pub new_password: String,

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use fineme_domain::access_token::{AccessToken, McpCall, SecretDigest};
 use fineme_domain::account::Account;
 use fineme_domain::alert::{Alert, AlertRule};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -15,8 +16,8 @@ use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
-    AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId,
-    TransactionId, UserId,
+    AccessTokenId, AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId,
+    OperationId, TransactionId, UserId,
 };
 use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::login::LoginEvent;
@@ -60,6 +61,9 @@ pub struct State {
     /// Second facteur de l'utilisateur unique.
     pub second_factor: SecondFactorRecord,
     pub next_recovery_id: i64,
+    /// Jetons d'accès et empreinte de leur secret.
+    pub access_tokens: Vec<(AccessToken, SecretDigest)>,
+    pub mcp_calls: Vec<McpCall>,
 }
 
 impl State {
@@ -134,6 +138,93 @@ impl InMemoryStore {
             .unwrap();
         holding.current_price = price;
         holding.price_source = PriceSource::Auto;
+    }
+}
+
+#[async_trait]
+impl AccessTokenRepository for InMemoryStore {
+    async fn insert(&self, token: &AccessToken, digest: &SecretDigest) -> RepoResult<()> {
+        let mut state = self.lock();
+        if state.access_tokens.iter().any(|(_, d)| d == digest) {
+            return Err(RepoError::Conflict);
+        }
+        state.access_tokens.push((token.clone(), digest.clone()));
+        Ok(())
+    }
+    async fn list(&self, user: UserId) -> RepoResult<Vec<AccessToken>> {
+        let mut tokens: Vec<AccessToken> = self
+            .lock()
+            .access_tokens
+            .iter()
+            .filter(|(token, _)| token.user == user)
+            .map(|(token, _)| token.clone())
+            .collect();
+        tokens.sort_by_key(|token| std::cmp::Reverse(token.created_at));
+        Ok(tokens)
+    }
+    async fn find(&self, id: AccessTokenId) -> RepoResult<Option<AccessToken>> {
+        Ok(self
+            .lock()
+            .access_tokens
+            .iter()
+            .find(|(token, _)| token.id == id)
+            .map(|(token, _)| token.clone()))
+    }
+    async fn find_active_by_digest(
+        &self,
+        digest: &SecretDigest,
+    ) -> RepoResult<Option<(AccessToken, SecretDigest)>> {
+        Ok(self
+            .lock()
+            .access_tokens
+            .iter()
+            .find(|(token, d)| d == digest && token.is_active())
+            .cloned())
+    }
+    async fn revoke(&self, id: AccessTokenId, user: UserId, at: DateTime<Utc>) -> RepoResult<bool> {
+        let mut state = self.lock();
+        match state
+            .access_tokens
+            .iter_mut()
+            .find(|(token, _)| token.id == id && token.user == user && token.is_active())
+        {
+            Some((token, _)) => {
+                token.revoked_at = Some(at);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+    async fn touch(&self, id: AccessTokenId, at: DateTime<Utc>) -> RepoResult<()> {
+        if let Some((token, _)) = self
+            .lock()
+            .access_tokens
+            .iter_mut()
+            .find(|(token, _)| token.id == id)
+        {
+            token.last_used_at = Some(at);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl McpCallJournal for InMemoryStore {
+    async fn record(&self, call: &McpCall) -> RepoResult<()> {
+        self.lock().mcp_calls.push(call.clone());
+        Ok(())
+    }
+    async fn recent(&self, limit: i64) -> RepoResult<Vec<McpCall>> {
+        let mut calls = self.lock().mcp_calls.clone();
+        calls.sort_by_key(|call| std::cmp::Reverse(call.at));
+        calls.truncate(usize::try_from(limit).unwrap_or(0));
+        Ok(calls)
+    }
+    async fn prune_before(&self, before: DateTime<Utc>) -> RepoResult<u64> {
+        let mut state = self.lock();
+        let count = state.mcp_calls.len();
+        state.mcp_calls.retain(|call| call.at >= before);
+        Ok((count - state.mcp_calls.len()) as u64)
     }
 }
 
@@ -252,17 +343,25 @@ impl UserRepository for InMemoryStore {
     async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>> {
         Ok(self.lock().users.iter().find(|c| c.user.id == id).cloned())
     }
-    async fn update_password(&self, id: UserId, password_hash: &str) -> RepoResult<Option<i64>> {
-        Ok(self
-            .lock()
-            .users
-            .iter_mut()
-            .find(|c| c.user.id == id)
-            .map(|credentials| {
-                credentials.password_hash = password_hash.to_string();
-                credentials.session_version += 1;
-                credentials.session_version
-            }))
+    async fn update_password(
+        &self,
+        id: UserId,
+        password_hash: &str,
+        revoked_at: DateTime<Utc>,
+    ) -> RepoResult<Option<i64>> {
+        let mut state = self.lock();
+        let Some(credentials) = state.users.iter_mut().find(|c| c.user.id == id) else {
+            return Ok(None);
+        };
+        credentials.password_hash = password_hash.to_string();
+        credentials.session_version += 1;
+        let version = credentials.session_version;
+        for (token, _) in &mut state.access_tokens {
+            if token.user == id && token.revoked_at.is_none() {
+                token.revoked_at = Some(revoked_at);
+            }
+        }
+        Ok(Some(version))
     }
     async fn create_first(
         &self,
@@ -1093,6 +1192,30 @@ impl TotpSupport for FakeTotp {
     }
 }
 
+/// Aléa en compteur et « empreinte » déterministe (mélange multiplicatif), distincte d'une entrée à l'autre.
+#[derive(Default)]
+pub struct FakeAccessCrypto(AtomicUsize);
+
+impl AccessTokenCrypto for FakeAccessCrypto {
+    fn random_bytes(&self, len: usize) -> Result<Vec<u8>, ProviderError> {
+        let start = self.0.fetch_add(len, Ordering::SeqCst);
+        Ok((start..start + len)
+            .map(|i| ((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as u8)
+            .collect())
+    }
+    fn sha256(&self, data: &[u8]) -> [u8; 32] {
+        let mut digest = [0u8; 32];
+        for (position, byte) in digest.iter_mut().enumerate() {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ position as u64;
+            for b in data {
+                h = (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            *byte = (h >> 24) as u8;
+        }
+        digest
+    }
+}
+
 pub struct FakeFx(Mutex<Result<Vec<(String, f64)>, String>>);
 
 impl FakeFx {
@@ -1271,6 +1394,8 @@ impl TestApp {
             users: store.clone(),
             second_factor: store.clone(),
             login_journal: store.clone(),
+            access_tokens: store.clone(),
+            mcp_calls: store.clone(),
             portfolio: store.clone(),
             fx_rates: store.clone(),
             transactions: store.clone(),
@@ -1287,6 +1412,7 @@ impl TestApp {
             hasher: hasher.clone(),
             tokens: Arc::new(FakeTokens),
             totp: totp.clone(),
+            access_crypto: Arc::new(FakeAccessCrypto::default()),
             fx_provider: fx.clone(),
             price_providers: vec![crypto.clone(), securities.clone(), fallback.clone()],
             bank_providers: bank

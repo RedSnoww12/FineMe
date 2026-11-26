@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use fineme_domain::throttle::LoginThrottle;
+use fineme_domain::throttle::{LoginThrottle, ThrottlePolicy};
 
 use crate::accounts::AccountService;
 use crate::alerts::AlertService;
@@ -20,11 +20,11 @@ use crate::operations::OperationService;
 use crate::overview::OverviewService;
 use crate::performance::PerformanceService;
 use crate::ports::{
-    AlertRepository, BankProvider, BenchmarkRepository, BudgetRepository, Clock,
-    ConnectionRepository, FxProvider, FxRateRepository, GoalRepository, ImportProfileRepository,
-    ImportRepository, LoginJournal, OperationRepository, PasswordHasher, PortfolioRepository,
-    PriceProvider, SecondFactorRepository, SnapshotRepository, TokenService, TotpSupport,
-    TransactionRepository, UserRepository,
+    AccessTokenCrypto, AccessTokenRepository, AlertRepository, BankProvider, BenchmarkRepository,
+    BudgetRepository, Clock, ConnectionRepository, FxProvider, FxRateRepository, GoalRepository,
+    ImportProfileRepository, ImportRepository, LoginJournal, McpCallJournal, OperationRepository,
+    PasswordHasher, PortfolioRepository, PriceProvider, SecondFactorRepository, SnapshotRepository,
+    TokenService, TotpSupport, TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -37,6 +37,8 @@ pub struct Ports {
     pub users: Arc<dyn UserRepository>,
     pub second_factor: Arc<dyn SecondFactorRepository>,
     pub login_journal: Arc<dyn LoginJournal>,
+    pub access_tokens: Arc<dyn AccessTokenRepository>,
+    pub mcp_calls: Arc<dyn McpCallJournal>,
     pub portfolio: Arc<dyn PortfolioRepository>,
     pub fx_rates: Arc<dyn FxRateRepository>,
     pub transactions: Arc<dyn TransactionRepository>,
@@ -53,6 +55,7 @@ pub struct Ports {
     pub hasher: Arc<dyn PasswordHasher>,
     pub tokens: Arc<dyn TokenService>,
     pub totp: Arc<dyn TotpSupport>,
+    pub access_crypto: Arc<dyn AccessTokenCrypto>,
     pub fx_provider: Arc<dyn FxProvider>,
     pub price_providers: Vec<Arc<dyn PriceProvider>>,
     pub bank_providers: Vec<Arc<dyn BankProvider>>,
@@ -119,6 +122,13 @@ impl App {
                 totp: ports.totp,
                 journal: ports.login_journal,
                 throttle: Mutex::new(LoginThrottle::default()),
+                access_tokens: ports.access_tokens,
+                access_crypto: ports.access_crypto,
+                mcp_calls: ports.mcp_calls,
+                mcp_throttle: Mutex::new(LoginThrottle::new(
+                    ThrottlePolicy::per_ip(),
+                    ThrottlePolicy::global_lenient(),
+                )),
                 hasher: ports.hasher,
                 tokens: ports.tokens,
                 clock: ports.clock.clone(),
