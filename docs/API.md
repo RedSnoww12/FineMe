@@ -833,13 +833,13 @@ comptes d'investissement et `expense_ratio` des positions, rapportés à la vale
 Point d'entrée `POST /mcp` (hors préfixe `/api`), transport MCP **Streamable HTTP** sans session, réponses JSON.
 Authentification : `Authorization: Bearer <jeton d'accès>` (voir « Jetons d'accès IA ») ; le JWT de session y est
 refusé. Contrôles, dans l'ordre :
-1. Limiteur par IP des échecs d'authentification de `/mcp` (même progression que la connexion, compteur distinct) :
-   pendant le délai, 429 + `Retry-After`.
-2. Jeton absent, inconnu ou révoqué → **401** `{ "error": "…" }` avec `WWW-Authenticate: Bearer`, avant toute lecture du
-   message MCP ; la réponse ne reprend jamais le jeton reçu. Un échec compte pour le limiteur.
-3. En-tête `Host` absent de `MCP_ALLOWED_HOSTS`, ou en-tête `Origin` présent (aucun navigateur n'est un client
+1. Jeton absent, inconnu ou révoqué → **401** `{ "error": "…" }` avec `WWW-Authenticate: Bearer`, avant toute lecture du
+   message MCP ; la réponse ne reprend jamais le jeton reçu. Ces échecs sont limités par IP (même progression que la
+   connexion, compteur distinct) : pendant le délai, un jeton refusé reçoit 429 + `Retry-After`. Un jeton valide
+   n'est jamais bloqué par ce limiteur.
+2. En-tête `Host` absent de `MCP_ALLOWED_HOSTS`, ou en-tête `Origin` présent (aucun navigateur n'est un client
    légitime) → 403. `/mcp` n'envoie aucun en-tête CORS.
-4. Corps limité à 1 Mo. `GET` et `DELETE /mcp` → 405.
+3. Corps limité à 1 Mo (413), un seul message JSON-RPC par requête. `GET` et `DELETE /mcp` → 405.
 
 ```bash
 claude mcp add --transport http fineme https://<api>/mcp --header "Authorization: Bearer fm_pat_…"

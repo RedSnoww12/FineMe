@@ -133,18 +133,21 @@ impl AuthService {
         })
     }
 
-    /// Identifie l'auteur d'un appel MCP à partir du secret présenté. Les échecs sont limités en fréquence
-    /// par IP (compteur distinct de la connexion) ; un succès retient la date de dernière utilisation.
+    /// Identifie l'auteur d'un appel MCP à partir du secret présenté ; un succès retient la date de dernière
+    /// utilisation. Un jeton valide est toujours accepté : seuls les échecs sont limités en fréquence (par IP,
+    /// compteur distinct de la connexion), pour qu'un flot de faux jetons ne bloque jamais le vrai client.
     pub async fn authenticate_access_token(
         &self,
         presented: Option<&str>,
         origin: &LoginOrigin,
     ) -> AppResult<AccessPrincipal> {
         let now = self.clock.now();
-        self.mcp_throttle()
-            .check(origin.throttle_key(), now)
-            .map_err(|wait| AppError::TooManyAttempts(retry_after_seconds(wait)))?;
         let result = self.verify_access_token(presented).await;
+        if matches!(result, Err(AppError::Unauthorized(_))) {
+            self.mcp_throttle()
+                .check(origin.throttle_key(), now)
+                .map_err(|wait| AppError::TooManyAttempts(retry_after_seconds(wait)))?;
+        }
         match &result {
             Ok(principal) => {
                 self.mcp_throttle().record_success(origin.throttle_key());
@@ -455,7 +458,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_bad_tokens_are_throttled_per_ip_without_blocking_logins() {
+    async fn repeated_bad_tokens_are_throttled_per_ip_but_a_valid_token_always_passes() {
         let t = TestApp::empty().await;
         let user = configured(&t).await.user.id;
         let created = create(&t, user, "Claude").await;
@@ -469,14 +472,13 @@ mod tests {
         let throttled = t
             .app
             .auth
-            .authenticate_access_token(Some(created.secret.as_str()), &origin())
+            .authenticate_access_token(Some("fm_pat_faux"), &origin())
             .await;
         assert!(matches!(throttled, Err(AppError::TooManyAttempts(_))));
-        // Une autre IP passe ; la connexion n'est pas touchée par ce compteur.
-        let other = LoginOrigin::new(Some("198.51.100.4"), None);
+        // Le vrai client, même depuis cette IP, n'est jamais bloqué ; la connexion n'est pas touchée.
         t.app
             .auth
-            .authenticate_access_token(Some(created.secret.as_str()), &other)
+            .authenticate_access_token(Some(created.secret.as_str()), &origin())
             .await
             .unwrap();
         t.app

@@ -1071,6 +1071,12 @@ impl ImportRepository for InMemoryStore {
 
 pub struct FixedClock(Mutex<DateTime<Utc>>);
 
+impl Default for FixedClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FixedClock {
     /// Date fixe des tests : 1er janvier 2026 à midi (UTC).
     pub fn new() -> Self {

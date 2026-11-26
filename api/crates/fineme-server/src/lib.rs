@@ -15,6 +15,7 @@ use fineme_infra::market::{self, CoinGecko, Eodhd, Frankfurter, YahooFinance};
 use fineme_infra::postgres::{self, PgStore};
 use fineme_infra::security::{Argon2Hasher, JwtTokens};
 use fineme_infra::totp::TotpCrypto;
+use fineme_mcp::{DEFAULT_ALLOWED_HOSTS, McpSettings};
 use sqlx::PgPool;
 
 pub const DEFAULT_PORT: u16 = 8080;
@@ -22,7 +23,7 @@ pub const DEFAULT_PORT: u16 = 8080;
 pub const DEFAULT_TRUSTED_PROXY_HOPS: usize = 1;
 
 /// Configuration lue dans l'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT`, `SETUP_TOKEN`,
-/// `RECOVERY_TOKEN`, `CRON_SECRET`, `EODHD_API_KEY`, `TRUSTED_PROXY_HOPS`).
+/// `RECOVERY_TOKEN`, `CRON_SECRET`, `EODHD_API_KEY`, `TRUSTED_PROXY_HOPS`, `MCP_ALLOWED_HOSTS`).
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
@@ -40,6 +41,25 @@ pub struct Config {
     /// Proxys de confiance devant l'API (`TRUSTED_PROXY_HOPS`, défaut 1 : le proxy de Render) : l'IP du client
     /// est lue à cette position depuis la droite de `X-Forwarded-For` ; 0 = adresse TCP seulement.
     pub trusted_proxy_hops: usize,
+    /// Hôtes acceptés dans l'en-tête `Host` de `/mcp` (`MCP_ALLOWED_HOSTS`, séparés par des virgules) ;
+    /// défaut : boucle locale.
+    pub mcp_allowed_hosts: Vec<String>,
+}
+
+/// Liste séparée par des virgules ; vide ou absente = boucle locale seulement.
+fn allowed_hosts(value: Option<String>) -> Vec<String> {
+    let hosts: Vec<String> = value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(str::to_string)
+        .collect();
+    if hosts.is_empty() {
+        DEFAULT_ALLOWED_HOSTS.map(str::to_string).to_vec()
+    } else {
+        hosts
+    }
 }
 
 /// Code facultatif lu dans l'environnement : espaces retirés, vide = absent.
@@ -91,6 +111,7 @@ impl Config {
             trusted_proxy_hops: lookup("TRUSTED_PROXY_HOPS")
                 .and_then(|hops| hops.trim().parse().ok())
                 .unwrap_or(DEFAULT_TRUSTED_PROXY_HOPS),
+            mcp_allowed_hosts: allowed_hosts(lookup("MCP_ALLOWED_HOSTS")),
         })
     }
 }
@@ -149,7 +170,7 @@ pub async fn build_app(
     ))
 }
 
-/// Routeur HTTP complet au-dessus d'une base déjà migrée.
+/// Routeur HTTP complet au-dessus d'une base déjà migrée : l'API sous `/api` et le serveur MCP sur `/mcp`.
 pub async fn build_router(
     pool: PgPool,
     jwt_secret: &str,
@@ -157,12 +178,17 @@ pub async fn build_router(
     trusted_proxy_hops: usize,
     settings: Settings,
     eodhd_api_key: Option<&str>,
+    mcp_allowed_hosts: Vec<String>,
 ) -> anyhow::Result<Router> {
-    Ok(fineme_http::router(
-        build_app(pool, jwt_secret, settings, eodhd_api_key).await?,
-        cors_origins,
-        trusted_proxy_hops,
-    ))
+    let app = build_app(pool, jwt_secret, settings, eodhd_api_key).await?;
+    let mcp = fineme_mcp::router(
+        app.clone(),
+        McpSettings {
+            allowed_hosts: mcp_allowed_hosts,
+            trusted_proxy_hops,
+        },
+    );
+    Ok(mcp.merge(fineme_http::router(app, cors_origins, trusted_proxy_hops)))
 }
 
 /// Démarre le serveur : connexion, migrations, écoute sur `0.0.0.0:$PORT` jusqu'à Ctrl-C.
@@ -206,6 +232,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         config.trusted_proxy_hops,
         settings,
         config.eodhd_api_key.as_deref(),
+        config.mcp_allowed_hosts.clone(),
     )
     .await?;
     let address = SocketAddr::from(([0, 0, 0, 0], config.port));
@@ -312,6 +339,26 @@ mod tests {
             Some("secret-quotidien-fictif")
         );
         assert_eq!(config.eodhd_api_key.as_deref(), Some("cle-fictive"));
+    }
+
+    #[test]
+    fn mcp_hosts_default_to_loopback_and_are_listed_by_commas() {
+        let vars = [("DATABASE_URL", "postgres://x"), ("JWT_SECRET", "s")];
+        let config = Config::from_lookup(lookup(&vars)).unwrap();
+        assert_eq!(config.mcp_allowed_hosts, ["localhost", "127.0.0.1", "::1"]);
+        let vars = [
+            ("DATABASE_URL", "postgres://x"),
+            ("JWT_SECRET", "s"),
+            (
+                "MCP_ALLOWED_HOSTS",
+                " fineme-api.onrender.com , localhost:8080 ,",
+            ),
+        ];
+        let config = Config::from_lookup(lookup(&vars)).unwrap();
+        assert_eq!(
+            config.mcp_allowed_hosts,
+            ["fineme-api.onrender.com", "localhost:8080"]
+        );
     }
 
     #[test]

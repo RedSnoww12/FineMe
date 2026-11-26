@@ -12,6 +12,7 @@ workspace = true
 fineme-application = { workspace = true }
 fineme-infra = { workspace = true }
 fineme-http = { workspace = true }
+fineme-mcp = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 dotenvy = { workspace = true }

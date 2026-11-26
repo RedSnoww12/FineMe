@@ -4,8 +4,13 @@
 mod auth;
 mod error;
 mod input;
-mod origin;
+pub mod origin;
 mod output;
+
+/// Forme JSON du contrat (`docs/API.md`) réutilisée par l'adaptateur MCP, qui en renvoie des sous-ensembles.
+pub mod contract {
+    pub use crate::output::{alert, budget_month, goal, history_comparison, overview, performance};
+}
 mod routes;
 
 use std::sync::Arc;

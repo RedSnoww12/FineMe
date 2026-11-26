@@ -28,8 +28,9 @@ mod secret;
 pub mod totp;
 pub mod transactions;
 
-#[cfg(test)]
-pub(crate) mod testing;
+/// Faux ports en mémoire et fixtures fictives (tests uniquement).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 
 pub use app::{App, Ports, Settings};
 pub use error::{AppError, AppResult};

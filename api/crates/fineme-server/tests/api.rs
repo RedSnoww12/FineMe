@@ -52,6 +52,7 @@ impl Api {
             1,
             settings,
             None,
+            vec!["localhost".into()],
         )
         .await
         .unwrap();
