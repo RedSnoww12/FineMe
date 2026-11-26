@@ -6,6 +6,8 @@ describe('liens dans les emails', () => {
     ['voir https://evil.example/?n=10500 ici', 'voir [lien retiré] ici'],
     ['HTTP://1.2.3.4/x', '[lien retiré]'],
     ['écrire à mailto:x@y', 'écrire à [lien retiré]'],
+    ['tel:+33600000000', '[lien retiré]'],
+    ['sms:+33600000000?body=10500', '[lien retiré]'],
     ['contact vol@evil.example', 'contact [lien retiré]'],
     ['aller sur www.evil.example/10500', 'aller sur www[.]evil[.]example/10500'],
     ['banque-sécurisée.fr', 'banque-sécurisée[.]fr'],

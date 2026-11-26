@@ -11,6 +11,7 @@ Interface en français, devise de référence EUR.
 |---|---|---|
 | `api/` | API REST Rust (workspace Cargo, architecture hexagonale) | Render (Docker) |
 | `web/` | Front React + Vite + TypeScript | Vercel |
+| `automation/weekly-report/` | Agent Claude Agent SDK (TypeScript) : rapport hebdomadaire par email depuis le MCP | GitHub Actions |
 | `docs/API.md` | Contrat d'API — **source de vérité** entre front et back | – |
 | `seed/private/` | Données personnelles, ignoré par Git | – |
 | `.claude/skills/rapport-patrimoine/` | Skill Claude Code `/rapport-patrimoine` : rapport au format fixe depuis le serveur MCP | – |
@@ -31,6 +32,7 @@ cd web && npm test                            # unitaires + intégration (Vitest
 cd web && npm run test:unit                   # fonctions pures seulement (test:integration : écrans + MSW)
 cd web && npm run build && npm run lint
 cd web && npm run e2e                         # Playwright, API et front démarrés
+cd automation/weekly-report && npm test && npm run lint && npm run typecheck
 ```
 
 Rust : `export PATH=/opt/homebrew/opt/rustup/bin:$PATH` sur la machine de dev.
@@ -144,6 +146,13 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
   Le limiteur vit en mémoire, ce qui suppose une seule instance de l'API (cas de Render en offre gratuite).
 - En-têtes de sécurité du front dans `web/vercel.json` ; modifier le script en ligne de `index.html` impose de
   recopier sa nouvelle empreinte dans la CSP (vérifié par `src/app/securityHeaders.test.ts`).
+
+## Rapport de patrimoine
+
+Le format du rapport a une seule source, `.claude/skills/rapport-patrimoine/SKILL.md` : le skill `/rapport-patrimoine` et
+l'agent de `automation/weekly-report/` la partagent (un test vérifie que les sections concordent). L'agent n'a que les
+six tools MCP (aucun outil intégré), ne recalcule aucun chiffre, et n'écrit dans ses journaux (publics) que des messages
+fixes : jamais le rapport, un montant ou le texte d'un modèle.
 
 ## Git
 

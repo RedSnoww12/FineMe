@@ -762,7 +762,8 @@ Routes :
 - PUT `/api/alerts/rules/:kind` `{ enabled?, threshold_pct?, ceiling? }` → `AlertRule` (400 si seuil invalide ou non
   applicable à la règle ; 404 si `kind` inconnu)
 
-Non fait : résumé périodique par e-mail (exige un service d'envoi externe).
+L'API n'envoie aucun e-mail. Le rapport hebdomadaire par e-mail est produit hors de l'API par un client MCP planifié
+(voir README, « Rapport hebdomadaire par email »).
 
 ## Objectifs
 

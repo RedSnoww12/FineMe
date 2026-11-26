@@ -3,15 +3,17 @@
 
 CARGO := cd api && cargo
 NPM   := cd web && npm
+AUTO  := cd automation/weekly-report && npm
 
 .DEFAULT_GOAL := help
-.PHONY: help install db db-stop api web dev test test-api test-web e2e lint fmt check build docker clean
+.PHONY: help install db db-stop api web dev test test-api test-web test-automation e2e lint fmt check build docker clean
 
 help: ## Liste les commandes
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-install: ## Installe les dépendances du front et prépare api/.env
+install: ## Installe les dépendances du front et du rapport, prépare api/.env
 	$(NPM) install
+	$(AUTO) install
 	@test -f api/.env || cp api/.env.example api/.env
 
 db: ## Démarre Postgres en local (Docker, port 5433)
@@ -32,7 +34,7 @@ dev: db ## Lance l'API et le front ensemble (Ctrl+C arrête les deux)
 	(cd web && npm run dev) & \
 	wait
 
-test: test-api test-web ## Tests unitaires et d'intégration (API + front)
+test: test-api test-web test-automation ## Tests unitaires et d'intégration (API, front, rapport)
 
 test-api: ## Tests Rust (Docker requis pour l'intégration)
 	$(CARGO) test --workspace
@@ -40,12 +42,16 @@ test-api: ## Tests Rust (Docker requis pour l'intégration)
 test-web: ## Tests du front (Vitest)
 	$(NPM) test
 
+test-automation: ## Tests du rapport hebdomadaire (Vitest)
+	$(AUTO) test
+
 e2e: ## Tests Playwright (pile démarrée, base vide)
 	$(NPM) run e2e
 
 lint: ## Clippy et oxlint
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 	$(NPM) run lint
+	$(AUTO) run lint
 
 fmt: ## Formate le code Rust
 	$(CARGO) fmt --all
@@ -54,6 +60,7 @@ check: ## Tout ce que la CI vérifie, sauf les E2E
 	$(CARGO) fmt --all --check
 	$(MAKE) lint
 	$(NPM) run build
+	$(AUTO) run typecheck
 	$(MAKE) test
 
 build: ## Build de production (binaire Rust + front)
