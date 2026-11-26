@@ -21,3 +21,5 @@ services:
         sync: false # optionnel : clé gratuite eodhd.com, fournisseur de cours de repli pour les titres
       - key: CORS_ORIGINS
         sync: false # URL Vercel du front, ex. https://fineme.vercel.app
+      - key: MCP_ALLOWED_HOSTS
+        sync: false # hôte public de l'API pour le serveur MCP /mcp, ex. fineme-api.onrender.com (défaut : localhost)

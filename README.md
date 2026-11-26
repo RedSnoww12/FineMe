@@ -63,6 +63,45 @@ gratuite sur eodhd.com, nombre d'appels par jour limité ; le repli n'est appel�
 pas cotés). Un cours automatique qui n'a pas été mis à jour depuis plus de 4 jours est signalé « ancien » dans
 la liste des positions.
 
+## Brancher Claude sur FineMe
+
+FineMe expose un serveur [MCP](https://modelcontextprotocol.io) **en lecture seule** sur `/mcp` : un assistant IA
+(Claude Code, Claude Desktop) consulte le patrimoine avec six outils (`get_overview`, `get_performance`,
+`get_budget`, `get_goals`, `compare_dates`, `list_alerts`) et ne peut rien modifier. Contrat : section
+« Serveur MCP » de [docs/API.md](docs/API.md).
+
+1. *Paramètres > Accès IA* : donner un nom au jeton, confirmer avec le mot de passe (et le code du second facteur
+   s'il est activé), puis **copier le jeton** `fm_pat_…` : il n'est affiché qu'une fois. L'écran donne aussi la
+   commande complète.
+2. Dans un terminal :
+
+   ```bash
+   claude mcp add --transport http fineme http://localhost:8080/mcp --header "Authorization: Bearer fm_pat_…"
+   ```
+
+   Garder la portée par défaut : `--scope project` écrirait le jeton en clair dans `.mcp.json`, un fichier versionnable.
+
+   En production, remplacer l'adresse par l'URL **https** de l'API (`https://<api>.onrender.com/mcp`) et renseigner
+   `MCP_ALLOWED_HOSTS` sur Render avec l'hôte exact utilisé par le client (ex. `fineme-api.onrender.com`, domaine
+   personnalisé compris). Par défaut seul `localhost` est accepté ; une fois la variable définie, elle remplace cette
+   liste.
+3. Dans Claude Code, `/mcp` liste les six outils. Exemple : « quel est mon patrimoine et sa variation sur 1 mois ? ».
+
+Pour appeler chaque outil à la main : `npx @modelcontextprotocol/inspector`, transport *Streamable HTTP*, URL
+`http://localhost:8080/mcp`, en-tête `Authorization: Bearer fm_pat_…`.
+
+Sécurité :
+- le jeton ne sert qu'à `/mcp` ; il n'ouvre aucune route `/api` (ni lecture, ni écriture). Le serveur n'en garde que
+  l'empreinte SHA-256 ;
+- *Paramètres > Accès IA* liste les jetons (date de dernière utilisation) et le journal des appels (outil, date,
+  jeton) ; un jeton se révoque à tout moment, et **changer ou réinitialiser le mot de passe révoque tous les
+  jetons** ;
+- un jeton n'expire pas de lui-même : révoquer ceux qui ne servent plus ;
+- `claude mcp add --header` enregistre le jeton en clair dans la configuration locale de Claude Code
+  (`~/.claude.json`) : le traiter comme un mot de passe, et le révoquer si la machine est perdue ;
+- les libellés de transactions et les noms importés sont présentés à l'assistant comme des données, jamais comme
+  des instructions.
+
 ## Connexions bancaires
 
 Aucun agrégateur n'est branché. L'application fonctionne en saisie manuelle et import CSV ; ajouter un agrégateur

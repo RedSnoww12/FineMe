@@ -46,6 +46,7 @@ fineme-application   cas d'usage + ports (traits) : repositories, PriceProvider,
    ^
 fineme-infra         adaptateurs sortants : Postgres (sqlx), Yahoo/EODHD/CoinGecko/Frankfurter (reqwest), argon2, JWT
 fineme-http          adaptateur entrant : routes Axum, DTO JSON, extraction d'auth, mapping des erreurs
+fineme-mcp           adaptateur entrant MCP en lecture seule (rmcp, /mcp) : tools → cas d'usage → JSON (+ fineme-http : origin, contract)
    ^
 fineme-server        binaire : configuration, composition root (câblage des adaptateurs), migrations
 ```
@@ -59,6 +60,8 @@ Règles :
 - Value objects pour les invariants (part de détention dans ]0,1], taux, identifiants typés) : un état invalide ne doit pas être constructible.
 - Clippy sans avertissement, `cargo fmt`, pas de `unsafe`.
 - Requêtes sqlx à l'exécution (`query`/`query_as`), pas les macros `query!` : le build ne dépend pas d'une base.
+- `fineme-mcp` dépend de `fineme-http` pour deux choses seulement : `origin` (IP du client derrière le proxy) et
+  `contract` (forme JSON du contrat, dont les tools renvoient des sous-ensembles). Aucune règle métier dans les tools.
 
 ## Architecture front : par fonctionnalité
 
@@ -111,6 +114,11 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
   `EODHD_API_KEY`) ; `.env.example` sans valeur réelle.
 - Mots de passe hashés en argon2id ; toute route hors `/api/health` et `/api/auth/{status,setup,login,reset}` exige le JWT,
   sauf `/api/jobs/daily` (tâche planifiée) qui exige `CRON_SECRET` et refuse le JWT.
+- Serveur MCP `/mcp` (lecture seule) : exige un **jeton d'accès personnel** (`fm_pat_`, 256 bits, stocké en
+  SHA-256, créé et révoqué avec le mot de passe, plus un code TOTP ou de secours si le second facteur est activé) et
+  refuse le JWT ; ce jeton est refusé sur tout `/api/*`. Changer ou réinitialiser le mot de passe révoque tous les
+  jetons ; activer ou désactiver le TOTP ne les révoque pas. Hôtes acceptés : `MCP_ALLOWED_HOSTS` ; tout
+  en-tête `Origin` est refusé. Aucun tool n'écrit (ni instantané, ni cours) ; chaque appel est journalisé.
 - Le JWT porte la version de session de l'utilisateur : changer ou réinitialiser le mot de passe l'incrémente et
   invalide tous les jetons antérieurs. La réinitialisation exige `RECOVERY_TOKEN` (code de secours côté serveur).
 - Stockage du jeton : **`localStorage` + durée courte (7 jours) + renouvellement glissant** (`POST /api/auth/refresh`
