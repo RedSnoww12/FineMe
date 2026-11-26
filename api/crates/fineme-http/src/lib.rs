@@ -4,8 +4,6 @@
 mod auth;
 mod error;
 mod input;
-mod origin;
-mod output;
 mod routes;
 
 use std::sync::Arc;
@@ -14,7 +12,9 @@ use std::time::Duration;
 use axum::Router;
 use axum::http::{HeaderValue, Method, header};
 use fineme_application::App;
+use fineme_inbound::origin;
 use tower_http::cors::CorsLayer;
+use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 use tower_http::trace::TraceLayer;
 
 pub(crate) type AppState = Arc<App>;
@@ -67,6 +67,10 @@ pub fn router(app: Arc<App>, cors_origins: &str, trusted_proxy_hops: usize) -> R
             trusted_proxy_hops,
         )))
         .layer(TraceLayer::new_for_http())
+        // Le jeton de session n'apparaît jamais dans les traces, même plus verbeuses.
+        .layer(SetSensitiveRequestHeadersLayer::new([
+            header::AUTHORIZATION,
+        ]))
         .layer(cors_layer(cors_origins))
         .with_state(app)
 }

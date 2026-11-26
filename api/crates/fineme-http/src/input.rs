@@ -78,6 +78,13 @@ pub struct HistoryReviewQuery {
 }
 
 #[derive(Deserialize)]
+pub struct CompareQuery {
+    pub a: Option<NaiveDate>,
+    pub b: Option<NaiveDate>,
+    pub member_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
 pub struct DateRangeQuery {
     pub from: NaiveDate,
     pub to: NaiveDate,
@@ -135,6 +142,19 @@ pub struct TotpCodeBody {
 pub struct TotpDisableBody {
     pub password: String,
     pub code: String,
+}
+
+#[derive(Deserialize)]
+pub struct AccessTokenCreateBody {
+    pub name: String,
+    pub password: String,
+    pub code: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AccessTokenRevokeBody {
+    pub password: String,
+    pub code: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
+use fineme_domain::access_token::{AccessToken, McpCall, SecretDigest};
 use fineme_domain::account::Account;
 use fineme_domain::alert::{Alert, AlertRule};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
@@ -13,8 +14,8 @@ use fineme_domain::goal::Goal;
 use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
-    AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId, OperationId,
-    TransactionId, UserId,
+    AccessTokenId, AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId,
+    OperationId, TransactionId, UserId,
 };
 use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::login::LoginEvent;
@@ -97,6 +98,12 @@ pub trait TotpSupport: Send + Sync {
     fn qr_svg(&self, text: &str) -> Result<String, ProviderError>;
 }
 
+/// Primitives des jetons d'accès : aléa du secret et empreinte SHA-256 (seule forme conservée).
+pub trait AccessTokenCrypto: Send + Sync {
+    fn random_bytes(&self, len: usize) -> Result<Vec<u8>, ProviderError>;
+    fn sha256(&self, data: &[u8]) -> [u8; 32];
+}
+
 // ---------------------------------------------------------------- persistance
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,9 +119,15 @@ pub trait UserRepository: Send + Sync {
     async fn exists_any(&self) -> RepoResult<bool>;
     async fn find_by_email(&self, email: &str) -> RepoResult<Option<Credentials>>;
     async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>>;
-    /// Remplace le hash du mot de passe et incrémente la version de session, en une seule écriture.
-    /// Renvoie la nouvelle version, ou `None` si l'utilisateur n'existe pas.
-    async fn update_password(&self, id: UserId, password_hash: &str) -> RepoResult<Option<i64>>;
+    /// Remplace le hash du mot de passe, incrémente la version de session et révoque tous les jetons d'accès
+    /// actifs de l'utilisateur à `revoked_at`, tout ou rien. Renvoie la nouvelle version, ou `None` si
+    /// l'utilisateur n'existe pas.
+    async fn update_password(
+        &self,
+        id: UserId,
+        password_hash: &str,
+        revoked_at: DateTime<Utc>,
+    ) -> RepoResult<Option<i64>>;
     /// Crée le premier utilisateur et son membre principal, de façon atomique.
     /// Renvoie `false` sans rien créer si un utilisateur existe déjà.
     async fn create_first(
@@ -174,6 +187,36 @@ pub trait LoginJournal: Send + Sync {
     /// Les `limit` tentatives les plus récentes, de la plus récente à la plus ancienne.
     async fn recent(&self, limit: i64) -> RepoResult<Vec<LoginEvent>>;
     /// Supprime les tentatives antérieures à `before` ; renvoie le nombre de lignes supprimées.
+    async fn prune_before(&self, before: DateTime<Utc>) -> RepoResult<u64>;
+}
+
+/// Jetons d'accès personnels (empreinte du secret seulement).
+#[async_trait]
+pub trait AccessTokenRepository: Send + Sync {
+    /// Enregistre un nouveau jeton ; `Conflict` si l'empreinte existe déjà.
+    async fn insert(&self, token: &AccessToken, digest: &SecretDigest) -> RepoResult<()>;
+    /// Jetons de l'utilisateur, révoqués compris, du plus récent au plus ancien.
+    async fn list(&self, user: UserId) -> RepoResult<Vec<AccessToken>>;
+    async fn find(&self, id: AccessTokenId) -> RepoResult<Option<AccessToken>>;
+    /// Jeton **actif** dont l'empreinte est `digest`, avec l'empreinte stockée (comparée ensuite en temps constant).
+    async fn find_active_by_digest(
+        &self,
+        digest: &SecretDigest,
+    ) -> RepoResult<Option<(AccessToken, SecretDigest)>>;
+    /// Révoque un jeton actif de `user` ; `false` s'il était déjà révoqué, appartient à un autre utilisateur
+    /// ou n'existe pas (écriture conditionnelle).
+    async fn revoke(&self, id: AccessTokenId, user: UserId, at: DateTime<Utc>) -> RepoResult<bool>;
+    /// Retient la date de dernière utilisation.
+    async fn touch(&self, id: AccessTokenId, at: DateTime<Utc>) -> RepoResult<()>;
+}
+
+/// Journal des appels de tools MCP (sans paramètres ni résultats).
+#[async_trait]
+pub trait McpCallJournal: Send + Sync {
+    async fn record(&self, call: &McpCall) -> RepoResult<()>;
+    /// Les `limit` appels les plus récents, du plus récent au plus ancien.
+    async fn recent(&self, limit: i64) -> RepoResult<Vec<McpCall>>;
+    /// Supprime les appels antérieurs à `before` ; renvoie le nombre de lignes supprimées.
     async fn prune_before(&self, before: DateTime<Utc>) -> RepoResult<u64>;
 }
 
@@ -350,6 +393,14 @@ pub trait SnapshotRepository: Send + Sync {
         member: Option<MemberId>,
         from: NaiveDate,
     ) -> RepoResult<Vec<SnapshotPoint>>;
+    /// Instantané en vigueur à `date` : le dernier au plus tard ce jour-là ; `None` si l'historique commence après.
+    async fn at(
+        &self,
+        member: Option<MemberId>,
+        date: NaiveDate,
+    ) -> RepoResult<Option<SnapshotPoint>>;
+    /// Premier instantané de la vue ; `None` si son historique est vide.
+    async fn first(&self, member: Option<MemberId>) -> RepoResult<Option<SnapshotPoint>>;
     /// Remplace les totaux d'un jour pour une vue, retire son détail par compte et le marque corrigé.
     /// Renvoie `false` si aucun instantané n'existe ce jour-là pour cette vue.
     async fn correct(

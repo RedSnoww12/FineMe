@@ -1,67 +1,80 @@
 import { describe, expect, it } from 'vitest'
-import { buildHistoryAccount as line, buildHistoryPoint as point } from '@/test/fixtures'
-import { compareSnapshots, quickDates, snapshotAt } from './timeTravel'
+import type { HistoryComparison } from '@/shared/api/types'
+import { isIsoDate, labelComparison, quickDates } from './timeTravel'
 
-const january = point('2026-01-01', [
-  line({ account_id: 'pea', name: 'PEA', kind: 'investment', value: 10_000 }),
-  line({ account_id: 'livret', name: 'Livret A', kind: 'savings', value: 5_000 }),
-  line({ account_id: 'pret', name: 'Prêt', kind: 'loan', value: 8_000 }),
-])
-const june = point('2026-06-01', [
-  line({ account_id: 'pea', name: 'PEA Camille', kind: 'investment', value: 13_000 }),
-  line({ account_id: 'pret', name: 'Prêt', kind: 'loan', value: 6_000 }),
-  line({ account_id: 'btc', name: 'Bitcoin', kind: 'crypto', value: 1_000 }),
-])
+const comparison: HistoryComparison = {
+  first_date: '2025-12-31',
+  a: { requested: '2026-01-15', date: '2025-12-31' },
+  b: { requested: '2026-06-01', date: '2026-06-01' },
+  totals: [
+    { key: 'gross_assets', from: 10_000, to: 15_500, delta: 5_500 },
+    { key: 'liabilities', from: 4_000, to: 3_000, delta: -1_000 },
+    { key: 'net_worth', from: 6_000, to: 12_500, delta: 6_500 },
+  ],
+  categories: [{ key: 'savings', from: 0, to: 3_000, delta: 3_000 }],
+  accounts: [
+    {
+      key: 'pret',
+      name: 'Prêt',
+      kind: 'loan',
+      from: -4_000,
+      to: -3_000,
+      delta: 1_000,
+    },
+  ],
+  members: [{ key: 'm1', name: 'Camille', from: 6_000, to: 12_500, delta: 6_500 }],
+}
 
-describe('snapshotAt', () => {
-  const points = [june, january]
-
-  it('prend le dernier instantané au plus tard à la date, quel que soit l’ordre reçu', () => {
-    expect(snapshotAt(points, '2026-01-01')).toBe(january)
-    expect(snapshotAt(points, '2026-05-31')).toBe(january)
-    expect(snapshotAt(points, '2026-12-31')).toBe(june)
+describe('libellés de la comparaison', () => {
+  it('nomme les totaux, les catégories, les comptes et les membres', () => {
+    const labeled = labelComparison(comparison)
+    expect(labeled?.totals.map((row) => row.label)).toEqual(['Actifs bruts', 'Dettes', 'Patrimoine net'])
+    expect(labeled?.categories?.[0]).toEqual({
+      key: 'savings',
+      label: 'Épargne',
+      from: 0,
+      to: 3_000,
+      delta: 3_000,
+    })
+    expect(labeled?.accounts?.[0]?.label).toBe('Prêt')
+    expect(labeled?.members?.[0]?.label).toBe('Camille')
   })
 
-  it('ne remonte pas avant le premier instantané', () => {
-    expect(snapshotAt(points, '2025-12-31')).toBeNull()
-    expect(snapshotAt([], '2026-01-01')).toBeNull()
+  it('garde une clé inconnue telle quelle et ne nomme rien sans instantané', () => {
+    const unknown = {
+      ...comparison,
+      categories: [{ key: 'futur', from: 1, to: 2, delta: 1 }],
+    }
+    expect(labelComparison(unknown)?.categories?.[0]?.label).toBe('futur')
+    const empty = {
+      ...comparison,
+      a: null,
+      totals: null,
+      categories: null,
+      accounts: null,
+      members: null,
+    }
+    expect(labelComparison(empty)).toBeNull()
+  })
+
+  it('laisse le détail absent quand l’instantané n’en a pas', () => {
+    const labeled = labelComparison({
+      ...comparison,
+      categories: null,
+      accounts: null,
+      members: null,
+    })
+    expect(labeled?.categories).toBeNull()
+    expect(labeled?.accounts).toBeNull()
   })
 })
 
-describe('compareSnapshots', () => {
-  const comparison = compareSnapshots(january, june)
-
-  it('donne l’écart des totaux', () => {
-    expect(comparison.totals).toEqual([
-      { key: 'gross_assets', label: 'Actifs bruts', from: 15_000, to: 14_000, delta: -1_000 },
-      { key: 'liabilities', label: 'Dettes', from: 8_000, to: 6_000, delta: -2_000 },
-      { key: 'net_worth', label: 'Patrimoine net', from: 7_000, to: 8_000, delta: 1_000 },
-    ])
-  })
-
-  it('donne l’écart par catégorie d’actifs, sans les dettes', () => {
-    expect(comparison.categories?.map((row) => [row.key, row.delta])).toEqual([
-      ['savings', -5_000],
-      ['investment', 3_000],
-      ['crypto', 1_000],
-    ])
-  })
-
-  it('donne l’écart par compte : ouvert ou clôturé entre-temps à 0, prêt en négatif, plus gros écart d’abord', () => {
-    expect(comparison.accounts).toEqual([
-      { key: 'livret', label: 'Livret A', from: 5_000, to: 0, delta: -5_000 },
-      { key: 'pea', label: 'PEA Camille', from: 10_000, to: 13_000, delta: 3_000 },
-      { key: 'pret', label: 'Prêt', from: -8_000, to: -6_000, delta: 2_000 },
-      { key: 'btc', label: 'Bitcoin', from: 0, to: 1_000, delta: 1_000 },
-    ])
-  })
-
-  it('sans détail par compte d’un côté, seuls les totaux sont comparés', () => {
-    const old = point('2025-06-01', null, { gross_assets: 9_000, liabilities: 0, net_worth: 9_000 })
-    const result = compareSnapshots(old, june)
-    expect(result.categories).toBeNull()
-    expect(result.accounts).toBeNull()
-    expect(result.totals[2]?.delta).toBe(-1_000)
+describe('isIsoDate', () => {
+  it('accepte une date du calendrier et refuse un champ vide ou une date impossible', () => {
+    expect(isIsoDate('2026-02-28')).toBe(true)
+    expect(isIsoDate('')).toBe(false)
+    expect(isIsoDate('2026-02-30')).toBe(false)
+    expect(isIsoDate('28/02/2026')).toBe(false)
   })
 })
 
@@ -70,7 +83,7 @@ describe('quickDates', () => {
     expect(quickDates('2026-11-22').map((q) => q.date)).toEqual(['2026-01-01', '2026-10-22', '2025-11-22'])
   })
 
-  it('reste sur un jour qui existe et change d’année en janvier', () => {
+  it('ramène un jour inexistant au dernier jour du mois', () => {
     expect(quickDates('2026-03-31')[1]?.date).toBe('2026-02-28')
     expect(quickDates('2026-01-15')[1]?.date).toBe('2025-12-15')
     expect(quickDates('2024-02-29')[2]?.date).toBe('2023-02-28')

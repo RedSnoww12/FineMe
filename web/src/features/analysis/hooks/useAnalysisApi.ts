@@ -97,13 +97,16 @@ export function useAccountDetails(accountIds: readonly string[]) {
   })
 }
 
-/** Historique complet de chaque membre donné, dans l'ordre des identifiants. Clé partagée avec la vue d'un membre. */
-export function useMemberHistories(memberIds: readonly string[]) {
-  return useQueries({
-    queries: memberIds.map((id) => ({
-      queryKey: ['history', 'all', id],
-      queryFn: () => api.history('all', { member_id: id }),
-    })),
-    combine: combineAll,
+/**
+ * Patrimoine de la vue affichée à deux dates (`b` = `a` pour une seule date), écarts calculés par l'API.
+ * `enabled` : false tant qu'une date saisie est incomplète (aucune requête n'est envoyée).
+ */
+export function useHistoryComparison(a: string, b: string, enabled: boolean) {
+  const { memberId } = useView()
+  return useQuery({
+    queryKey: ['history-compare', a, b, memberId],
+    queryFn: () => api.historyCompare(a, b, { member_id: memberId }),
+    placeholderData: keepPreviousData,
+    enabled,
   })
 }

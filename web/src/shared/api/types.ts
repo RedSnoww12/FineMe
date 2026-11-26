@@ -23,6 +23,23 @@ export type LoginEvent = {
   user_agent: string | null
 }
 
+/** Jeton d'accès IA en lecture seule (serveur MCP) ; le secret n'est renvoyé qu'à la création. */
+export type AccessToken = {
+  id: string
+  name: string
+  scope: 'read'
+  /** « fm_pat_… » + 4 derniers caractères, pour reconnaître le jeton. */
+  hint: string
+  created_at: string
+  last_used_at: string | null
+  revoked_at: string | null
+}
+export type CreatedAccessToken = { token: AccessToken; secret: string }
+export type AccessTokenInput = { name: string; password: string; code?: string }
+export type AccessTokenRevokeInput = { password: string; code?: string }
+/** Appel d'un tool MCP, journalisé sans ses paramètres ni son résultat. */
+export type McpCall = { at: string; token_id: string; token_name: string; tool: string; success: boolean }
+
 export type Member = { id: string; name: string; color: string; is_primary: boolean }
 export type MemberInput = { name: string; color?: string }
 
@@ -402,6 +419,23 @@ export type HistoryPoint = {
   accounts: HistoryAccount[] | null
 }
 export type History = { points: HistoryPoint[] }
+
+/** Instantané retenu pour une date demandée (le dernier relevé ce jour-là ou avant). */
+export type SnapshotRef = { requested: string; date: string }
+/** Écart d'une grandeur entre deux dates ; les libellés sont portés par le front. */
+export type ComparisonRow = { key: string; from: number; to: number; delta: number }
+export type HistoryComparison = {
+  first_date: string | null
+  a: SnapshotRef | null
+  b: SnapshotRef | null
+  /** null si l'une des deux dates n'a pas d'instantané. */
+  totals: ComparisonRow[] | null
+  /** null aussi si l'un des instantanés n'a pas de détail par compte. */
+  categories: ComparisonRow[] | null
+  accounts: (ComparisonRow & { name: string; kind: AccountKind })[] | null
+  /** Vue foyer seulement. */
+  members: (ComparisonRow & { name: string })[] | null
+}
 
 /** Point de l'historique tel que le voit l'écran de nettoyage. */
 export type HistoryReviewPoint = {

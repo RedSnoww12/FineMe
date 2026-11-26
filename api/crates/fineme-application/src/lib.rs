@@ -1,6 +1,7 @@
 //! Cas d'usage de FineMe et ports (traits) vers l'extérieur.
 //! Cette couche orchestre le domaine ; elle ne connaît ni SQL, ni HTTP, ni JSON.
 
+pub mod access_tokens;
 pub mod accounts;
 pub mod alerts;
 pub mod app;
@@ -27,8 +28,9 @@ mod secret;
 pub mod totp;
 pub mod transactions;
 
-#[cfg(test)]
-pub(crate) mod testing;
+/// Faux ports en mémoire et fixtures fictives (tests uniquement).
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 
 pub use app::{App, Ports, Settings};
 pub use error::{AppError, AppResult};

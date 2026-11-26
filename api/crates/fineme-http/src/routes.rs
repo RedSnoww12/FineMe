@@ -12,7 +12,7 @@ use fineme_application::commands::{
     ValuationInput,
 };
 use fineme_application::totp::LoginOutcome;
-use fineme_domain::ids::AccountId;
+use fineme_domain::ids::{AccessTokenId, AccountId};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -20,16 +20,16 @@ use crate::AppState;
 use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
-    AccountBody, AlertPatchBody, AlertRuleBody, AlertsQuery, BenchmarkBody, BudgetQuery,
-    BudgetTargetBody, BundleBody, ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody,
-    HistoryQuery, HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody,
-    ImportProfileBody, LimitQuery, LoginBody, LoginTotpBody, MemberBody, OperationBody,
-    OperationsBulkBody, PageQuery, PasswordChangeBody, PasswordResetBody, PerformanceQuery,
-    RangeQuery, SetupBody, TotpCodeBody, TotpDisableBody, TransactionPatchBody,
-    TransactionsBulkBody, ValuationBody, ViewQuery,
+    AccessTokenCreateBody, AccessTokenRevokeBody, AccountBody, AlertPatchBody, AlertRuleBody,
+    AlertsQuery, BenchmarkBody, BudgetQuery, BudgetTargetBody, BundleBody, CompareQuery,
+    ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody, HistoryQuery,
+    HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody, ImportProfileBody,
+    LimitQuery, LoginBody, LoginTotpBody, MemberBody, OperationBody, OperationsBulkBody, PageQuery,
+    PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody, TotpCodeBody,
+    TotpDisableBody, TransactionPatchBody, TransactionsBulkBody, ValuationBody, ViewQuery,
 };
-use crate::origin::ClientOrigin;
-use crate::output;
+use fineme_inbound::contract as output;
+use fineme_inbound::origin::ClientOrigin;
 
 type JsonResponse = ApiResult<axum::Json<Value>>;
 type Created = ApiResult<(StatusCode, axum::Json<Value>)>;
@@ -63,6 +63,12 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/auth/totp/enable", post(totp_enable))
         .route("/auth/totp/disable", post(totp_disable))
         .route("/auth/totp/recovery-codes", post(totp_recovery_codes))
+        .route(
+            "/access-tokens",
+            get(access_tokens_list).post(access_tokens_create),
+        )
+        .route("/access-tokens/calls", get(access_tokens_calls))
+        .route("/access-tokens/{id}/revoke", post(access_tokens_revoke))
         .route("/members", get(members_list).post(members_create))
         .route("/members/{id}", put(members_update).delete(members_delete))
         .route("/accounts", get(accounts_list).post(accounts_create))
@@ -123,6 +129,7 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/loans/{account_id}/schedule", get(loan_schedule))
         .route("/overview", get(overview))
         .route("/history", get(history))
+        .route("/history/compare", get(history_compare))
         .route(
             "/history/points",
             get(history_review).delete(history_delete),
@@ -297,6 +304,76 @@ async fn auth_logins(State(app): State<AppState>, Query(query): Query<LimitQuery
         .await?
         .iter()
         .map(output::login_event)
+        .collect())
+}
+
+async fn access_tokens_list(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+) -> JsonResponse {
+    ok(app
+        .auth
+        .access_tokens(id)
+        .await?
+        .iter()
+        .map(output::access_token)
+        .collect())
+}
+
+async fn access_tokens_create(
+    State(app): State<AppState>,
+    Extension(AuthUser(id)): Extension<AuthUser>,
+    ClientOrigin(origin): ClientOrigin,
+    Json(body): Json<AccessTokenCreateBody>,
+) -> ApiResult<impl axum::response::IntoResponse> {
+    let token = app
+        .auth
+        .create_access_token(
+            id,
+            &body.name,
+            &body.password,
+            body.code.as_deref(),
+            &origin,
+        )
+        .await?;
+    // Le secret n'est affiché qu'une fois : aucune mise en cache de cette réponse.
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(output::created_access_token(&token)),
+    ))
+}
+
+async fn access_tokens_revoke(
+    State(app): State<AppState>,
+    Extension(AuthUser(user)): Extension<AuthUser>,
+    ClientOrigin(origin): ClientOrigin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AccessTokenRevokeBody>,
+) -> JsonResponse {
+    let token = app
+        .auth
+        .revoke_access_token(
+            user,
+            AccessTokenId::from_uuid(id),
+            &body.password,
+            body.code.as_deref(),
+            &origin,
+        )
+        .await?;
+    ok(output::access_token(&token))
+}
+
+async fn access_tokens_calls(
+    State(app): State<AppState>,
+    Query(query): Query<LimitQuery>,
+) -> JsonResponse {
+    ok(app
+        .auth
+        .mcp_calls(query.limit)
+        .await?
+        .iter()
+        .map(output::mcp_call)
         .collect())
 }
 
@@ -765,6 +842,18 @@ async fn history(State(app): State<AppState>, Query(query): Query<HistoryQuery>)
         &app.overview
             .history(query.range.as_deref(), query.member_id)
             .await?,
+    ))
+}
+
+async fn history_compare(
+    State(app): State<AppState>,
+    Query(query): Query<CompareQuery>,
+) -> JsonResponse {
+    let a = query
+        .a
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "Date « a » requise (AAAA-MM-JJ)"))?;
+    ok(output::history_comparison(
+        &app.overview.compare(query.member_id, a, query.b).await?,
     ))
 }
 

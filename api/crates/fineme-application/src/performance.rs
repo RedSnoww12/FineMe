@@ -17,6 +17,7 @@ use fineme_domain::performance::{
     external_flows, measure,
 };
 use fineme_domain::portfolio::Portfolio;
+use fineme_domain::timeline::Period;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -164,6 +165,16 @@ fn portfolio_series(
 }
 
 impl PerformanceService {
+    /// Performance de la vue depuis le début de la période relative (jusqu'à aujourd'hui).
+    pub async fn over_period(
+        &self,
+        member_id: Option<Uuid>,
+        period: Period,
+    ) -> AppResult<PerformanceView> {
+        let from = period.start(self.clock.today());
+        self.performance(member_id, from, None).await
+    }
+
     /// Performance de la vue sur la période (bornes facultatives : tout l'historique, jusqu'à aujourd'hui).
     pub async fn performance(
         &self,
@@ -604,6 +615,39 @@ mod tests {
             )
             .await;
         assert!(matches!(reversed, Err(AppError::Domain(_))));
+    }
+
+    #[tokio::test]
+    async fn relative_period_starts_at_the_matching_date() {
+        let t = TestApp::household().await;
+        let all = t
+            .app
+            .performance
+            .over_period(None, Period::All)
+            .await
+            .unwrap();
+        assert_eq!(
+            all,
+            t.app
+                .performance
+                .performance(None, None, None)
+                .await
+                .unwrap()
+        );
+        let today = t.clock.today();
+        let month = t
+            .app
+            .performance
+            .over_period(None, Period::OneMonth)
+            .await
+            .unwrap();
+        let expected = t
+            .app
+            .performance
+            .performance(None, Period::OneMonth.start(today), None)
+            .await
+            .unwrap();
+        assert_eq!(month, expected);
     }
 
     #[tokio::test]

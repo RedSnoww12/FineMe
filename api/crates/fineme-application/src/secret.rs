@@ -1,7 +1,7 @@
-//! Vérification des codes et secrets partagés (configuration, secours, tâche quotidienne).
+//! Vérification des codes et secrets partagés (configuration, secours, tâche quotidienne, jetons d'accès).
 
 /// Comparaison en temps constant : la durée ne dépend pas de la position du premier octet différent.
-fn constant_time_eq(expected: &[u8], provided: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(expected: &[u8], provided: &[u8]) -> bool {
     let mut difference = expected.len() ^ provided.len();
     for index in 0..expected.len().max(provided.len()) {
         let (a, b) = (

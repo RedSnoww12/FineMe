@@ -9,6 +9,9 @@ use fineme_application::ports::{
     PricePoint, RepoError, SecondFactorRecord, SecondFactorRepository, SnapshotRepository,
     TransactionRepository, UserRepository,
 };
+use fineme_domain::access_token::{
+    AccessToken, AccessTokenName, McpCall, SecretDigest, TokenScope,
+};
 use fineme_domain::account::{Account, AccountKind, AccountSource};
 use fineme_domain::budget::{BudgetTarget, CategoryRule};
 use fineme_domain::connection::{Connection, ConnectionStatus};
@@ -423,7 +426,7 @@ async fn password_update_replaces_hash_and_bumps_session_version() {
     for (expected_version, hash) in [(1, "$argon2id$nouveau"), (2, "$argon2id$encore")] {
         assert_eq!(
             db.store
-                .update_password(credentials.user.id, hash)
+                .update_password(credentials.user.id, hash, at(1))
                 .await
                 .unwrap(),
             Some(expected_version)
@@ -439,7 +442,7 @@ async fn password_update_replaces_hash_and_bumps_session_version() {
     }
     assert_eq!(
         db.store
-            .update_password(UserId::generate(), "$argon2id$x")
+            .update_password(UserId::generate(), "$argon2id$x", at(1))
             .await
             .unwrap(),
         None
@@ -1094,6 +1097,47 @@ async fn snapshot_detail_is_kept_per_view_and_replaced_within_the_day() {
 }
 
 #[tokio::test]
+async fn snapshot_in_force_at_a_date_and_first_snapshot_are_read_per_view() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let pea = line("PEA", AccountKind::Investment, 2000.0, None);
+    let (day1, day5) = (date(2026, 1, 1), date(2026, 1, 5));
+    let early = Snapshot {
+        totals: totals_of(1000.0),
+        accounts: vec![pea.clone()],
+    };
+    let later = Snapshot {
+        totals: totals_of(2000.0),
+        accounts: vec![],
+    };
+    db.store.upsert(day1, None, &early).await.unwrap();
+    db.store.upsert(day5, None, &later).await.unwrap();
+    db.store.upsert(day5, Some(alice.id), &later).await.unwrap();
+
+    let at = |day| db.store.at(None, day);
+    assert_eq!(at(date(2025, 12, 31)).await.unwrap(), None);
+    let in_force = at(date(2026, 1, 4)).await.unwrap().unwrap();
+    assert_eq!(in_force.date, day1);
+    assert_eq!(in_force.totals, totals_of(1000.0));
+    assert_eq!(in_force.accounts, Some(vec![pea]));
+    assert_eq!(at(date(2030, 1, 1)).await.unwrap().unwrap().date, day5);
+
+    assert_eq!(db.store.first(None).await.unwrap().unwrap().date, day1);
+    assert_eq!(
+        db.store.first(Some(alice.id)).await.unwrap().unwrap().date,
+        day5
+    );
+    assert_eq!(db.store.at(Some(alice.id), day1).await.unwrap(), None);
+
+    // Un point corrigé n'a plus de détail.
+    db.store
+        .correct(day1, None, totals_of(900.0))
+        .await
+        .unwrap();
+    assert_eq!(at(day1).await.unwrap().unwrap().accounts, None);
+}
+
+#[tokio::test]
 async fn snapshots_recorded_before_the_detail_have_no_account_breakdown() {
     let db = test_db().await;
     // Instantané écrit tel qu'avant la migration 0004 : sans `detailed` ni lignes de comptes.
@@ -1713,4 +1757,151 @@ async fn import_profiles_are_upserted_per_kind_and_deleted_with_their_account() 
     );
     db.store.delete_account(checking.id).await.unwrap();
     assert_eq!(count(&db, "import_profiles").await, 0);
+}
+
+fn access_token(user: UserId, name: &str, created_day: u32) -> AccessToken {
+    AccessToken {
+        id: AccessTokenId::generate(),
+        user,
+        name: AccessTokenName::parse(name).unwrap(),
+        scope: TokenScope::Read,
+        hint: "fm_pat_…abcd".into(),
+        created_at: at(created_day),
+        last_used_at: None,
+        revoked_at: None,
+    }
+}
+
+fn digest(byte: u8) -> SecretDigest {
+    SecretDigest::from_bytes(&[byte; 32])
+}
+
+#[tokio::test]
+async fn access_tokens_are_found_by_digest_while_active_and_revoked_with_the_password() {
+    use fineme_application::ports::AccessTokenRepository;
+    let db = test_db().await;
+    let credentials = Credentials {
+        user: User {
+            id: UserId::generate(),
+            email: "camille@exemple.test".into(),
+            name: "Camille".into(),
+        },
+        password_hash: "$argon2id$ancien".into(),
+        session_version: 0,
+    };
+    let user = credentials.user.id;
+    db.store
+        .create_first(&credentials, &member("Camille", true))
+        .await
+        .unwrap();
+
+    let older = access_token(user, "Portable", 1);
+    let newer = access_token(user, "Bureau", 2);
+    db.store.insert(&older, &digest(1)).await.unwrap();
+    db.store.insert(&newer, &digest(2)).await.unwrap();
+    // Une empreinte ne sert qu'une fois.
+    assert_eq!(
+        db.store
+            .insert(&access_token(user, "Doublon", 3), &digest(1))
+            .await,
+        Err(RepoError::Conflict)
+    );
+
+    let listed = AccessTokenRepository::list(&db.store, user).await.unwrap();
+    assert_eq!(listed, vec![newer.clone(), older.clone()]);
+    let (found, stored) = db
+        .store
+        .find_active_by_digest(&digest(1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found, older);
+    assert_eq!(stored, digest(1));
+    assert_eq!(
+        db.store.find_active_by_digest(&digest(9)).await.unwrap(),
+        None
+    );
+
+    db.store.touch(older.id, at(4)).await.unwrap();
+    assert_eq!(
+        AccessTokenRepository::find(&db.store, older.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_used_at,
+        Some(at(4))
+    );
+
+    // Le jeton d'un autre utilisateur n'est pas révoqué.
+    assert!(
+        !db.store
+            .revoke(newer.id, UserId::generate(), at(5))
+            .await
+            .unwrap()
+    );
+    assert!(db.store.revoke(newer.id, user, at(5)).await.unwrap());
+    assert!(!db.store.revoke(newer.id, user, at(6)).await.unwrap());
+    assert_eq!(
+        db.store.find_active_by_digest(&digest(2)).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        AccessTokenRepository::find(&db.store, newer.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked_at,
+        Some(at(5))
+    );
+
+    // Changer le mot de passe révoque les jetons encore actifs, sans toucher la date des autres.
+    db.store
+        .update_password(user, "$argon2id$nouveau", at(7))
+        .await
+        .unwrap();
+    let after = AccessTokenRepository::list(&db.store, user).await.unwrap();
+    assert_eq!(after[0].revoked_at, Some(at(5)));
+    assert_eq!(after[1].revoked_at, Some(at(7)));
+    assert_eq!(
+        db.store.find_active_by_digest(&digest(1)).await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn mcp_calls_are_listed_newest_first_and_pruned() {
+    use fineme_application::ports::McpCallJournal;
+    let db = test_db().await;
+    let token_id = AccessTokenId::generate();
+    for (day, tool, success) in [(1, "get_goals", true), (3, "get_overview", false)] {
+        McpCallJournal::record(
+            &db.store,
+            &McpCall {
+                at: at(day),
+                token_id,
+                token_name: "Claude".into(),
+                tool: tool.into(),
+                success,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let calls = McpCallJournal::recent(&db.store, 10).await.unwrap();
+    assert_eq!(
+        calls.iter().map(|c| c.tool.as_str()).collect::<Vec<_>>(),
+        ["get_overview", "get_goals"]
+    );
+    assert!(!calls[0].success);
+    assert_eq!(calls[0].token_id, token_id);
+    assert_eq!(
+        McpCallJournal::prune_before(&db.store, at(2))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        McpCallJournal::recent(&db.store, 10).await.unwrap().len(),
+        1
+    );
 }

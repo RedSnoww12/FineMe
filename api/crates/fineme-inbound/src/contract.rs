@@ -1,5 +1,7 @@
-//! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`.
+//! DTO de sortie : vues du domaine → JSON du contrat (`docs/API.md`), en `snake_case`. Source unique de la
+//! sérialisation de chaque type, pour l'API REST comme pour les tools MCP.
 
+use fineme_application::access_tokens::CreatedAccessToken;
 use fineme_application::alerts::EvaluationReport;
 use fineme_application::budget::{BudgetMonth, BudgetTransaction};
 use fineme_application::bundle::{Bundle, BundleValuation};
@@ -10,9 +12,11 @@ use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
 use fineme_application::history::{HistoryReview, ReviewedPoint};
 use fineme_application::operations::{ImportReport, OperationView};
+use fineme_application::overview::{HistoryComparison, SnapshotDate};
 use fineme_application::performance::{BenchmarkInfo, BenchmarkResult, PerformanceView};
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
+use fineme_domain::access_token::{AccessToken, McpCall};
 use fineme_domain::account::AccountKind;
 use fineme_domain::alert::{Alert, AlertRule};
 use fineme_domain::budget::{BudgetTarget, CategoryRule, Flows};
@@ -44,6 +48,33 @@ pub fn login_event(event: &LoginEvent) -> Value {
         "success": event.success,
         "ip": event.origin.ip,
         "user_agent": event.origin.user_agent,
+    })
+}
+
+/// Jeton d'accès sans son secret (jamais renvoyé hors de la création).
+pub fn access_token(token: &AccessToken) -> Value {
+    json!({
+        "id": token.id.as_uuid(),
+        "name": token.name.as_str(),
+        "scope": token.scope.as_str(),
+        "hint": token.hint,
+        "created_at": token.created_at,
+        "last_used_at": token.last_used_at,
+        "revoked_at": token.revoked_at,
+    })
+}
+
+pub fn created_access_token(created: &CreatedAccessToken) -> Value {
+    json!({ "token": access_token(&created.token), "secret": created.secret.as_str() })
+}
+
+pub fn mcp_call(call: &McpCall) -> Value {
+    json!({
+        "at": call.at,
+        "token_id": call.token_id.as_uuid(),
+        "token_name": call.token_name,
+        "tool": call.tool,
+        "success": call.success,
     })
 }
 
@@ -299,6 +330,38 @@ pub fn reviewed_point(reviewed: &ReviewedPoint) -> Value {
         }),
         totals(&p.totals),
     )
+}
+
+fn snapshot_date(reference: Option<SnapshotDate>) -> Value {
+    reference.map_or(
+        Value::Null,
+        |r| json!({ "requested": r.requested, "date": r.date }),
+    )
+}
+
+/// Comparaison de deux dates : seules les clés sont renvoyées, le front porte les libellés.
+pub fn history_comparison(result: &HistoryComparison) -> Value {
+    let delta = |key: &str, from: f64, to: f64, delta: f64| json!({ "key": key, "from": from, "to": to, "delta": delta });
+    let comparison = result.comparison.as_ref();
+    json!({
+        "first_date": result.first_date,
+        "a": snapshot_date(result.a),
+        "b": snapshot_date(result.b),
+        "totals": comparison.map(|c| c.totals.iter()
+            .map(|row| delta(row.key.as_str(), row.from, row.to, row.delta)).collect::<Vec<_>>()),
+        "categories": comparison.and_then(|c| c.categories.as_ref()).map(|rows| rows.iter()
+            .map(|row| delta(row.key.as_str(), row.from, row.to, row.delta)).collect::<Vec<_>>()),
+        "accounts": comparison.and_then(|c| c.accounts.as_ref()).map(|rows| rows.iter()
+            .map(|row| json!({
+                "key": row.account_id.as_uuid(), "name": row.name, "kind": row.kind.as_str(),
+                "from": row.from, "to": row.to, "delta": row.delta,
+            })).collect::<Vec<_>>()),
+        "members": result.members.as_ref().map(|rows| rows.iter()
+            .map(|row| json!({
+                "key": row.key.id.as_uuid(), "name": row.key.name,
+                "from": row.from, "to": row.to, "delta": row.delta,
+            })).collect::<Vec<_>>()),
+    })
 }
 
 pub fn history_review(review: &HistoryReview) -> Value {

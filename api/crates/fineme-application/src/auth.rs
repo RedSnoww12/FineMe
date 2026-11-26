@@ -8,8 +8,9 @@ use fineme_domain::throttle::{LoginThrottle, retry_after_seconds};
 
 use crate::error::{AppError, AppResult};
 use crate::ports::{
-    Clock, Credentials, LoginJournal, PasswordHasher, SecondFactorRepository, TokenService,
-    TokenSubject, TotpSupport, UserRepository,
+    AccessTokenCrypto, AccessTokenRepository, Clock, Credentials, LoginJournal, McpCallJournal,
+    PasswordHasher, SecondFactorRepository, TokenService, TokenSubject, TotpSupport,
+    UserRepository,
 };
 use crate::secret::code_matches;
 use crate::totp::LoginOutcome;
@@ -58,6 +59,11 @@ pub struct AuthService {
     pub(crate) journal: Arc<dyn LoginJournal>,
     /// Échecs récents par IP et globalement (en mémoire : une seule instance de l'API).
     pub(crate) throttle: Mutex<LoginThrottle>,
+    pub(crate) access_tokens: Arc<dyn AccessTokenRepository>,
+    pub(crate) access_crypto: Arc<dyn AccessTokenCrypto>,
+    pub(crate) mcp_calls: Arc<dyn McpCallJournal>,
+    /// Échecs d'authentification sur le serveur MCP (compteur distinct de la connexion).
+    pub(crate) mcp_throttle: Mutex<LoginThrottle>,
     pub(crate) hasher: Arc<dyn PasswordHasher>,
     pub(crate) tokens: Arc<dyn TokenService>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -343,12 +349,13 @@ impl AuthService {
         self.replace_password(credentials.user, new_password).await
     }
 
-    /// Enregistre le nouveau hash et ouvre une session à la nouvelle version (les précédentes deviennent invalides).
+    /// Enregistre le nouveau hash et ouvre une session à la nouvelle version : les sessions précédentes et tous
+    /// les jetons d'accès deviennent invalides.
     async fn replace_password(&self, user: User, new_password: &str) -> AppResult<Session> {
         let password_hash = self.hasher.hash(new_password).await?;
         let session_version = self
             .users
-            .update_password(user.id, &password_hash)
+            .update_password(user.id, &password_hash, self.clock.now())
             .await?
             .ok_or(AppError::Unauthorized(INVALID_SESSION))?;
         self.open_session(Credentials {

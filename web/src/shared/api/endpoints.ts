@@ -1,6 +1,9 @@
 import { request } from '@/shared/api/client'
 import { normalizeHistory } from '@/shared/lib/history'
 import type {
+  AccessToken,
+  AccessTokenInput,
+  AccessTokenRevokeInput,
   AccountDetail,
   Account,
   AccountInput,
@@ -20,10 +23,12 @@ import type {
   Bundle,
   Connection,
   ConnectionCreated,
+  CreatedAccessToken,
   Fx,
   Goal,
   GoalInput,
   History,
+  HistoryComparison,
   ImportKind,
   ImportProfile,
   ImportProfileInput,
@@ -40,6 +45,7 @@ import type {
   LoanSchedule,
   LoginEvent,
   LoginResult,
+  McpCall,
   Member,
   MemberInput,
   Operation,
@@ -97,6 +103,14 @@ export const api = {
     request<AuthResult>('/api/auth/totp/disable', { method: 'POST', body }),
   totpRecoveryCodes: (code: string) =>
     request<{ recovery_codes: string[] }>('/api/auth/totp/recovery-codes', { method: 'POST', body: { code } }),
+
+  // Accès IA (jetons d'accès du serveur MCP)
+  accessTokens: () => request<AccessToken[]>('/api/access-tokens'),
+  createAccessToken: (body: AccessTokenInput) =>
+    request<CreatedAccessToken>('/api/access-tokens', { method: 'POST', body }),
+  revokeAccessToken: (id: string, body: AccessTokenRevokeInput) =>
+    request<AccessToken>(`/api/access-tokens/${id}/revoke`, { method: 'POST', body }),
+  mcpCalls: (limit?: number) => request<McpCall[]>('/api/access-tokens/calls', { query: { limit } }),
 
   // Membres
   members: () => request<Member[]>('/api/members'),
@@ -178,6 +192,8 @@ export const api = {
   overview: (view: View) => request<Overview>('/api/overview', { query: view }),
   history: (range: HistoryRange, view: View): Promise<History> =>
     request<History>('/api/history', { query: { range, ...view } }).then(normalizeHistory),
+  historyCompare: (a: string, b: string, view: View) =>
+    request<HistoryComparison>('/api/history/compare', { query: { a, b, ...view } }),
 
   // Performance et indice de référence
   performance: (period: { from?: string; to?: string }, view: View) =>

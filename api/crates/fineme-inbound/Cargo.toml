@@ -1,0 +1,18 @@
+[package]
+name = "fineme-inbound"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Briques communes aux adaptateurs entrants (fineme-http, fineme-mcp) : origine de la requête et forme JSON du
+# contrat. Aucune route, aucun tool, aucune règle métier.
+[dependencies]
+fineme-domain = { workspace = true }
+fineme-application = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }

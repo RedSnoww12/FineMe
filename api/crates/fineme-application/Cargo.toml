@@ -16,5 +16,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+[features]
+# Faux ports en mémoire et fixtures, pour les tests des adaptateurs entrants (fineme-mcp).
+test-support = []
+
 [dev-dependencies]
 tokio = { workspace = true }

@@ -1,4 +1,5 @@
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister'
+import { defaultShouldDehydrateQuery, type Query } from '@tanstack/react-query'
 import type { Persister } from '@tanstack/react-query-persist-client'
 
 /**
@@ -12,6 +13,16 @@ export const PERSISTED_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 /** Change quand la forme des réponses change, pour ne jamais réhydrater un cache incompatible. */
 export const PERSISTED_CACHE_BUSTER = 'v1'
+
+/**
+ * Ce qui entre dans la copie locale : jamais une mutation (ses variables peuvent porter un mot de passe ou un code de
+ * second facteur, même en attente hors ligne), ni une requête marquée `meta: { persist: false }` (jetons d'accès IA,
+ * journal des appels : inutiles hors ligne).
+ */
+export const PERSISTED_DEHYDRATE_OPTIONS = {
+  shouldDehydrateMutation: () => false,
+  shouldDehydrateQuery: (query: Query) => defaultShouldDehydrateQuery(query) && query.meta?.persist !== false,
+}
 
 type KeyValueStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 

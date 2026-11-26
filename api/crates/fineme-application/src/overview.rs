@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use chrono::{Months, NaiveDate};
 use fineme_domain::ids::MemberId;
+use fineme_domain::member::Member;
 use fineme_domain::ownership::View;
 use fineme_domain::portfolio::{Overview, Portfolio};
+use fineme_domain::timeline::{self, Comparison, Delta, NetWorthChange, Period, SnapshotRef};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -33,6 +35,45 @@ pub(crate) fn history_start(range: Option<&str>, today: NaiveDate) -> AppResult<
         .unwrap_or(today))
 }
 
+fn snapshot_ref(point: &SnapshotPoint) -> SnapshotRef<'_> {
+    SnapshotRef {
+        totals: &point.totals,
+        accounts: point.accounts.as_deref(),
+    }
+}
+
+/// Vue d'ensemble d'une vue et variation de son patrimoine net sur une période, calculées sans rien enregistrer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverviewSummary {
+    pub as_of: NaiveDate,
+    pub view: View,
+    /// Nom du membre de la vue ; `None` pour le foyer.
+    pub member_name: Option<String>,
+    pub period: Period,
+    pub overview: Overview,
+    /// `None` : aucun instantané dans l'historique de la vue.
+    pub change: Option<NetWorthChange>,
+}
+
+/// Instantané retenu pour une date demandée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotDate {
+    pub requested: NaiveDate,
+    pub date: NaiveDate,
+}
+
+/// Patrimoine à deux dates et leurs écarts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryComparison {
+    pub first_date: Option<NaiveDate>,
+    pub a: Option<SnapshotDate>,
+    pub b: Option<SnapshotDate>,
+    /// `None` si l'une des deux dates n'a pas d'instantané.
+    pub comparison: Option<Comparison>,
+    /// Patrimoine net de chaque membre ; vue foyer seulement, et seulement si `comparison` existe.
+    pub members: Option<Vec<Delta<Member>>>,
+}
+
 impl OverviewService {
     /// Vue d'ensemble ; enregistre au passage l'instantané du jour (foyer + chaque membre).
     pub async fn overview(&self, member_id: Option<Uuid>) -> AppResult<Overview> {
@@ -58,6 +99,118 @@ impl OverviewService {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Vue d'ensemble et variation sur la période, sans enregistrer d'instantané (lecture seule).
+    pub async fn summary(
+        &self,
+        member_id: Option<Uuid>,
+        period: Period,
+    ) -> AppResult<OverviewSummary> {
+        let portfolio = self.reader.load().await?;
+        let view = view_for(&portfolio, member_id)?;
+        let overview = portfolio.overview(view);
+        let today = self.clock.today();
+        let change = self
+            .period_start(view.member(), period.start(today))
+            .await?
+            .map(|start| {
+                NetWorthChange::new(
+                    start.date,
+                    start.totals.net_worth,
+                    overview.totals.net_worth,
+                )
+            });
+        Ok(OverviewSummary {
+            as_of: today,
+            view,
+            member_name: view
+                .member()
+                .and_then(|id| portfolio.member(id))
+                .map(|member| member.name.clone()),
+            period,
+            overview,
+            change,
+        })
+    }
+
+    /// Instantané de départ d'une période : le dernier au plus tard à `start`, sinon le premier après ;
+    /// le premier de l'historique si la période n'a pas de début.
+    async fn period_start(
+        &self,
+        member: Option<MemberId>,
+        start: Option<NaiveDate>,
+    ) -> AppResult<Option<SnapshotPoint>> {
+        if let Some(start) = start
+            && let Some(point) = self.snapshots.at(member, start).await?
+        {
+            return Ok(Some(point));
+        }
+        Ok(self.snapshots.first(member).await?)
+    }
+
+    /// Patrimoine de la vue à deux dates (`b` absente = `a`) et leurs écarts ; lecture seule.
+    pub async fn compare(
+        &self,
+        member_id: Option<Uuid>,
+        a: NaiveDate,
+        b: Option<NaiveDate>,
+    ) -> AppResult<HistoryComparison> {
+        let b = b.unwrap_or(a);
+        let members = self.members.members().await?;
+        let member = member_id.map(MemberId::from_uuid);
+        if let Some(id) = member
+            && !members.iter().any(|m| m.id == id)
+        {
+            return Err(AppError::NotFound("Membre introuvable"));
+        }
+        let first_date = self.snapshots.first(member).await?.map(|point| point.date);
+        let first = self.snapshots.at(member, a).await?;
+        let second = self.snapshots.at(member, b).await?;
+        let reference = |requested, point: Option<&SnapshotPoint>| {
+            point.map(|point| SnapshotDate {
+                requested,
+                date: point.date,
+            })
+        };
+        let (Some(first), Some(second)) = (first.as_ref(), second.as_ref()) else {
+            return Ok(HistoryComparison {
+                first_date,
+                a: reference(a, first.as_ref()),
+                b: reference(b, second.as_ref()),
+                comparison: None,
+                members: None,
+            });
+        };
+        let comparison = timeline::compare(snapshot_ref(first), snapshot_ref(second));
+        let members = match member {
+            Some(_) => None,
+            None => Some(self.member_deltas(members, a, b).await?),
+        };
+        Ok(HistoryComparison {
+            first_date,
+            a: reference(a, Some(first)),
+            b: reference(b, Some(second)),
+            comparison: Some(comparison),
+            members,
+        })
+    }
+
+    /// Patrimoine net de chaque membre aux deux dates (0 sans instantané).
+    async fn member_deltas(
+        &self,
+        members: Vec<Member>,
+        a: NaiveDate,
+        b: NaiveDate,
+    ) -> AppResult<Vec<Delta<Member>>> {
+        let mut rows = Vec::with_capacity(members.len());
+        for member in members {
+            let net = |point: Option<SnapshotPoint>| point.map_or(0.0, |p| p.totals.net_worth);
+            let from = net(self.snapshots.at(Some(member.id), a).await?);
+            let to = net(self.snapshots.at(Some(member.id), b).await?);
+            rows.push(Delta::new(member, from, to));
+        }
+        Ok(rows)
     }
 
     pub async fn history(
@@ -98,6 +251,136 @@ mod tests {
             .unwrap();
         t.house_with_loan().await;
         t
+    }
+
+    #[tokio::test]
+    async fn summary_records_nothing_and_measures_the_change_since_the_period_start() {
+        let t = seeded().await;
+        let first = t
+            .app
+            .overview
+            .summary(None, Period::OneMonth)
+            .await
+            .unwrap();
+        assert_eq!(first.change, None);
+        assert_eq!(first.member_name, None);
+        assert!(t.store.state().snapshots.is_empty(), "lecture seule");
+
+        let start = t.app.overview.record_snapshots().await.unwrap();
+        t.clock.advance_days(40);
+        t.checking(&[(t.alice, 1.0)], 450.0).await;
+        let summary = t
+            .app
+            .overview
+            .summary(None, Period::OneMonth)
+            .await
+            .unwrap();
+        let change = summary.change.unwrap();
+        assert_eq!(change.from_date, start);
+        assert!(close(change.net_worth_start, 101_550.0));
+        assert!(close(change.delta, 450.0));
+        assert!(close(summary.overview.totals.net_worth, 102_000.0));
+        assert_eq!(summary.period, Period::OneMonth);
+        assert_eq!(
+            t.store.state().snapshots.len(),
+            3,
+            "foyer + 2 membres, une seule fois"
+        );
+    }
+
+    #[tokio::test]
+    async fn summary_of_a_member_names_it_and_unknown_members_are_refused() {
+        let t = seeded().await;
+        let alice = t
+            .app
+            .overview
+            .summary(Some(t.alice.as_uuid()), Period::All)
+            .await
+            .unwrap();
+        assert_eq!(alice.member_name.as_deref(), Some("Alice"));
+        assert_eq!(alice.view, View::Member(t.alice));
+        let unknown = t
+            .app
+            .overview
+            .summary(Some(Uuid::new_v4()), Period::All)
+            .await;
+        assert!(matches!(unknown, Err(AppError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn comparison_reads_the_snapshots_in_force_at_both_dates() {
+        let t = seeded().await;
+        let first = t.app.overview.record_snapshots().await.unwrap();
+        t.clock.advance_days(10);
+        t.checking(&[(t.alice, 1.0)], 450.0).await;
+        let second = t.app.overview.record_snapshots().await.unwrap();
+
+        let before_history = first - chrono::Duration::days(1);
+        let missing = t
+            .app
+            .overview
+            .compare(None, before_history, Some(second))
+            .await
+            .unwrap();
+        assert_eq!(missing.first_date, Some(first));
+        assert_eq!(missing.a, None);
+        assert_eq!(missing.comparison, None);
+        assert_eq!(missing.members, None);
+
+        // Un jour sans instantané retient le précédent ; une date future, le dernier.
+        let between = first + chrono::Duration::days(3);
+        let future = second + chrono::Duration::days(100);
+        let result = t
+            .app
+            .overview
+            .compare(None, between, Some(future))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.a,
+            Some(SnapshotDate {
+                requested: between,
+                date: first
+            })
+        );
+        assert_eq!(result.b.map(|b| b.date), Some(second));
+        let comparison = result.comparison.unwrap();
+        assert!(close(comparison.totals[2].delta, 450.0));
+        let members = result.members.unwrap();
+        assert_eq!(members.len(), 2);
+        let alice = members.iter().find(|row| row.key.id == t.alice).unwrap();
+        assert!(close(alice.delta, 450.0));
+
+        let single = t.app.overview.compare(None, second, None).await.unwrap();
+        assert_eq!(single.b.map(|b| b.date), Some(second));
+        assert!(
+            single
+                .comparison
+                .unwrap()
+                .totals
+                .iter()
+                .all(|row| row.delta == 0.0)
+        );
+
+        let of_alice = t
+            .app
+            .overview
+            .compare(Some(t.alice.as_uuid()), first, Some(second))
+            .await
+            .unwrap();
+        assert_eq!(of_alice.members, None);
+        let unknown = t
+            .app
+            .overview
+            .compare(Some(Uuid::new_v4()), first, None)
+            .await;
+        assert!(matches!(unknown, Err(AppError::NotFound(_))));
+        assert!(close(of_alice.comparison.unwrap().totals[2].delta, 450.0));
+        assert_eq!(
+            t.store.state().snapshots.len(),
+            6,
+            "la comparaison n'écrit rien"
+        );
     }
 
     #[tokio::test]

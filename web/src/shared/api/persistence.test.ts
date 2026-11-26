@@ -1,4 +1,4 @@
-import { QueryClient } from '@tanstack/react-query'
+import { dehydrate, QueryClient } from '@tanstack/react-query'
 import { persistQueryClientRestore, persistQueryClientSave } from '@tanstack/react-query-persist-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -7,6 +7,7 @@ import {
   PERSISTED_CACHE_BUSTER,
   PERSISTED_CACHE_KEY,
   PERSISTED_CACHE_MAX_AGE_MS,
+  PERSISTED_DEHYDRATE_OPTIONS,
   purgePersistedCache,
 } from './persistence'
 
@@ -65,6 +66,22 @@ describe('persistance du cache pour le hors ligne', () => {
     const restored = new QueryClient()
     await persistQueryClientRestore({ queryClient: restored, persister, ...options })
     expect(restored.getQueryData(['overview'])).toBeUndefined()
+  })
+
+  it('ne copie ni les mutations ni les requêtes marquées comme non persistées', () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(['overview'], { net_worth: 120_000 })
+    const tokens = queryClient.getQueryCache().build(queryClient, { queryKey: ['access-tokens'], meta: { persist: false } })
+    tokens.setData([{ id: 'jeton-1' }])
+    // Une mutation en attente (hors ligne) garderait ses variables, mot de passe compris.
+    queryClient.getMutationCache().build(queryClient, { mutationKey: ['create-token'] }).state.variables = {
+      password: 'mot-de-passe-fictif',
+    }
+
+    const copy = dehydrate(queryClient, PERSISTED_DEHYDRATE_OPTIONS)
+    expect(copy.queries.map((query) => query.queryKey)).toEqual([['overview']])
+    expect(copy.mutations).toEqual([])
+    expect(JSON.stringify(copy)).not.toContain('mot-de-passe-fictif')
   })
 
   it('supporte l’absence de stockage', () => {

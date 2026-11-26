@@ -1,5 +1,6 @@
 //! Adaptateur Postgres : implémente tous les ports de persistance avec sqlx (requêtes à l'exécution).
 
+mod access_tokens;
 mod alerts;
 mod rows;
 
@@ -444,17 +445,35 @@ impl UserRepository for PgStore {
         Ok(row.map(credentials))
     }
 
-    async fn update_password(&self, id: UserId, password_hash: &str) -> RepoResult<Option<i64>> {
-        // Une seule requête : le hash et la version changent ensemble ou pas du tout.
-        sqlx::query_scalar(
+    async fn update_password(
+        &self,
+        id: UserId,
+        password_hash: &str,
+        revoked_at: DateTime<Utc>,
+    ) -> RepoResult<Option<i64>> {
+        // Une transaction : hash, version de session et révocation des jetons d'accès changent ensemble.
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let version: Option<i64> = sqlx::query_scalar(
             "UPDATE users SET password_hash = $2, session_version = session_version + 1 \
              WHERE id = $1 RETURNING session_version",
         )
         .bind(id.as_uuid())
         .bind(password_hash)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(db)
+        .map_err(db)?;
+        if version.is_some() {
+            sqlx::query(
+                "UPDATE access_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(id.as_uuid())
+            .bind(revoked_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(version)
     }
 
     async fn create_first(
@@ -640,6 +659,53 @@ impl SecondFactorRepository for PgStore {
         insert_recovery_codes(&mut tx, user, hashes).await?;
         tx.commit().await.map_err(db)?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------- instantané isolé
+
+/// Totaux d'un instantané : date, actifs bruts, dettes, net, détaillé, corrigé.
+type SnapshotTotalsRow = (NaiveDate, f64, f64, f64, bool, bool);
+
+impl PgStore {
+    /// Complète un instantané isolé par son détail par compte (une requête sur ce seul jour).
+    async fn with_accounts(
+        &self,
+        member: Option<MemberId>,
+        row: Option<SnapshotTotalsRow>,
+    ) -> RepoResult<Option<SnapshotPoint>> {
+        let Some((date, gross_assets, liabilities, net_worth, detailed, corrected)) = row else {
+            return Ok(None);
+        };
+        let accounts = if detailed {
+            let lines: Vec<SnapshotAccountRow> = sqlx::query_as(
+                "SELECT date, account_id, name, kind, value, gain FROM snapshot_accounts \
+                 WHERE member_id IS NOT DISTINCT FROM $1 AND date = $2 ORDER BY name, account_id",
+            )
+            .bind(member.map(|m| m.as_uuid()))
+            .bind(date)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+            Some(
+                lines
+                    .into_iter()
+                    .map(AccountSnapshot::try_from)
+                    .collect::<RepoResult<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+        Ok(Some(SnapshotPoint {
+            date,
+            totals: Totals {
+                gross_assets,
+                liabilities,
+                net_worth,
+            },
+            accounts,
+            corrected,
+        }))
     }
 }
 
@@ -1414,6 +1480,35 @@ impl SnapshotRepository for PgStore {
                 },
             )
             .collect())
+    }
+
+    async fn at(
+        &self,
+        member: Option<MemberId>,
+        date: NaiveDate,
+    ) -> RepoResult<Option<SnapshotPoint>> {
+        let row: Option<SnapshotTotalsRow> = sqlx::query_as(
+            "SELECT date, gross_assets, liabilities, net_worth, detailed, corrected FROM snapshots \
+             WHERE member_id IS NOT DISTINCT FROM $1 AND date <= $2 ORDER BY date DESC LIMIT 1",
+        )
+        .bind(member.map(|m| m.as_uuid()))
+        .bind(date)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        self.with_accounts(member, row).await
+    }
+
+    async fn first(&self, member: Option<MemberId>) -> RepoResult<Option<SnapshotPoint>> {
+        let row: Option<SnapshotTotalsRow> = sqlx::query_as(
+            "SELECT date, gross_assets, liabilities, net_worth, detailed, corrected FROM snapshots \
+             WHERE member_id IS NOT DISTINCT FROM $1 ORDER BY date LIMIT 1",
+        )
+        .bind(member.map(|m| m.as_uuid()))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        self.with_accounts(member, row).await
     }
 
     async fn correct(

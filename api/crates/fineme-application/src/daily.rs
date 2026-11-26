@@ -42,6 +42,10 @@ impl App {
         self.performance.record_benchmark_price().await;
         let snapshot_date = self.overview.record_snapshots().await?;
         let alerts = self.alerts.evaluate().await?;
+        // Ménage seulement : un échec n'annule pas les cours, l'instantané et les alertes déjà écrits.
+        if let Err(error) = self.auth.prune_mcp_calls().await {
+            tracing::warn!("journal des appels MCP non purgé : {error}");
+        }
         Ok(DailyReport {
             prices,
             snapshot_date,
