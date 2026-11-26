@@ -810,6 +810,28 @@ impl SnapshotRepository for InMemoryStore {
         ));
         Ok(())
     }
+    async fn at(
+        &self,
+        member: Option<MemberId>,
+        date: NaiveDate,
+    ) -> RepoResult<Option<SnapshotPoint>> {
+        Ok(self
+            .lock()
+            .snapshots
+            .iter()
+            .filter(|(m, point)| *m == member && point.date <= date)
+            .map(|(_, point)| point.clone())
+            .max_by_key(|point| point.date))
+    }
+    async fn first(&self, member: Option<MemberId>) -> RepoResult<Option<SnapshotPoint>> {
+        Ok(self
+            .lock()
+            .snapshots
+            .iter()
+            .filter(|(m, _)| *m == member)
+            .map(|(_, point)| point.clone())
+            .min_by_key(|point| point.date))
+    }
     async fn since(
         &self,
         member: Option<MemberId>,

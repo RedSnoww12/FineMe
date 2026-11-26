@@ -2756,3 +2756,43 @@ async fn access_token_is_shown_once_and_never_opens_the_rest_api() {
     let calls = api.get("/api/access-tokens/calls").await;
     assert_eq!(calls, json!([]));
 }
+
+#[tokio::test]
+async fn history_compare_reads_two_dates_without_recording_a_snapshot() {
+    let (api, _, _) = Api::household().await;
+    let account = "00000000-0000-4000-8000-000000000001";
+    seed_account_snapshot(&api, 30, account, 1_000.0).await;
+    seed_account_snapshot(&api, 2, account, 1_500.0).await;
+    let day = |days_ago: i64| {
+        (chrono::Utc::now().date_naive() - chrono::Duration::days(days_ago)).to_string()
+    };
+
+    let result = api
+        .get(&format!("/api/history/compare?a={}&b={}", day(20), day(0)))
+        .await;
+    assert_eq!(result["a"]["date"], day(30));
+    assert_eq!(result["b"]["date"], day(2));
+    assert_eq!(result["totals"][2]["key"], "net_worth");
+    assert_eq!(result["totals"][2]["delta"], 500.0);
+    assert_eq!(result["categories"][0]["key"], "investment");
+    assert_eq!(result["accounts"][0]["key"], account);
+    assert_eq!(result["accounts"][0]["kind"], "investment");
+    assert_eq!(result["members"].as_array().unwrap().len(), 2);
+
+    let before = api
+        .get(&format!("/api/history/compare?a={}", day(40)))
+        .await;
+    assert_eq!(before["a"], Value::Null);
+    assert_eq!(before["totals"], Value::Null);
+    assert_eq!(before["first_date"], day(30));
+
+    for path in ["/api/history/compare", "/api/history/compare?a=hier"] {
+        let (status, _) = api.call("GET", path, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+    }
+    let snapshots: i64 = sqlx::query_scalar("SELECT count(*) FROM snapshots")
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+    assert_eq!(snapshots, 2, "lecture seule");
+}

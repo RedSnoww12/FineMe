@@ -11,6 +11,7 @@ use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
 use fineme_application::history::{HistoryReview, ReviewedPoint};
 use fineme_application::operations::{ImportReport, OperationView};
+use fineme_application::overview::{HistoryComparison, SnapshotDate};
 use fineme_application::performance::{BenchmarkInfo, BenchmarkResult, PerformanceView};
 use fineme_application::ports::{PricePoint, SnapshotPoint};
 use fineme_application::prices::RefreshReport;
@@ -328,6 +329,38 @@ pub fn reviewed_point(reviewed: &ReviewedPoint) -> Value {
         }),
         totals(&p.totals),
     )
+}
+
+fn snapshot_date(reference: Option<SnapshotDate>) -> Value {
+    reference.map_or(
+        Value::Null,
+        |r| json!({ "requested": r.requested, "date": r.date }),
+    )
+}
+
+/// Comparaison de deux dates : seules les clés sont renvoyées, le front porte les libellés.
+pub fn history_comparison(result: &HistoryComparison) -> Value {
+    let delta = |key: &str, from: f64, to: f64, delta: f64| json!({ "key": key, "from": from, "to": to, "delta": delta });
+    let comparison = result.comparison.as_ref();
+    json!({
+        "first_date": result.first_date,
+        "a": snapshot_date(result.a),
+        "b": snapshot_date(result.b),
+        "totals": comparison.map(|c| c.totals.iter()
+            .map(|row| delta(row.key.as_str(), row.from, row.to, row.delta)).collect::<Vec<_>>()),
+        "categories": comparison.and_then(|c| c.categories.as_ref()).map(|rows| rows.iter()
+            .map(|row| delta(row.key.as_str(), row.from, row.to, row.delta)).collect::<Vec<_>>()),
+        "accounts": comparison.and_then(|c| c.accounts.as_ref()).map(|rows| rows.iter()
+            .map(|row| json!({
+                "key": row.account_id.as_uuid(), "name": row.name, "kind": row.kind.as_str(),
+                "from": row.from, "to": row.to, "delta": row.delta,
+            })).collect::<Vec<_>>()),
+        "members": result.members.as_ref().map(|rows| rows.iter()
+            .map(|row| json!({
+                "key": row.key.id.as_uuid(), "name": row.key.name,
+                "from": row.from, "to": row.to, "delta": row.delta,
+            })).collect::<Vec<_>>()),
+    })
 }
 
 pub fn history_review(review: &HistoryReview) -> Value {

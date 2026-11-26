@@ -21,12 +21,12 @@ use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
     AccessTokenCreateBody, AccessTokenRevokeBody, AccountBody, AlertPatchBody, AlertRuleBody,
-    AlertsQuery, BenchmarkBody, BudgetQuery, BudgetTargetBody, BundleBody, ConnectionBody,
-    DateRangeQuery, GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody,
-    HistoryReviewQuery, HoldingBody, HoldingsBulkBody, ImportProfileBody, LimitQuery, LoginBody,
-    LoginTotpBody, MemberBody, OperationBody, OperationsBulkBody, PageQuery, PasswordChangeBody,
-    PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody, TotpCodeBody, TotpDisableBody,
-    TransactionPatchBody, TransactionsBulkBody, ValuationBody, ViewQuery,
+    AlertsQuery, BenchmarkBody, BudgetQuery, BudgetTargetBody, BundleBody, CompareQuery,
+    ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody, HistoryQuery,
+    HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody, ImportProfileBody,
+    LimitQuery, LoginBody, LoginTotpBody, MemberBody, OperationBody, OperationsBulkBody, PageQuery,
+    PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody, TotpCodeBody,
+    TotpDisableBody, TransactionPatchBody, TransactionsBulkBody, ValuationBody, ViewQuery,
 };
 use crate::origin::ClientOrigin;
 use crate::output;
@@ -129,6 +129,7 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/loans/{account_id}/schedule", get(loan_schedule))
         .route("/overview", get(overview))
         .route("/history", get(history))
+        .route("/history/compare", get(history_compare))
         .route(
             "/history/points",
             get(history_review).delete(history_delete),
@@ -841,6 +842,18 @@ async fn history(State(app): State<AppState>, Query(query): Query<HistoryQuery>)
         &app.overview
             .history(query.range.as_deref(), query.member_id)
             .await?,
+    ))
+}
+
+async fn history_compare(
+    State(app): State<AppState>,
+    Query(query): Query<CompareQuery>,
+) -> JsonResponse {
+    let a = query
+        .a
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "Date « a » requise (AAAA-MM-JJ)"))?;
+    ok(output::history_comparison(
+        &app.overview.compare(query.member_id, a, query.b).await?,
     ))
 }
 

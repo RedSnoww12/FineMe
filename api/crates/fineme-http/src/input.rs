@@ -78,6 +78,13 @@ pub struct HistoryReviewQuery {
 }
 
 #[derive(Deserialize)]
+pub struct CompareQuery {
+    pub a: Option<NaiveDate>,
+    pub b: Option<NaiveDate>,
+    pub member_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
 pub struct DateRangeQuery {
     pub from: NaiveDate,
     pub to: NaiveDate,

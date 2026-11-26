@@ -393,6 +393,14 @@ pub trait SnapshotRepository: Send + Sync {
         member: Option<MemberId>,
         from: NaiveDate,
     ) -> RepoResult<Vec<SnapshotPoint>>;
+    /// Instantané en vigueur à `date` : le dernier au plus tard ce jour-là ; `None` si l'historique commence après.
+    async fn at(
+        &self,
+        member: Option<MemberId>,
+        date: NaiveDate,
+    ) -> RepoResult<Option<SnapshotPoint>>;
+    /// Premier instantané de la vue ; `None` si son historique est vide.
+    async fn first(&self, member: Option<MemberId>) -> RepoResult<Option<SnapshotPoint>>;
     /// Remplace les totaux d'un jour pour une vue, retire son détail par compte et le marque corrigé.
     /// Renvoie `false` si aucun instantané n'existe ce jour-là pour cette vue.
     async fn correct(

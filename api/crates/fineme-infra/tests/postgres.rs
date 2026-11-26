@@ -1097,6 +1097,47 @@ async fn snapshot_detail_is_kept_per_view_and_replaced_within_the_day() {
 }
 
 #[tokio::test]
+async fn snapshot_in_force_at_a_date_and_first_snapshot_are_read_per_view() {
+    let db = test_db().await;
+    let (alice, _) = household(&db).await;
+    let pea = line("PEA", AccountKind::Investment, 2000.0, None);
+    let (day1, day5) = (date(2026, 1, 1), date(2026, 1, 5));
+    let early = Snapshot {
+        totals: totals_of(1000.0),
+        accounts: vec![pea.clone()],
+    };
+    let later = Snapshot {
+        totals: totals_of(2000.0),
+        accounts: vec![],
+    };
+    db.store.upsert(day1, None, &early).await.unwrap();
+    db.store.upsert(day5, None, &later).await.unwrap();
+    db.store.upsert(day5, Some(alice.id), &later).await.unwrap();
+
+    let at = |day| db.store.at(None, day);
+    assert_eq!(at(date(2025, 12, 31)).await.unwrap(), None);
+    let in_force = at(date(2026, 1, 4)).await.unwrap().unwrap();
+    assert_eq!(in_force.date, day1);
+    assert_eq!(in_force.totals, totals_of(1000.0));
+    assert_eq!(in_force.accounts, Some(vec![pea]));
+    assert_eq!(at(date(2030, 1, 1)).await.unwrap().unwrap().date, day5);
+
+    assert_eq!(db.store.first(None).await.unwrap().unwrap().date, day1);
+    assert_eq!(
+        db.store.first(Some(alice.id)).await.unwrap().unwrap().date,
+        day5
+    );
+    assert_eq!(db.store.at(Some(alice.id), day1).await.unwrap(), None);
+
+    // Un point corrigé n'a plus de détail.
+    db.store
+        .correct(day1, None, totals_of(900.0))
+        .await
+        .unwrap();
+    assert_eq!(at(day1).await.unwrap().unwrap().accounts, None);
+}
+
+#[tokio::test]
 async fn snapshots_recorded_before_the_detail_have_no_account_breakdown() {
     let db = test_db().await;
     // Instantané écrit tel qu'avant la migration 0004 : sans `detailed` ni lignes de comptes.
