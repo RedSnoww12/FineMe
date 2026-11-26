@@ -21,7 +21,7 @@ export function unavailableEmail(reason: string, runUrl?: string): Email {
     'Le rapport de patrimoine hebdomadaire n\'est pas disponible.',
     '',
     // La cause peut reprendre le message d'une erreur imprévue ; l'adresse de l'exécution, elle, est la nôtre.
-    `Cause : ${defangLinks(reason).slice(0, MAX_REASON_LENGTH)}`,
+    `Cause : ${defangLinks(reason.slice(0, 4 * MAX_REASON_LENGTH)).slice(0, MAX_REASON_LENGTH)}`,
   ];
   if (runUrl) {
     lines.push('', `Détail de l'exécution : ${runUrl}`);

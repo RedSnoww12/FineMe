@@ -3,12 +3,22 @@
 
 const REMOVED = '[lien retiré]';
 
-/** Adresses avec schéma, liens `mailto:`, `tel:`, `sms:` et adresses email : retirés. */
-const ADDRESS = /\b[a-z][a-z0-9+.-]*:\/\/\S+|\b(?:mailto|tel|sms):\S+|[^\s<>()@]+@[^\s<>()@]+\.[^\s<>()@]+/giu;
+// Pas de `\b` : un chiffre ou un « _ » collé devant le schéma suffisait à le contourner. Les textes filtrés sont
+// bornés (rapport et cause), ce qui borne aussi le coût de ces motifs.
+/** Tout mot contenant `://`, quoi qu'il y ait devant. */
+const URL_LIKE = /(?<!\S)\S*:\/\/\S*/gu;
+const ACTION_LINK = /(?<!\p{L})(?:mailto|tel|sms):\S+/giu;
+/** Le domaine n'a pas besoin de point : mieux vaut retirer trop que laisser une adresse écrite autrement. */
+const EMAIL = /(?<![^\s<>()@])[^\s<>()@]+@[^\s<>()@]+/gu;
 
-/** Noms de domaine et adresses IP nus, que les clients mail rendent cliquables : points désamorcés. */
-const HOST = /(?:[\p{L}\p{N}-]+\.)+\p{L}{2,}|(?:\d{1,3}\.){3}\d{1,3}/gu;
+/** Noms de domaine et adresses IP nus, que les clients mail rendent cliquables (variantes Unicode du point comprises). */
+// Les marques (`\p{M}`) font partie d'un nom : accents décomposés, écritures non latines.
+const HOST = /(?<![\p{L}\p{M}\p{N}-])(?:[\p{L}\p{M}\p{N}-]+[.。．｡])+\p{L}[\p{L}\p{M}]+|(?:\d{1,3}[.。．｡]){3}\d{1,3}/gu;
 
 export function defangLinks(text: string): string {
-  return text.replace(ADDRESS, REMOVED).replace(HOST, (host) => host.replaceAll('.', '[.]'));
+  return text
+    .replace(URL_LIKE, REMOVED)
+    .replace(ACTION_LINK, REMOVED)
+    .replace(EMAIL, REMOVED)
+    .replace(HOST, (host) => host.replace(/[.。．｡]/gu, '[.]'));
 }

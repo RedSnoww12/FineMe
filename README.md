@@ -135,7 +135,7 @@ rapport est mal formé, un email « Rapport de patrimoine indisponible » part e
 
 5. *Actions > Rapport hebdomadaire > Run workflow* pour un premier envoi.
 
-Un libellé importé ne doit pas pouvoir faire écrire un lien cliquable : dans l'email, les adresses avec schéma, les
+Un libellé importé ne doit pas pouvoir faire écrire un lien cliquable : dans l'email, les adresses contenant `://`, les
 adresses email et les liens `mailto:`, `tel:`, `sms:` sont remplacés par « [lien retiré] », et les domaines ou adresses
 IP seuls sont désamorcés (`example[.]com`).
 
