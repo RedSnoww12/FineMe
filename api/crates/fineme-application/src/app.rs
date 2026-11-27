@@ -16,15 +16,17 @@ use crate::history::HistoryService;
 use crate::holdings::HoldingService;
 use crate::import_profiles::ImportProfileService;
 use crate::members::MemberService;
+use crate::oauth::{OAuthServer, OAuthSettings};
 use crate::operations::OperationService;
 use crate::overview::OverviewService;
 use crate::performance::PerformanceService;
 use crate::ports::{
     AccessTokenCrypto, AccessTokenRepository, AlertRepository, BankProvider, BenchmarkRepository,
-    BudgetRepository, Clock, ConnectionRepository, FxProvider, FxRateRepository, GoalRepository,
-    ImportProfileRepository, ImportRepository, LoginJournal, McpCallJournal, OperationRepository,
-    PasswordHasher, PortfolioRepository, PriceProvider, SecondFactorRepository, SnapshotRepository,
-    TokenService, TotpSupport, TransactionRepository, UserRepository,
+    BudgetRepository, ClientMetadataFetcher, Clock, ConnectionRepository, FxProvider,
+    FxRateRepository, GoalRepository, ImportProfileRepository, ImportRepository, LoginJournal,
+    McpCallJournal, OAuthRepository, OperationRepository, PasswordHasher, PortfolioRepository,
+    PriceProvider, SecondFactorRepository, SnapshotRepository, TokenService, TotpSupport,
+    TransactionRepository, UserRepository,
 };
 use crate::prices::PriceService;
 use crate::reader::PortfolioReader;
@@ -39,6 +41,8 @@ pub struct Ports {
     pub login_journal: Arc<dyn LoginJournal>,
     pub access_tokens: Arc<dyn AccessTokenRepository>,
     pub mcp_calls: Arc<dyn McpCallJournal>,
+    pub oauth: Arc<dyn OAuthRepository>,
+    pub client_metadata: Arc<dyn ClientMetadataFetcher>,
     pub portfolio: Arc<dyn PortfolioRepository>,
     pub fx_rates: Arc<dyn FxRateRepository>,
     pub transactions: Arc<dyn TransactionRepository>,
@@ -70,6 +74,8 @@ pub struct Settings {
     pub recovery_token: Option<String>,
     /// Secret exigé par la tâche quotidienne ; `None` ou vide = tâche désactivée.
     pub cron_secret: Option<String>,
+    /// Serveur d'autorisation OAuth ; `None` = désactivé.
+    pub oauth: Option<OAuthSettings>,
 }
 
 /// Code facultatif : espaces retirés, vide = absent.
@@ -129,6 +135,19 @@ impl App {
                     ThrottlePolicy::per_ip(),
                     ThrottlePolicy::global_lenient(),
                 )),
+                oauth: OAuthServer {
+                    settings: settings.oauth,
+                    repo: ports.oauth,
+                    clients: ports.client_metadata,
+                    authorize_throttle: Mutex::new(LoginThrottle::new(
+                        ThrottlePolicy::authorization_per_ip(),
+                        ThrottlePolicy::global_lenient(),
+                    )),
+                    throttle: Mutex::new(LoginThrottle::new(
+                        ThrottlePolicy::per_ip(),
+                        ThrottlePolicy::global_lenient(),
+                    )),
+                },
                 hasher: ports.hasher,
                 tokens: ports.tokens,
                 clock: ports.clock.clone(),

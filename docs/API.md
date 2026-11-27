@@ -170,7 +170,7 @@ type OAuthGrant = {
   created_at: string; last_used_at: string | null; revoked_at: string | null; // RFC 3339
 };
 type OAuthRequestView = { client_name: string; redirect_host: string; scope: "read";
-  totp_required: boolean; expires_in: number };  // secondes restantes
+  expires_in: number };  // secondes restantes ; ne dit pas si le second facteur est activé (route publique)
 type OAuthRedirect = { redirect_to: string };
 ```
 
@@ -193,9 +193,12 @@ la ressource de ce serveur).
   cette URL, `redirect_uris` doit contenir **exactement** la `redirect_uri` demandée, et
   `token_endpoint_auth_method` doit être `none` (ou absent).
 - Client ou `redirect_uri` invalide : **400** `{ "error": "…" }`, jamais de redirection.
-- Autre erreur (`response_type`, PKCE, `scope`, `resource`) : 302 vers `redirect_uri` avec `error`
+- Autre erreur (`response_type`, `state` de plus de 1024 octets ou avec un caractère de contrôle (non recopié),
+  PKCE, `scope`, `resource`) : 302 vers `redirect_uri` avec `error`
   (`unsupported_response_type`, `invalid_request`, `invalid_scope`, `invalid_target`), `state` et `iss`.
 - Succès : 302 vers `WEB_URL/oauth/consent?request=<identifiant>` (256 bits aléatoires, valable 10 minutes).
+- Limitée par IP : au-delà de 20 demandes (compteur oublié après 1 h sans demande), **429** + `Retry-After`,
+  délai croissant. Au plus 100 demandes en attente, les plus anciennes sont retirées.
 
 **Écran de consentement** (`WEB_URL/oauth/consent`) : routes publiques, car le consentement se confirme par le mot de
 passe et le second facteur, pas par la session web.
@@ -216,8 +219,8 @@ passe et le second facteur, pas par la session web.
 
 Réponse 200 `{ access_token, token_type: "Bearer", expires_in: 3600, refresh_token, scope: "read" }`. Erreurs RFC 6749
 `{ "error": "invalid_request" | "invalid_grant" | "invalid_client" | "unsupported_grant_type" | "invalid_scope" |
-"invalid_target", "error_description" }` en 400 ; 429 + `Retry-After` après des échecs répétés (par IP, compteur
-distinct ; un échange valide n'est jamais bloqué). Toutes les réponses portent `Cache-Control: no-store`.
+"invalid_target", "error_description" }` en 400 ; 429 + `Retry-After` après des refus répétés d'un secret **mal
+formé** (par IP, compteur distinct ; un code ou un jeton bien formé, valide ou non, n'est jamais bloqué). Toutes les réponses portent `Cache-Control: no-store`.
 
 **Jetons** : opaques, 32 octets aléatoires, seule l'empreinte SHA-256 est conservée.
 
@@ -227,7 +230,8 @@ distinct ; un échange valide n'est jamais bloqué). Toutes les réponses porten
 | `fm_oat_` | jeton d'accès, accepté sur `/mcp` seulement | 1 h |
 | `fm_ort_` | jeton de renouvellement, **tournant** | 30 jours depuis la dernière rotation |
 
-Réutiliser un code déjà échangé ou un jeton de renouvellement déjà tourné **révoque toute l'autorisation**.
+Réutiliser un code déjà échangé (dans sa durée de vie, par le même client) ou un jeton de renouvellement déjà
+tourné **révoque toute l'autorisation**.
 
 **Gestion** (sous JWT) :
 
@@ -934,7 +938,8 @@ l'ordre :
    et `scope="read"`), avant toute lecture du
    message MCP ; la réponse ne reprend jamais le jeton reçu. Ces échecs sont limités par IP (même progression que la
    connexion, compteur distinct) : pendant le délai, un jeton refusé reçoit 429 + `Retry-After`. Un jeton valide
-   n'est jamais bloqué par ce limiteur.
+   n'est jamais bloqué par ce limiteur, une requête sans jeton et un jeton `fm_oat_` bien formé (expiré, à renouveler)
+   non plus : ils reçoivent toujours le 401.
 2. En-tête `Host` absent de `MCP_ALLOWED_HOSTS`, ou en-tête `Origin` présent (aucun navigateur n'est un client
    légitime) → 403. `/mcp` n'envoie aucun en-tête CORS.
 3. Corps limité à 1 Mo (413), un seul message JSON-RPC par requête. `GET` et `DELETE /mcp` → 405.

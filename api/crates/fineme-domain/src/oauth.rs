@@ -293,6 +293,12 @@ impl ProtectedResource {
         Self(format!("{}/mcp", issuer.as_str()))
     }
 
+    /// Ressource relue depuis le stockage.
+    pub fn parse(value: &str) -> Option<Self> {
+        let issuer = PublicUrl::parse(value.strip_suffix("/mcp")?).ok()?;
+        Some(Self::mcp(&issuer))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -466,8 +472,8 @@ pub struct OAuthGrant {
     pub redirect_uri: RedirectUri,
     pub scope: TokenScope,
     pub resource: ProtectedResource,
-    /// Version de session à l'autorisation : un changement de mot de passe l'invalide.
-    pub session_version: i64,
+    /// Version du mot de passe à l'autorisation : le changer l'invalide. Le second facteur n'y touche pas.
+    pub password_version: i64,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
@@ -480,8 +486,8 @@ impl OAuthGrant {
     }
 
     /// Vrai si elle ouvre encore l'accès : non révoquée, et mot de passe inchangé depuis qu'elle a été donnée.
-    pub fn is_usable(&self, current_session_version: i64) -> bool {
-        self.is_active() && self.session_version == current_session_version
+    pub fn is_usable(&self, current_password_version: i64) -> bool {
+        self.is_active() && self.password_version == current_password_version
     }
 }
 

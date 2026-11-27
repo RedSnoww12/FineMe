@@ -13,6 +13,8 @@ pub enum LoginAction {
     /// Seconde étape d'une connexion avec second facteur (code TOTP ou de secours).
     Totp,
     Reset,
+    /// Consentement donné à un client OAuth (mot de passe et second facteur).
+    Oauth,
 }
 
 impl LoginAction {
@@ -21,6 +23,7 @@ impl LoginAction {
             Self::Login => "login",
             Self::Totp => "totp",
             Self::Reset => "reset",
+            Self::Oauth => "oauth",
         }
     }
 
@@ -29,6 +32,7 @@ impl LoginAction {
             "login" => Some(Self::Login),
             "totp" => Some(Self::Totp),
             "reset" => Some(Self::Reset),
+            "oauth" => Some(Self::Oauth),
             _ => None,
         }
     }
@@ -90,7 +94,12 @@ mod tests {
 
     #[test]
     fn actions_round_trip() {
-        for action in [LoginAction::Login, LoginAction::Totp, LoginAction::Reset] {
+        for action in [
+            LoginAction::Login,
+            LoginAction::Totp,
+            LoginAction::Reset,
+            LoginAction::Oauth,
+        ] {
             assert_eq!(LoginAction::parse(action.as_str()), Some(action));
         }
         assert_eq!(LoginAction::parse("autre"), None);

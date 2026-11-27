@@ -3,6 +3,7 @@
 //! Le secret n'existe en clair qu'à la création : seule son empreinte (calculée par un port) est conservée.
 
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::DomainError;
 use crate::ids::{AccessTokenId, UserId};
@@ -172,7 +173,8 @@ impl AccessToken {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpCall {
     pub at: DateTime<Utc>,
-    pub token_id: AccessTokenId,
+    /// Identifiant du jeton personnel, ou de l'autorisation OAuth, qui a fait l'appel.
+    pub token_id: Uuid,
     pub token_name: String,
     pub tool: String,
     pub success: bool,

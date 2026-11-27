@@ -71,7 +71,7 @@ pub fn created_access_token(created: &CreatedAccessToken) -> Value {
 pub fn mcp_call(call: &McpCall) -> Value {
     json!({
         "at": call.at,
-        "token_id": call.token_id.as_uuid(),
+        "token_id": call.token_id,
         "token_name": call.token_name,
         "tool": call.tool,
         "success": call.success,

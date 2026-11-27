@@ -10,6 +10,7 @@ use fineme_application::daily::MIN_CRON_SECRET_LEN;
 use fineme_application::ports::PriceProvider;
 use fineme_application::{App, Ports, Settings};
 use fineme_infra::access_token::AccessTokenDigest;
+use fineme_infra::client_metadata::HttpClientMetadata;
 use fineme_infra::clock::SystemClock;
 use fineme_infra::market::{self, CoinGecko, Eodhd, Frankfurter, YahooFinance};
 use fineme_infra::postgres::{self, PgStore};
@@ -141,6 +142,10 @@ pub async fn build_app(
         login_journal: store.clone(),
         access_tokens: store.clone(),
         mcp_calls: store.clone(),
+        oauth: store.clone(),
+        client_metadata: Arc::new(
+            HttpClientMetadata::new().context("client des métadonnées OAuth")?,
+        ),
         portfolio: store.clone(),
         fx_rates: store.clone(),
         transactions: store.clone(),
@@ -224,6 +229,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         setup_token: config.setup_token.clone(),
         recovery_token: config.recovery_token.clone(),
         cron_secret: config.cron_secret.clone(),
+        oauth: None,
     };
     let router = build_router(
         pool,

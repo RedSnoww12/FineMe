@@ -15,11 +15,12 @@ use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind};
 use fineme_domain::ids::{
     AccessTokenId, AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId,
-    OperationId, TransactionId, UserId,
+    OAuthGrantId, OperationId, TransactionId, UserId,
 };
 use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
+use fineme_domain::oauth::{AuthorizationRequest, ClientId, ClientMetadata, OAuthGrant};
 use fineme_domain::operation::Operation;
 use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{AccountSnapshot, Snapshot, Totals};
@@ -112,6 +113,9 @@ pub struct Credentials {
     pub password_hash: String,
     /// Version de session courante (0 à la création).
     pub session_version: i64,
+    /// Incrémentée par les seuls changements de mot de passe (le second facteur n'y touche pas) : les
+    /// autorisations OAuth s'y rattachent.
+    pub password_version: i64,
 }
 
 #[async_trait]
@@ -119,8 +123,10 @@ pub trait UserRepository: Send + Sync {
     async fn exists_any(&self) -> RepoResult<bool>;
     async fn find_by_email(&self, email: &str) -> RepoResult<Option<Credentials>>;
     async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>>;
-    /// Remplace le hash du mot de passe, incrémente la version de session et révoque tous les jetons d'accès
-    /// actifs de l'utilisateur à `revoked_at`, tout ou rien. Renvoie la nouvelle version, ou `None` si
+    /// L'utilisateur unique du foyer, s'il est configuré (consentement OAuth, sans session).
+    async fn owner(&self) -> RepoResult<Option<Credentials>>;
+    /// Remplace le hash du mot de passe, incrémente les versions de session et de mot de passe et révoque tous les jetons d'accès et
+    /// autorisations OAuth actifs de l'utilisateur à `revoked_at`, tout ou rien. Renvoie la nouvelle version, ou `None` si
     /// l'utilisateur n'existe pas.
     async fn update_password(
         &self,
@@ -219,6 +225,110 @@ pub trait McpCallJournal: Send + Sync {
     /// Supprime les appels antérieurs à `before` ; renvoie le nombre de lignes supprimées.
     async fn prune_before(&self, before: DateTime<Utc>) -> RepoResult<u64>;
 }
+
+// ---------------------------------------------------------------- serveur d'autorisation OAuth
+
+/// Document de métadonnées d'un client OAuth, lu à l'URL qui est son identifiant.
+#[async_trait]
+pub trait ClientMetadataFetcher: Send + Sync {
+    async fn fetch(&self, client_id: &ClientId) -> Result<ClientMetadata, ProviderError>;
+}
+
+/// Demande en attente du consentement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRequest {
+    pub request: AuthorizationRequest,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Code d'autorisation émis après consentement, à échanger une seule fois.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizationCode {
+    pub request: AuthorizationRequest,
+    /// Identifiant de l'autorisation qui sera créée à l'échange.
+    pub grant_id: OAuthGrantId,
+    pub user: UserId,
+    pub password_version: i64,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Présentation d'un code : la première, ou un rejeu (le code désigne l'autorisation à révoquer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeUse {
+    First(Box<AuthorizationCode>),
+    Replayed(Box<AuthorizationCode>),
+}
+
+/// Empreintes et échéances d'un jeton d'accès et de son jeton de renouvellement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuedPair {
+    pub access: SecretDigest,
+    pub access_expires_at: DateTime<Utc>,
+    pub refresh: SecretDigest,
+    pub refresh_expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessRecord {
+    pub grant: OAuthGrant,
+    pub digest: SecretDigest,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshRecord {
+    pub grant: OAuthGrant,
+    pub expires_at: DateTime<Utc>,
+    /// Déjà échangé : le présenter à nouveau est un rejeu.
+    pub used: bool,
+}
+
+/// Demandes, codes, autorisations et jetons OAuth (empreintes des secrets seulement).
+#[async_trait]
+pub trait OAuthRepository: Send + Sync {
+    /// Enregistre une demande ; retire les demandes expirées à `now` et ne garde que les
+    /// [`MAX_PENDING_REQUESTS`] plus récentes.
+    async fn save_request(
+        &self,
+        digest: &SecretDigest,
+        pending: &PendingRequest,
+        now: DateTime<Utc>,
+    ) -> RepoResult<()>;
+    async fn find_request(&self, digest: &SecretDigest) -> RepoResult<Option<PendingRequest>>;
+    /// Retire la demande ; `false` si elle n'existait plus (une seule décision par demande).
+    async fn take_request(&self, digest: &SecretDigest) -> RepoResult<bool>;
+    async fn save_code(&self, digest: &SecretDigest, code: &AuthorizationCode) -> RepoResult<()>;
+    /// Marque le code comme utilisé, atomiquement, et retient un rejeu ; `None` si inconnu.
+    async fn consume_code(
+        &self,
+        digest: &SecretDigest,
+        now: DateTime<Utc>,
+    ) -> RepoResult<Option<CodeUse>>;
+    /// Crée l'autorisation et ses premiers jetons, et révoque (à `created_at`) les autorisations actives du
+    /// même utilisateur pour le même client, tout ou rien. `false` sans rien écrire si le code qui la désigne a
+    /// été rejoué entre-temps.
+    async fn create_grant(&self, grant: &OAuthGrant, pair: &IssuedPair) -> RepoResult<bool>;
+    /// Autorisations de l'utilisateur, révoquées comprises, de la plus récente à la plus ancienne.
+    async fn grants(&self, user: UserId) -> RepoResult<Vec<OAuthGrant>>;
+    /// Révoque une autorisation active ; `false` sinon (écriture conditionnelle).
+    async fn revoke_grant(&self, id: OAuthGrantId, at: DateTime<Utc>) -> RepoResult<bool>;
+    async fn touch_grant(&self, id: OAuthGrantId, at: DateTime<Utc>) -> RepoResult<()>;
+    async fn find_access(&self, digest: &SecretDigest) -> RepoResult<Option<AccessRecord>>;
+    async fn find_refresh(&self, digest: &SecretDigest) -> RepoResult<Option<RefreshRecord>>;
+    /// Marque l'ancien jeton de renouvellement comme utilisé et enregistre la nouvelle paire, tout ou rien ;
+    /// `false` sans rien écrire s'il l'était déjà.
+    async fn rotate(
+        &self,
+        old_refresh: &SecretDigest,
+        grant: OAuthGrantId,
+        pair: &IssuedPair,
+    ) -> RepoResult<bool>;
+    /// Purge demandes, codes et jetons expirés à `now` ; renvoie le nombre de lignes supprimées.
+    async fn prune_expired(&self, now: DateTime<Utc>) -> RepoResult<u64>;
+}
+
+/// Demandes d'autorisation en attente gardées au plus : la route est publique.
+pub const MAX_PENDING_REQUESTS: usize = 100;
 
 #[derive(Debug, Clone, Default)]
 pub struct PortfolioData {

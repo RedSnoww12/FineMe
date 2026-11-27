@@ -149,7 +149,7 @@ impl McpCallJournal for PgStore {
             "INSERT INTO mcp_calls (at, token_id, token_name, tool, success) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(call.at)
-        .bind(call.token_id.as_uuid())
+        .bind(call.token_id)
         .bind(&call.token_name)
         .bind(&call.tool)
         .bind(call.success)
@@ -171,7 +171,7 @@ impl McpCallJournal for PgStore {
             .into_iter()
             .map(|row| McpCall {
                 at: row.at,
-                token_id: AccessTokenId::from_uuid(row.token_id),
+                token_id: row.token_id,
                 token_name: row.token_name,
                 tool: row.tool,
                 success: row.success,

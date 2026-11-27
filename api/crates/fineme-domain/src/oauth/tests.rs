@@ -134,6 +134,11 @@ fn public_urls_are_bare_origins() {
 fn resource_accepts_only_the_mcp_endpoint() {
     let resource = ProtectedResource::mcp(&issuer());
     assert_eq!(resource.as_str(), "https://api.example.test/mcp");
+    assert_eq!(
+        ProtectedResource::parse(resource.as_str()),
+        Some(resource.clone())
+    );
+    assert_eq!(ProtectedResource::parse("https://api.example.test"), None);
     for accepted in [
         "https://api.example.test/mcp",
         "https://api.example.test/mcp/",
@@ -260,7 +265,7 @@ fn redirect_must_stay_on_the_client_host_or_the_local_machine() {
 }
 
 #[test]
-fn grant_is_usable_only_when_active_at_the_current_session_version() {
+fn grant_is_usable_only_when_active_at_the_current_password_version() {
     let grant = OAuthGrant {
         id: OAuthGrantId::generate(),
         user: UserId::generate(),
@@ -269,7 +274,7 @@ fn grant_is_usable_only_when_active_at_the_current_session_version() {
         redirect_uri: redirect(),
         scope: TokenScope::Read,
         resource: ProtectedResource::mcp(&issuer()),
-        session_version: 3,
+        password_version: 3,
         created_at: DateTime::UNIX_EPOCH,
         last_used_at: None,
         revoked_at: None,

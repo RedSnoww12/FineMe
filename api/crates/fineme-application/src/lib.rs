@@ -17,6 +17,7 @@ pub mod history;
 pub mod holdings;
 pub mod import_profiles;
 pub mod members;
+pub mod oauth;
 pub mod operations;
 pub mod overview;
 pub mod performance;

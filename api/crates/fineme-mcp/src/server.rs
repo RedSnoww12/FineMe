@@ -271,8 +271,9 @@ mod tests {
     use super::*;
     use fineme_application::testing::{TestApp, holding_input};
     use fineme_domain::access_token::TokenScope;
-    use fineme_domain::ids::{AccessTokenId, UserId};
+    use fineme_domain::ids::UserId;
     use serde_json::json;
+    use uuid::Uuid;
 
     /// Foyer fictif : courant 60/20 (1 000 €) et PEA d'Alice (500 € + 10 × 25 €).
     async fn server() -> FinemeMcp {
@@ -408,7 +409,7 @@ mod tests {
         let mcp = FinemeMcp::new(Arc::new(t.app));
         let principal = AccessPrincipal {
             user: UserId::generate(),
-            token_id: AccessTokenId::generate(),
+            token_id: Uuid::new_v4(),
             token_name: "Claude".into(),
             scope: TokenScope::Read,
         };

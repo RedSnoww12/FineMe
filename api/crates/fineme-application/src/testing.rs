@@ -17,11 +17,12 @@ use fineme_domain::history::DateRange;
 use fineme_domain::holding::{Holding, HoldingKind, PriceSource};
 use fineme_domain::ids::{
     AccessTokenId, AccountId, AlertId, BudgetRuleId, ConnectionId, GoalId, HoldingId, MemberId,
-    OperationId, TransactionId, UserId,
+    OAuthGrantId, OperationId, TransactionId, UserId,
 };
 use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::Member;
+use fineme_domain::oauth::{ClientId, ClientMetadata, OAuthGrant, PublicUrl};
 use fineme_domain::operation::Operation;
 use fineme_domain::performance::Benchmark;
 use fineme_domain::portfolio::{Snapshot, Totals};
@@ -30,6 +31,7 @@ use uuid::Uuid;
 
 use crate::app::{App, Ports, Settings};
 use crate::commands::{AccountInput, HoldingInput, LoanInput, OwnerInput, PropertyInput};
+use crate::oauth::OAuthSettings;
 use crate::ports::*;
 
 // ---------------------------------------------------------------- stockage en mémoire
@@ -64,6 +66,12 @@ pub struct State {
     /// Jetons d'accès et empreinte de leur secret.
     pub access_tokens: Vec<(AccessToken, SecretDigest)>,
     pub mcp_calls: Vec<McpCall>,
+    pub oauth_requests: Vec<(SecretDigest, PendingRequest)>,
+    /// Empreinte, code, « déjà utilisé » et « rejoué ».
+    pub oauth_codes: Vec<(SecretDigest, AuthorizationCode, bool, bool)>,
+    pub oauth_grants: Vec<OAuthGrant>,
+    pub oauth_access: Vec<(SecretDigest, OAuthGrantId, DateTime<Utc>)>,
+    pub oauth_refresh: Vec<(SecretDigest, OAuthGrantId, DateTime<Utc>, bool)>,
 }
 
 impl State {
@@ -208,6 +216,219 @@ impl AccessTokenRepository for InMemoryStore {
     }
 }
 
+impl State {
+    fn grant(&self, id: OAuthGrantId) -> Option<OAuthGrant> {
+        self.oauth_grants.iter().find(|g| g.id == id).cloned()
+    }
+
+    fn add_pair(&mut self, grant: OAuthGrantId, pair: &IssuedPair) {
+        self.oauth_access
+            .push((pair.access.clone(), grant, pair.access_expires_at));
+        self.oauth_refresh
+            .push((pair.refresh.clone(), grant, pair.refresh_expires_at, false));
+    }
+}
+
+#[async_trait]
+impl OAuthRepository for InMemoryStore {
+    async fn save_request(
+        &self,
+        digest: &SecretDigest,
+        pending: &PendingRequest,
+        now: DateTime<Utc>,
+    ) -> RepoResult<()> {
+        let mut state = self.lock();
+        state.oauth_requests.retain(|(_, p)| p.expires_at > now);
+        state.oauth_requests.push((digest.clone(), pending.clone()));
+        let excess = state
+            .oauth_requests
+            .len()
+            .saturating_sub(MAX_PENDING_REQUESTS);
+        state.oauth_requests.drain(..excess);
+        Ok(())
+    }
+    async fn find_request(&self, digest: &SecretDigest) -> RepoResult<Option<PendingRequest>> {
+        Ok(self
+            .lock()
+            .oauth_requests
+            .iter()
+            .find(|(d, _)| d == digest)
+            .map(|(_, p)| p.clone()))
+    }
+    async fn take_request(&self, digest: &SecretDigest) -> RepoResult<bool> {
+        let mut state = self.lock();
+        let count = state.oauth_requests.len();
+        state.oauth_requests.retain(|(d, _)| d != digest);
+        Ok(state.oauth_requests.len() < count)
+    }
+    async fn save_code(&self, digest: &SecretDigest, code: &AuthorizationCode) -> RepoResult<()> {
+        self.lock()
+            .oauth_codes
+            .push((digest.clone(), code.clone(), false, false));
+        Ok(())
+    }
+    async fn consume_code(
+        &self,
+        digest: &SecretDigest,
+        _now: DateTime<Utc>,
+    ) -> RepoResult<Option<CodeUse>> {
+        let mut state = self.lock();
+        Ok(state
+            .oauth_codes
+            .iter_mut()
+            .find(|(d, ..)| d == digest)
+            .map(|(_, code, used, replayed)| {
+                if std::mem::replace(used, true) {
+                    *replayed = true;
+                    CodeUse::Replayed(Box::new(code.clone()))
+                } else {
+                    CodeUse::First(Box::new(code.clone()))
+                }
+            }))
+    }
+    async fn create_grant(&self, grant: &OAuthGrant, pair: &IssuedPair) -> RepoResult<bool> {
+        let mut state = self.lock();
+        if state
+            .oauth_codes
+            .iter()
+            .any(|(_, code, _, replayed)| code.grant_id == grant.id && *replayed)
+        {
+            return Ok(false);
+        }
+        for old in &mut state.oauth_grants {
+            if old.user == grant.user && old.client_id == grant.client_id && old.is_active() {
+                old.revoked_at = Some(grant.created_at);
+            }
+        }
+        state.oauth_grants.push(grant.clone());
+        state.add_pair(grant.id, pair);
+        Ok(true)
+    }
+    async fn grants(&self, user: UserId) -> RepoResult<Vec<OAuthGrant>> {
+        let mut grants: Vec<OAuthGrant> = self
+            .lock()
+            .oauth_grants
+            .iter()
+            .filter(|g| g.user == user)
+            .cloned()
+            .collect();
+        grants.sort_by_key(|g| std::cmp::Reverse(g.created_at));
+        Ok(grants)
+    }
+    async fn revoke_grant(&self, id: OAuthGrantId, at: DateTime<Utc>) -> RepoResult<bool> {
+        let mut state = self.lock();
+        match state
+            .oauth_grants
+            .iter_mut()
+            .find(|g| g.id == id && g.is_active())
+        {
+            Some(grant) => {
+                grant.revoked_at = Some(at);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+    async fn touch_grant(&self, id: OAuthGrantId, at: DateTime<Utc>) -> RepoResult<()> {
+        if let Some(grant) = self.lock().oauth_grants.iter_mut().find(|g| g.id == id) {
+            grant.last_used_at = Some(at);
+        }
+        Ok(())
+    }
+    async fn find_access(&self, digest: &SecretDigest) -> RepoResult<Option<AccessRecord>> {
+        let state = self.lock();
+        Ok(state
+            .oauth_access
+            .iter()
+            .find(|(d, _, _)| d == digest)
+            .and_then(|(d, id, expires_at)| {
+                state.grant(*id).map(|grant| AccessRecord {
+                    grant,
+                    digest: d.clone(),
+                    expires_at: *expires_at,
+                })
+            }))
+    }
+    async fn find_refresh(&self, digest: &SecretDigest) -> RepoResult<Option<RefreshRecord>> {
+        let state = self.lock();
+        Ok(state
+            .oauth_refresh
+            .iter()
+            .find(|(d, ..)| d == digest)
+            .and_then(|(_, id, expires_at, used)| {
+                state.grant(*id).map(|grant| RefreshRecord {
+                    grant,
+                    expires_at: *expires_at,
+                    used: *used,
+                })
+            }))
+    }
+    async fn rotate(
+        &self,
+        old_refresh: &SecretDigest,
+        grant: OAuthGrantId,
+        pair: &IssuedPair,
+    ) -> RepoResult<bool> {
+        let mut state = self.lock();
+        let Some((.., used)) = state
+            .oauth_refresh
+            .iter_mut()
+            .find(|(d, id, _, used)| d == old_refresh && *id == grant && !used)
+        else {
+            return Ok(false);
+        };
+        *used = true;
+        state.add_pair(grant, pair);
+        Ok(true)
+    }
+    async fn prune_expired(&self, now: DateTime<Utc>) -> RepoResult<u64> {
+        let mut state = self.lock();
+        let count = |s: &State| {
+            s.oauth_requests.len()
+                + s.oauth_codes.len()
+                + s.oauth_access.len()
+                + s.oauth_refresh.len()
+        };
+        let before = count(&state);
+        state.oauth_requests.retain(|(_, p)| p.expires_at > now);
+        state.oauth_codes.retain(|(_, c, ..)| c.expires_at > now);
+        state.oauth_access.retain(|(_, _, e)| *e > now);
+        state.oauth_refresh.retain(|(_, _, e, _)| *e > now);
+        Ok((before - count(&state)) as u64)
+    }
+}
+
+/// Documents de métadonnées servis par URL ; les autres sont illisibles.
+#[derive(Default)]
+pub struct FakeClientMetadata(Mutex<HashMap<String, ClientMetadata>>);
+
+impl FakeClientMetadata {
+    /// Publie à `url` le document d'un client public nommé `name`.
+    pub fn publish(&self, url: &str, name: &str, redirect_uris: &[&str]) {
+        self.0.lock().unwrap().insert(
+            url.to_string(),
+            ClientMetadata {
+                client_id: url.to_string(),
+                client_name: name.to_string(),
+                redirect_uris: redirect_uris.iter().map(ToString::to_string).collect(),
+                token_endpoint_auth_method: Some("none".to_string()),
+            },
+        );
+    }
+}
+
+#[async_trait]
+impl ClientMetadataFetcher for FakeClientMetadata {
+    async fn fetch(&self, client_id: &ClientId) -> Result<ClientMetadata, ProviderError> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(client_id.as_str())
+            .cloned()
+            .ok_or_else(|| ProviderError("document introuvable".into()))
+    }
+}
+
 #[async_trait]
 impl McpCallJournal for InMemoryStore {
     async fn record(&self, call: &McpCall) -> RepoResult<()> {
@@ -343,6 +564,9 @@ impl UserRepository for InMemoryStore {
     async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>> {
         Ok(self.lock().users.iter().find(|c| c.user.id == id).cloned())
     }
+    async fn owner(&self) -> RepoResult<Option<Credentials>> {
+        Ok(self.lock().users.first().cloned())
+    }
     async fn update_password(
         &self,
         id: UserId,
@@ -355,7 +579,13 @@ impl UserRepository for InMemoryStore {
         };
         credentials.password_hash = password_hash.to_string();
         credentials.session_version += 1;
+        credentials.password_version += 1;
         let version = credentials.session_version;
+        for grant in &mut state.oauth_grants {
+            if grant.user == id && grant.revoked_at.is_none() {
+                grant.revoked_at = Some(revoked_at);
+            }
+        }
         for (token, _) in &mut state.access_tokens {
             if token.user == id && token.revoked_at.is_none() {
                 token.revoked_at = Some(revoked_at);
@@ -1375,6 +1605,15 @@ impl BankProvider for FakeBank {
     }
 }
 
+/// Réglages OAuth fictifs des tests.
+pub fn oauth_settings() -> OAuthSettings {
+    OAuthSettings {
+        issuer: PublicUrl::parse("https://api.example.test").unwrap(),
+        web: PublicUrl::parse("https://web.example.test").unwrap(),
+        client_hosts: vec!["claude.ai".to_string()],
+    }
+}
+
 // ---------------------------------------------------------------- application de test et fixtures
 
 pub struct TestApp {
@@ -1388,6 +1627,8 @@ pub struct TestApp {
     /// Fournisseur de repli pour les titres, essayé après `securities`.
     pub fallback: Arc<FakePrices>,
     pub crypto: Arc<FakePrices>,
+    /// Documents de métadonnées des clients OAuth.
+    pub clients: Arc<FakeClientMetadata>,
     pub alice: MemberId,
     pub bob: MemberId,
 }
@@ -1402,6 +1643,7 @@ impl TestApp {
         let securities = Arc::new(FakePrices::new(HoldingKind::Security));
         let fallback = Arc::new(FakePrices::new(HoldingKind::Security));
         let crypto = Arc::new(FakePrices::new(HoldingKind::Crypto));
+        let clients = Arc::new(FakeClientMetadata::default());
         let (alice, bob) = (MemberId::generate(), MemberId::generate());
         if with_household {
             let mut state = store.0.lock().unwrap();
@@ -1424,6 +1666,8 @@ impl TestApp {
             login_journal: store.clone(),
             access_tokens: store.clone(),
             mcp_calls: store.clone(),
+            oauth: store.clone(),
+            client_metadata: clients.clone(),
             portfolio: store.clone(),
             fx_rates: store.clone(),
             transactions: store.clone(),
@@ -1459,6 +1703,7 @@ impl TestApp {
             securities,
             fallback,
             crypto,
+            clients,
             alice,
             bob,
         }
@@ -1494,6 +1739,15 @@ impl TestApp {
             ..Settings::default()
         };
         Self::build(true, None, settings).await
+    }
+
+    /// Application vide dont le serveur d'autorisation OAuth est activé.
+    pub async fn with_oauth() -> Self {
+        let settings = Settings {
+            oauth: Some(oauth_settings()),
+            ..Settings::default()
+        };
+        Self::build(false, None, settings).await
     }
 
     /// Foyer fictif : Alice (membre principal) et Bob.
