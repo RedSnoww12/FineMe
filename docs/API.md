@@ -5,10 +5,11 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 - `api/` : Rust (Axum + sqlx + Postgres), hébergé sur Render, base Postgres Supabase.
 - `web/` : React + Vite + TypeScript, hébergé sur Vercel.
 - Toutes les routes sont préfixées par `/api`. JSON partout, `snake_case`.
-- Auth : `Authorization: Bearer <JWT>` sur toutes les routes sauf `/api/health`, `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`, `/api/auth/login/totp`, `/api/auth/reset`.
+- Auth : `Authorization: Bearer <JWT>` sur toutes les routes sauf `/api/health`, `/api/auth/status`, `/api/auth/setup`, `/api/auth/login`, `/api/auth/login/totp`, `/api/auth/reset`, `/api/oauth/requests/*`.
   `/api/jobs/daily` n'accepte pas le JWT : elle exige `Authorization: Bearer <CRON_SECRET>` (voir « Tâche quotidienne »).
   Un jeton d'accès IA (`fm_pat_…`) n'est **jamais** accepté sur `/api/*` (401) : il ne sert qu'au serveur MCP `/mcp`
-  (voir « Serveur MCP »).
+  (voir « Serveur MCP »). Les jetons OAuth (`fm_oat_…`, `fm_ort_…`) non plus.
+- Les routes `/oauth/*` et `/.well-known/oauth-*` (voir « Connecteur OAuth ») sont hors préfixe `/api`.
 - Montants : nombres JSON (f64). Devise de référence : EUR. Dates : `YYYY-MM-DD`. Identifiants : UUID.
 - Parts de détention : fraction `0..1` (0.5 = 50 %).
 - Erreurs : statut HTTP + `{ "error": "message lisible en français" }`.
@@ -19,6 +20,10 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `PORT` (défaut 8080), `SETUP_TOKEN` (optionnel en local, à définir en production : code exigé pour la première configuration, afin que personne d'autre ne puisse créer le compte), `RECOVERY_TOKEN` (optionnel : code de secours qui permet de réinitialiser un mot de passe perdu ; absent = récupération désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `CRON_SECRET` (optionnel : secret de la tâche quotidienne `/api/jobs/daily` ; absent = tâche désactivée ; au moins 16 caractères, sinon le serveur refuse de démarrer), `EODHD_API_KEY` (optionnel : clé du fournisseur de cours de repli EODHD ; absente = pas de repli pour les titres), `TRUSTED_PROXY_HOPS` (optionnel, défaut 1 : nombre de proxys de confiance devant l'API, voir « Limitation des tentatives »),
 `MCP_ALLOWED_HOSTS` (optionnel : hôtes acceptés dans l'en-tête `Host` de `/mcp`, séparés par des virgules, par ex.
 `fineme-api.onrender.com` ; défaut `localhost,127.0.0.1,::1`, protection contre le DNS rebinding).
+`PUBLIC_API_URL` et `WEB_URL` (optionnels, ensemble : URL publiques de l'API et du front, sans chemin ni `/` final,
+`https` sauf `localhost` ; absents = connecteur OAuth désactivé, ses routes répondent 404 — sauf `/api/oauth/grants*`, qui permet toujours de voir et révoquer les autorisations existantes ; un seul des deux, ou une
+URL invalide, et le serveur refuse de démarrer), `OAUTH_CLIENT_HOSTS` (optionnel : hôtes dont les documents de
+métadonnées client OAuth sont acceptés, séparés par des virgules ; défaut `claude.ai`).
 Les migrations sqlx s'exécutent au démarrage.
 
 ## Auth
@@ -61,7 +66,7 @@ utilise l'adresse TCP (sans proxy). Sans IP connue, toutes les requêtes partage
 
 ### Journal des connexions
 
-`LoginEvent = { at: string (RFC 3339), action: "login" | "totp" | "reset", success: bool, ip: string | null, user_agent: string | null }`
+`LoginEvent = { at: string (RFC 3339), action: "login" | "totp" | "reset" | "oauth", success: bool, ip: string | null, user_agent: string | null }`
 
 `action` vaut `totp` pour la seconde étape d'une connexion avec second facteur (code TOTP ou de secours) ; un mot
 de passe juste suivi d'un défi n'est pas journalisé (seul le résultat de la seconde étape l'est).
@@ -144,9 +149,109 @@ type McpCall = { at: string; token_id: string; token_name: string; tool: string;
 - `last_used_at` est mis à jour à chaque appel MCP authentifié par le jeton.
 - Un jeton n'expire pas de lui-même : il sert à un client configuré une fois, et se révoque ici à tout moment.
 - Changer (`PUT /api/auth/password`) ou réinitialiser (`POST /api/auth/reset`) le mot de passe **révoque tous les
-  jetons d'accès**. Activer ou désactiver le second facteur ne les touche pas (désactiver exige déjà mot de passe et
+  jetons d'accès et toutes les autorisations OAuth** (voir « Connecteur OAuth »). Activer ou désactiver le second facteur ne les touche pas (désactiver exige déjà mot de passe et
   code ; après une compromission, changer le mot de passe coupe tout).
 - Le journal des appels MCP garde 90 jours (purge par la tâche quotidienne).
+
+### Connecteur OAuth (claude.ai)
+
+FineMe est son propre **serveur d'autorisation OAuth** (spécification d'autorisation MCP 2026-07-28) pour qu'un client
+comme claude.ai se branche sur `/mcp` sans jeton recopié. Client public avec PKCE, portée unique `read`, aucun
+enregistrement dynamique : le client est identifié par un **Client ID Metadata Document** (`client_id` = URL `https`
+de ce document). Issuer = `PUBLIC_API_URL`, ressource protégée = `PUBLIC_API_URL/mcp`.
+
+```ts
+type OAuthGrant = {
+  id: string;
+  client_id: string;        // URL du document de métadonnées du client
+  client_name: string;      // `client_name` de ce document
+  redirect_host: string;    // hôte de l'URI de redirection autorisée
+  scope: "read";
+  created_at: string; last_used_at: string | null; revoked_at: string | null; // RFC 3339
+};
+type OAuthRequestView = { client_name: string; redirect_host: string; scope: "read";
+  expires_in: number };  // secondes restantes ; ne dit pas si le second facteur est activé (route publique)
+type OAuthRedirect = { redirect_to: string };
+```
+
+Hors `/api` (aucune authentification, aucun cookie) :
+
+| Méthode | Route | Rôle |
+|---|---|---|
+| GET | `/.well-known/oauth-protected-resource/mcp` et `/.well-known/oauth-protected-resource` | RFC 9728 : `{ resource, authorization_servers: [issuer], scopes_supported: ["read"], bearer_methods_supported: ["header"], resource_name: "FineMe" }` |
+| GET | `/.well-known/oauth-authorization-server` | RFC 8414 : `issuer`, `authorization_endpoint`, `token_endpoint`, `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code","refresh_token"]`, `code_challenge_methods_supported: ["S256"]`, `token_endpoint_auth_methods_supported: ["none"]`, `scopes_supported: ["read"]`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` |
+| GET | `/oauth/authorize` | Demande d'autorisation (ci-dessous) |
+| POST | `/oauth/token` | Échange et renouvellement (ci-dessous) |
+
+Sur `authorize` et `token`, un paramètre vide vaut absent, et aucun paramètre ne peut être présent deux fois
+(`authorize` : 400 sans redirection ; `token` : `invalid_request`).
+
+**`GET /oauth/authorize`** : `response_type=code`, `client_id`, `redirect_uri`, `code_challenge`,
+`code_challenge_method=S256`, `state` (facultatif), `scope` (facultatif, seul `read`), `resource` (facultatif ; sinon
+la ressource de ce serveur).
+- `client_id` : URL `https` d'un nom de domaine (pas d'adresse IP) présent dans `OAUTH_CLIENT_HOSTS`, sans port,
+  identifiants, requête ni fragment, avec un chemin simple (lettres, chiffres, `. _ ~ - /` ; ni `%`, ni `//`, ni `..`).
+  La `redirect_uri` doit être sur **le même hôte** que le `client_id`, ou sur la machine locale.
+  Le document est lu sans suivre de redirection, en moins de 5 s et 16 Ko ; son `client_id` doit être exactement
+  cette URL, `redirect_uris` doit contenir **exactement** la `redirect_uri` demandée, et
+  `token_endpoint_auth_method` doit être `none` (ou absent).
+- Client ou `redirect_uri` invalide : **400** `{ "error": "…" }`, jamais de redirection.
+- Autre erreur (`response_type`, `state` de plus de 1024 octets ou avec un caractère de contrôle (non recopié),
+  PKCE, `scope`, `resource`) : 302 vers `redirect_uri` avec `error`
+  (`unsupported_response_type`, `invalid_request`, `invalid_scope`, `invalid_target`), `state` et `iss`.
+- Succès : 302 vers `WEB_URL/oauth/consent?request=<identifiant>` (256 bits aléatoires, valable 10 minutes).
+- Limitée par IP : au-delà de 20 demandes (compteur oublié après 1 h sans demande), **429** + `Retry-After`,
+  délai croissant. Au plus 100 demandes en attente, les plus anciennes sont retirées.
+
+**Écran de consentement** (`WEB_URL/oauth/consent`) : routes publiques, car le consentement se confirme par le mot de
+passe et le second facteur, pas par la session web.
+
+| Méthode | Route | Corps | Réponse |
+|---|---|---|---|
+| GET | `/api/oauth/requests/:id` | – | `OAuthRequestView` — (404) demande inconnue, expirée ou déjà traitée |
+| POST | `/api/oauth/requests/:id/approve` | `{ password, code? }` | `OAuthRedirect` : `redirect_uri?code=…&state=…&iss=…` — (403) mot de passe faux, ou code absent ou incorrect alors que le second facteur est activé ; (404) comme ci-dessus ; (409) déjà 10 autorisations actives |
+| POST | `/api/oauth/requests/:id/deny` | – | `OAuthRedirect` : `redirect_uri?error=access_denied&state=…&iss=…` — (404) |
+
+Corps limités à 16 Ko ; les réponses d'`approve` et `deny` portent `Cache-Control: no-store`.
+`approve` partage le limiteur de la connexion et chaque tentative qui atteint la vérification est journalisée
+(`LoginEvent.action = "oauth"`). Une demande ne sert qu'une fois (acceptée ou refusée).
+
+**`POST /oauth/token`** (`application/x-www-form-urlencoded`) :
+- `grant_type=authorization_code` : `code`, `redirect_uri`, `client_id`, `code_verifier` (43 à 128 caractères),
+  `resource` (facultatif, doit être celle de l'autorisation).
+- `grant_type=refresh_token` : `refresh_token`, `client_id`, `scope` et `resource` (facultatifs, jamais élargis).
+
+Réponse 200 `{ access_token, token_type: "Bearer", expires_in: 3600, refresh_token, scope: "read" }`. Erreurs RFC 6749
+`{ "error": "invalid_request" | "invalid_grant" | "invalid_client" | "unsupported_grant_type" | "invalid_scope" |
+"invalid_target", "error_description" }` en 400. Seuls les clients publics sont acceptés : un `client_secret` ou une
+`client_assertion` donne `invalid_client` (400), un en-tête `Authorization` donne `invalid_client` en **401** avec
+`WWW-Authenticate: Basic realm="FineMe"`. Formulaire de plus de 16 Ko : `invalid_request`. Connecteur désactivé (404)
+et limite atteinte (429) portent `error: "invalid_request"`, une panne du serveur `error: "server_error"`. Puis 429 + `Retry-After` après des refus répétés d'un secret **mal
+formé** (par IP, compteur distinct ; un code ou un jeton bien formé, valide ou non, n'est jamais bloqué). Toutes les réponses portent `Cache-Control: no-store`.
+
+**Jetons** : opaques, 32 octets aléatoires, seule l'empreinte SHA-256 est conservée.
+
+| Préfixe | Rôle | Durée |
+|---|---|---|
+| `fm_oac_` | code d'autorisation, usage unique | 60 s |
+| `fm_oat_` | jeton d'accès, accepté sur `/mcp` seulement | 1 h |
+| `fm_ort_` | jeton de renouvellement, **tournant** | 30 jours depuis la dernière rotation |
+
+Réutiliser un code déjà échangé (dans sa durée de vie, par le même client) ou un jeton de renouvellement déjà
+tourné **révoque toute l'autorisation**.
+
+**Gestion** (sous JWT) :
+
+| Méthode | Route | Corps | Réponse |
+|---|---|---|---|
+| GET | `/api/oauth/grants` | – | `OAuthGrant[]`, du plus récent au plus ancien (révoquées comprises) |
+| POST | `/api/oauth/grants/:id/revoke` | `{ password, code? }` | `OAuthGrant` — (403) comme pour les jetons d'accès ; (404) autorisation inconnue ; (409) déjà révoquée |
+
+Révoquer coupe immédiatement jetons d'accès et de renouvellement. `last_used_at` est mis à jour à chaque appel MCP.
+Au plus **10 autorisations actives** ; autoriser un client dont une autorisation est déjà active la remplace. Activer ou
+désactiver le second facteur ne les touche pas. Les demandes, codes et jetons expirés sont purgés par la tâche
+quotidienne ; les appels MCP d'une autorisation apparaissent dans `McpCall` (`token_id`/`token_name` = identifiant et
+nom du client de l'autorisation).
 
 ## Membres du foyer
 
@@ -832,12 +937,16 @@ comptes d'investissement et `expense_ratio` des positions, rapportés à la vale
 ## Serveur MCP (lecture seule)
 
 Point d'entrée `POST /mcp` (hors préfixe `/api`), transport MCP **Streamable HTTP** sans session, réponses JSON.
-Authentification : `Authorization: Bearer <jeton d'accès>` (voir « Jetons d'accès IA ») ; le JWT de session y est
-refusé. Contrôles, dans l'ordre :
-1. Jeton absent, inconnu ou révoqué → **401** `{ "error": "…" }` avec `WWW-Authenticate: Bearer`, avant toute lecture du
+Authentification : `Authorization: Bearer <jeton>` — un jeton d'accès personnel `fm_pat_` (voir « Jetons d'accès IA »)
+ou un jeton d'accès OAuth `fm_oat_` (voir « Connecteur OAuth ») ; le JWT de session y est refusé. Contrôles, dans
+l'ordre :
+1. Jeton absent, inconnu, expiré, révoqué ou émis pour une autre ressource → **401** `{ "error": "…" }` avec
+   `WWW-Authenticate: Bearer` (et, si OAuth est activé, `resource_metadata="PUBLIC_API_URL/.well-known/oauth-protected-resource/mcp"`
+   et `scope="read"`), avant toute lecture du
    message MCP ; la réponse ne reprend jamais le jeton reçu. Ces échecs sont limités par IP (même progression que la
    connexion, compteur distinct) : pendant le délai, un jeton refusé reçoit 429 + `Retry-After`. Un jeton valide
-   n'est jamais bloqué par ce limiteur.
+   n'est jamais bloqué par ce limiteur, une requête sans jeton et un jeton `fm_oat_` bien formé (expiré, à renouveler)
+   non plus : ils reçoivent toujours le 401.
 2. En-tête `Host` absent de `MCP_ALLOWED_HOSTS`, ou en-tête `Origin` présent (aucun navigateur n'est un client
    légitime) → 403. `/mcp` n'envoie aucun en-tête CORS.
 3. Corps limité à 1 Mo (413), un seul message JSON-RPC par requête. `GET` et `DELETE /mcp` → 405.

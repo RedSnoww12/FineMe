@@ -30,6 +30,7 @@ describe('describeAttempt', () => {
     expect(describeAttempt({ action: 'login', success: true })).toBe('Connexion réussie')
     expect(describeAttempt({ action: 'reset', success: false })).toBe('Réinitialisation refusée')
     expect(describeAttempt({ action: 'totp', success: false })).toBe('Vérification en deux étapes refusée')
+    expect(describeAttempt({ action: 'oauth', success: true })).toBe('Autorisation OAuth réussie')
   })
 })
 

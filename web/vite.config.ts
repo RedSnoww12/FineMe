@@ -40,8 +40,9 @@ const pwa = VitePWA({
   workbox: {
     globPatterns: ['**/*.{js,css,html,svg,woff2,ico}', 'pwa-*.png', 'apple-touch-icon.png'],
     navigateFallback: '/index.html',
-    // Les appels à l'API (même origine via proxy ou réécriture) ne sont jamais servis par la coquille.
-    navigateFallbackDenylist: [/^\/api\//, /^\/mcp/],
+    // Les appels à l'API (même origine via proxy ou réécriture) ne sont jamais servis par la coquille. Le
+    // consentement OAuth non plus : servi par l'hébergeur, il garde ses propres en-têtes (no-referrer).
+    navigateFallbackDenylist: [/^\/api\//, /^\/mcp/, /^\/oauth\//],
     runtimeCaching: [],
     cleanupOutdatedCaches: true,
   },

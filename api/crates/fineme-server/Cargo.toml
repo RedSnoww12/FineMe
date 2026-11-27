@@ -9,6 +9,7 @@ workspace = true
 
 # Binaire : configuration, composition root, migrations.
 [dependencies]
+fineme-domain = { workspace = true }
 fineme-application = { workspace = true }
 fineme-infra = { workspace = true }
 fineme-http = { workspace = true }
@@ -23,8 +24,9 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
-fineme-domain = { workspace = true }
 http-body-util = "0.1.5"
 serde_json = { workspace = true }
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+sha2 = { workspace = true }
 tower = { version = "0.5.3", features = ["util"] }
+wiremock = "0.6.5"

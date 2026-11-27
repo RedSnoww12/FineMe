@@ -2,6 +2,7 @@
 
 mod access_tokens;
 mod alerts;
+mod oauth;
 mod rows;
 
 use std::collections::HashMap;
@@ -400,9 +401,11 @@ async fn save_goal(conn: &mut PgConnection, g: &Goal) -> RepoResult<()> {
 
 // ---------------------------------------------------------------- utilisateurs
 
-type CredentialsRow = (Uuid, String, String, String, i64);
+type CredentialsRow = (Uuid, String, String, String, i64, i64);
 
-fn credentials((id, email, name, password_hash, session_version): CredentialsRow) -> Credentials {
+fn credentials(
+    (id, email, name, password_hash, session_version, password_version): CredentialsRow,
+) -> Credentials {
     Credentials {
         user: User {
             id: UserId::from_uuid(id),
@@ -411,6 +414,7 @@ fn credentials((id, email, name, password_hash, session_version): CredentialsRow
         },
         password_hash,
         session_version,
+        password_version,
     }
 }
 
@@ -425,7 +429,7 @@ impl UserRepository for PgStore {
 
     async fn find_by_email(&self, email: &str) -> RepoResult<Option<Credentials>> {
         let row: Option<CredentialsRow> = sqlx::query_as(
-            "SELECT id, email, name, password_hash, session_version FROM users WHERE email = $1",
+            "SELECT id, email, name, password_hash, session_version, password_version FROM users WHERE email = $1",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -436,9 +440,19 @@ impl UserRepository for PgStore {
 
     async fn find_by_id(&self, id: UserId) -> RepoResult<Option<Credentials>> {
         let row: Option<CredentialsRow> = sqlx::query_as(
-            "SELECT id, email, name, password_hash, session_version FROM users WHERE id = $1",
+            "SELECT id, email, name, password_hash, session_version, password_version FROM users WHERE id = $1",
         )
         .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.map(credentials))
+    }
+
+    async fn owner(&self) -> RepoResult<Option<Credentials>> {
+        let row: Option<CredentialsRow> = sqlx::query_as(
+            "SELECT id, email, name, password_hash, session_version, password_version FROM users ORDER BY id LIMIT 1",
+        )
         .fetch_optional(&self.pool)
         .await
         .map_err(db)?;
@@ -451,11 +465,11 @@ impl UserRepository for PgStore {
         password_hash: &str,
         revoked_at: DateTime<Utc>,
     ) -> RepoResult<Option<i64>> {
-        // Une transaction : hash, version de session et révocation des jetons d'accès changent ensemble.
+        // Une transaction : hash, version de session et révocation des jetons et autorisations changent ensemble.
         let mut tx = self.pool.begin().await.map_err(db)?;
         let version: Option<i64> = sqlx::query_scalar(
-            "UPDATE users SET password_hash = $2, session_version = session_version + 1 \
-             WHERE id = $1 RETURNING session_version",
+            "UPDATE users SET password_hash = $2, session_version = session_version + 1, \
+             password_version = password_version + 1 WHERE id = $1 RETURNING session_version",
         )
         .bind(id.as_uuid())
         .bind(password_hash)
@@ -465,6 +479,14 @@ impl UserRepository for PgStore {
         if version.is_some() {
             sqlx::query(
                 "UPDATE access_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(id.as_uuid())
+            .bind(revoked_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+            sqlx::query(
+                "UPDATE oauth_grants SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL",
             )
             .bind(id.as_uuid())
             .bind(revoked_at)

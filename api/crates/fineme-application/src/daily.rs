@@ -46,6 +46,9 @@ impl App {
         if let Err(error) = self.auth.prune_mcp_calls().await {
             tracing::warn!("journal des appels MCP non purgé : {error}");
         }
+        if let Err(error) = self.auth.prune_oauth().await {
+            tracing::warn!("demandes et jetons OAuth expirés non purgés : {error}");
+        }
         Ok(DailyReport {
             prices,
             snapshot_date,

@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from 'react'
+import { ConfirmationFields, RevokeAccessForm } from './Confirmation'
+import { OAuthGrants } from './OAuthGrants'
 import { useAccessTokens, useCreateAccessToken, useMcpCalls, useRevokeAccessToken } from '../hooks/useAccessTokens'
 import { useTotpStatus } from '../hooks/useTotp'
 import {
@@ -10,61 +12,11 @@ import {
   mcpEndpoint,
   toolLabel,
 } from '../lib/accessTokens'
+import { confirmationErrors, confirmationInput, type Confirmation, type ConfirmationErrors } from '../lib/confirmation'
 import { apiBaseUrl } from '@/shared/api/client'
 import type { AccessToken, CreatedAccessToken } from '@/shared/api/types'
 import { dateTime } from '@/shared/lib/format'
 import { Badge, Button, ErrorState, FormError, LoadingBlock, Notice, Panel, TextField } from '@/shared/ui/ui'
-
-type Confirmation = { password: string; code: string }
-type ConfirmationErrors = Partial<Record<keyof Confirmation | 'name', string>>
-
-/** Erreurs de saisie de la confirmation (mot de passe, et code si le second facteur est activé). */
-function confirmationErrors(form: Confirmation, totpEnabled: boolean): ConfirmationErrors {
-  const errors: ConfirmationErrors = {}
-  if (!form.password) errors.password = 'Saisissez votre mot de passe.'
-  if (totpEnabled && !form.code.trim()) errors.code = 'Saisissez un code de l’application ou un code de secours.'
-  return errors
-}
-
-function confirmationInput(form: Confirmation) {
-  const code = form.code.replace(/\s+/g, '')
-  return { password: form.password, ...(code ? { code } : {}) }
-}
-
-function ConfirmationFields({
-  form,
-  errors,
-  totpEnabled,
-  onChange,
-}: {
-  form: Confirmation
-  errors: ConfirmationErrors
-  totpEnabled: boolean
-  onChange: (form: Confirmation) => void
-}) {
-  return (
-    <>
-      <TextField
-        label="Mot de passe"
-        type="password"
-        value={form.password}
-        onChange={(password) => onChange({ ...form, password })}
-        error={errors.password}
-        autoComplete="current-password"
-      />
-      {totpEnabled ? (
-        <TextField
-          label="Code de vérification"
-          value={form.code}
-          onChange={(code) => onChange({ ...form, code })}
-          error={errors.code}
-          hint="Code de l’application ou code de secours."
-          autoComplete="one-time-code"
-        />
-      ) : null}
-    </>
-  )
-}
 
 /** Jeton tout juste créé : affiché une seule fois, avec la commande à lancer. */
 function CreatedSecret({ created, onDone }: { created: CreatedAccessToken; onDone: () => void }) {
@@ -172,36 +124,16 @@ function RevokeForm({
   totpEnabled: boolean
   onCancel: () => void
 }) {
-  const [form, setForm] = useState<Confirmation>({ password: '', code: '' })
-  const [errors, setErrors] = useState<ConfirmationErrors>({})
   const revoke = useRevokeAccessToken(onCancel)
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    const next = confirmationErrors(form, totpEnabled)
-    setErrors(next)
-    if (Object.keys(next).length === 0) revoke.mutate({ id: token.id, ...confirmationInput(form) })
-  }
-
   return (
-    <form
-      onSubmit={submit}
-      noValidate
-      aria-label={`Révoquer ${token.name}`}
-      className="mt-2 flex max-w-[420px] flex-col gap-3"
-    >
-      <p className="text-[13.5px] text-muted">Confirmez pour couper l’accès de ce client immédiatement.</p>
-      <ConfirmationFields form={form} errors={errors} totpEnabled={totpEnabled} onChange={setForm} />
-      <FormError error={revoke.error} />
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" onClick={onCancel}>
-          Annuler
-        </Button>
-        <Button size="sm" type="submit" variant="danger" busy={revoke.isPending}>
-          Révoquer
-        </Button>
-      </div>
-    </form>
+    <RevokeAccessForm
+      label={`Révoquer ${token.name}`}
+      totpEnabled={totpEnabled}
+      error={revoke.error}
+      busy={revoke.isPending}
+      onConfirm={(input) => revoke.mutate({ id: token.id, ...input })}
+      onCancel={onCancel}
+    />
   )
 }
 
@@ -234,7 +166,7 @@ function TokenList({ tokens, totpEnabled }: { tokens: AccessToken[]; totpEnabled
               ) : null}
             </div>
           </div>
-          {revoking === token.id ? (
+          {isActive(token) && revoking === token.id ? (
             <RevokeForm token={token} totpEnabled={totpEnabled} onCancel={() => setRevoking(null)} />
           ) : null}
         </li>
@@ -271,7 +203,7 @@ function CallJournal() {
   )
 }
 
-/** Accès IA : jetons en lecture seule pour brancher un client IA (Claude) sur le serveur MCP, et journal des appels. */
+/** Accès IA : jetons et connexions OAuth en lecture seule sur le serveur MCP, et journal des appels. */
 export function AiAccessPanel() {
   const tokens = useAccessTokens()
   const totp = useTotpStatus()
@@ -282,9 +214,9 @@ export function AiAccessPanel() {
     <Panel title="Accès IA">
       <div className="flex flex-col gap-5">
         <p className="max-w-[64ch] text-muted">
-          Un jeton d’accès permet à un assistant IA (Claude Code, Claude Desktop) de consulter votre patrimoine, en
-          lecture seule : il ne peut rien modifier ni ouvrir le reste de l’application. Changer votre mot de passe
-          révoque tous les jetons.
+          Un assistant IA peut consulter votre patrimoine en lecture seule, avec un jeton d’accès (Claude Code, Claude
+          Desktop) ou une connexion OAuth (claude.ai) : il ne peut rien modifier ni ouvrir le reste de l’application.
+          Changer votre mot de passe révoque tous les jetons et toutes les connexions.
         </p>
         {tokens.isPending ? (
           <LoadingBlock rows={2} label="Chargement des jetons…" />
@@ -307,6 +239,10 @@ export function AiAccessPanel() {
             </section>
           </>
         )}
+        <section aria-label="Connexions OAuth">
+          <h3 className="mb-1 font-medium">Connexions OAuth</h3>
+          <OAuthGrants totpEnabled={totpEnabled} />
+        </section>
         <section aria-label="Journal des appels">
           <h3 className="mb-1 font-medium">Journal des appels</h3>
           <CallJournal />

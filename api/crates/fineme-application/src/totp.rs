@@ -276,7 +276,7 @@ impl AuthService {
         result
     }
 
-    async fn verify_identity(
+    pub(crate) async fn verify_identity(
         &self,
         user: UserId,
         password: &str,

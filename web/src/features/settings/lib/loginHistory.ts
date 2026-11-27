@@ -30,11 +30,17 @@ export function describeUserAgent(userAgent: string | null): string {
   return browser ?? system ?? userAgent
 }
 
+const ACTIONS: Record<LoginEvent['action'], string> = {
+  login: 'Connexion',
+  totp: 'Vérification en deux étapes',
+  reset: 'Réinitialisation',
+  oauth: 'Autorisation OAuth',
+}
+
 /** Libellé de l'action et de son issue : « Connexion réussie », « Réinitialisation refusée »… */
 export function describeAttempt(event: Pick<LoginEvent, 'action' | 'success'>): string {
-  const action =
-    event.action === 'reset' ? 'Réinitialisation' : event.action === 'totp' ? 'Vérification en deux étapes' : 'Connexion'
-  return `${action} ${event.success ? 'réussie' : 'refusée'}`
+  // Une action ajoutée par une API plus récente reste lisible.
+  return `${ACTIONS[event.action] ?? ACTIONS.login} ${event.success ? 'réussie' : 'refusée'}`
 }
 
 /** Nombre d'échecs parmi les tentatives listées. */

@@ -6,9 +6,11 @@ use fineme_domain::access_token::{
     AccessToken, AccessTokenName, AccessTokenSecret, MAX_ACTIVE_TOKENS, McpCall, SECRET_BYTES,
     SecretDigest, TokenScope,
 };
-use fineme_domain::ids::{AccessTokenId, UserId};
+use fineme_domain::ids::{AccessTokenId, OAuthGrantId, UserId};
 use fineme_domain::login::LoginOrigin;
+use fineme_domain::oauth::{OAuthSecret, SecretKind};
 use fineme_domain::throttle::{LoginThrottle, retry_after_seconds};
+use uuid::Uuid;
 
 use crate::auth::AuthService;
 use crate::error::{AppError, AppResult};
@@ -37,9 +39,17 @@ pub struct CreatedAccessToken {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessPrincipal {
     pub user: UserId,
-    pub token_id: AccessTokenId,
+    /// Identifiant du jeton personnel ou de l'autorisation OAuth.
+    pub token_id: Uuid,
     pub token_name: String,
     pub scope: TokenScope,
+}
+
+/// Ce qui a authentifié un appel, pour en retenir la dernière utilisation.
+#[derive(Debug, Clone, Copy)]
+enum Credential {
+    Personal(AccessTokenId),
+    OAuth(OAuthGrantId),
 }
 
 impl AuthService {
@@ -142,8 +152,17 @@ impl AuthService {
         origin: &LoginOrigin,
     ) -> AppResult<AccessPrincipal> {
         let now = self.clock.now();
-        let result = self.verify_access_token(presented).await;
-        if matches!(result, Err(AppError::Unauthorized(_))) {
+        let verified = self.verify_access_token(presented).await;
+        let (result, credential) = match verified {
+            Ok((principal, credential)) => (Ok(principal), Some(credential)),
+            Err(error) => (Err(error), None),
+        };
+        // Les secrets de 256 bits ne se devinent pas : le limiteur ne compte ni une requête sans jeton (découverte
+        // OAuth) ni un jeton OAuth bien formé (expiré, à renouveler), car un client hébergé partage ses adresses IP
+        // avec d'autres et doit recevoir le 401.
+        let counted =
+            presented.is_some_and(|value| OAuthSecret::parse(SecretKind::Access, value).is_none());
+        if counted && matches!(result, Err(AppError::Unauthorized(_))) {
             self.mcp_throttle()
                 .check(origin.throttle_key(), now)
                 .map_err(|wait| AppError::TooManyAttempts(retry_after_seconds(wait)))?;
@@ -152,11 +171,19 @@ impl AuthService {
             Ok(principal) => {
                 self.mcp_throttle().record_success(origin.throttle_key());
                 // Métadonnée seulement : un échec d'écriture ne refuse pas un jeton valide.
-                if let Err(error) = self.access_tokens.touch(principal.token_id, now).await {
-                    tracing::warn!("dernière utilisation du jeton non enregistrée : {error}");
+                let touched = match credential {
+                    Some(Credential::Personal(id)) => self.access_tokens.touch(id, now).await,
+                    Some(Credential::OAuth(id)) => self.oauth.repo.touch_grant(id, now).await,
+                    None => Ok(()),
+                };
+                if let Err(error) = touched {
+                    tracing::warn!(
+                        "dernière utilisation de {} non enregistrée : {error}",
+                        principal.token_name
+                    );
                 }
             }
-            Err(AppError::Unauthorized(_)) => {
+            Err(AppError::Unauthorized(_)) if counted => {
                 self.mcp_throttle()
                     .record_failure(origin.throttle_key(), now);
             }
@@ -165,8 +192,23 @@ impl AuthService {
         result
     }
 
-    async fn verify_access_token(&self, presented: Option<&str>) -> AppResult<AccessPrincipal> {
+    async fn verify_access_token(
+        &self,
+        presented: Option<&str>,
+    ) -> AppResult<(AccessPrincipal, Credential)> {
         const REFUSED: AppError = AppError::Unauthorized(INVALID_ACCESS_TOKEN);
+        if let Some(value) = presented.filter(|v| v.starts_with(SecretKind::Access.prefix())) {
+            let grant = self.grant_for_access_token(value).await?.ok_or(REFUSED)?;
+            return Ok((
+                AccessPrincipal {
+                    user: grant.user,
+                    token_id: grant.id.as_uuid(),
+                    token_name: grant.client_name.as_str().to_string(),
+                    scope: grant.scope,
+                },
+                Credential::OAuth(grant.id),
+            ));
+        }
         let secret = presented
             .and_then(AccessTokenSecret::parse)
             .ok_or(REFUSED)?;
@@ -185,12 +227,15 @@ impl AuthService {
         if self.users.find_by_id(token.user).await?.is_none() {
             return Err(REFUSED);
         }
-        Ok(AccessPrincipal {
-            user: token.user,
-            token_id: token.id,
-            token_name: token.name.as_str().to_string(),
-            scope: token.scope,
-        })
+        Ok((
+            AccessPrincipal {
+                user: token.user,
+                token_id: token.id.as_uuid(),
+                token_name: token.name.as_str().to_string(),
+                scope: token.scope,
+            },
+            Credential::Personal(token.id),
+        ))
     }
 
     /// Journalise l'appel d'un tool (sans ses paramètres ni son résultat).
@@ -274,7 +319,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(principal.user, user);
-        assert_eq!(principal.token_id, created.token.id);
+        assert_eq!(principal.token_id, created.token.id.as_uuid());
         let listed = t.app.auth.access_tokens(user).await.unwrap();
         assert_eq!(listed[0].last_used_at, Some(t.clock.now()));
     }
@@ -486,6 +531,23 @@ mod tests {
             .login("a@b.test", PASSWORD, &origin())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_or_well_formed_oauth_tokens_are_never_throttled() {
+        let t = TestApp::empty().await;
+        configured(&t).await;
+        let expired = format!("fm_oat_{}", "a".repeat(43));
+        for _ in 0..10 {
+            for presented in [None, Some(expired.as_str())] {
+                let refused = t
+                    .app
+                    .auth
+                    .authenticate_access_token(presented, &origin())
+                    .await;
+                assert!(matches!(refused, Err(AppError::Unauthorized(_))));
+            }
+        }
     }
 
     #[tokio::test]

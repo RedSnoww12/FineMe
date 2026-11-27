@@ -23,3 +23,7 @@ services:
         sync: false # URL Vercel du front, ex. https://fineme.vercel.app
       - key: MCP_ALLOWED_HOSTS
         sync: false # hôte public de l'API pour le serveur MCP /mcp, ex. fineme-api.onrender.com (défaut : localhost)
+      - key: PUBLIC_API_URL
+        sync: false # connecteur claude.ai : URL publique de l'API, ex. https://fineme-api.onrender.com
+      - key: WEB_URL
+        sync: false # connecteur claude.ai : URL du front, ex. https://fineme.vercel.app (avec PUBLIC_API_URL)

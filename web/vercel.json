@@ -17,6 +17,10 @@
         },
         { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains" }
       ]
+    },
+    {
+      "source": "/oauth/consent",
+      "headers": [{ "key": "Referrer-Policy", "value": "no-referrer" }]
     }
   ]
 }

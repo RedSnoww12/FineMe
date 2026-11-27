@@ -152,7 +152,7 @@ pub struct AccessTokenCreateBody {
 }
 
 #[derive(Deserialize)]
-pub struct AccessTokenRevokeBody {
+pub struct IdentityConfirmationBody {
     pub password: String,
     pub code: Option<String>,
 }

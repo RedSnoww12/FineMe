@@ -7,6 +7,7 @@ use fineme_domain::member::{Member, User, default_color};
 use fineme_domain::throttle::{LoginThrottle, retry_after_seconds};
 
 use crate::error::{AppError, AppResult};
+use crate::oauth::OAuthServer;
 use crate::ports::{
     AccessTokenCrypto, AccessTokenRepository, Clock, Credentials, LoginJournal, McpCallJournal,
     PasswordHasher, SecondFactorRepository, TokenService, TokenSubject, TotpSupport,
@@ -64,6 +65,8 @@ pub struct AuthService {
     pub(crate) mcp_calls: Arc<dyn McpCallJournal>,
     /// Échecs d'authentification sur le serveur MCP (compteur distinct de la connexion).
     pub(crate) mcp_throttle: Mutex<LoginThrottle>,
+    /// Serveur d'autorisation OAuth (connecteur claude.ai).
+    pub(crate) oauth: OAuthServer,
     pub(crate) hasher: Arc<dyn PasswordHasher>,
     pub(crate) tokens: Arc<dyn TokenService>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -143,6 +146,7 @@ impl AuthService {
             },
             password_hash: self.hasher.hash(password).await?,
             session_version: 0,
+            password_version: 0,
         };
         let primary = Member {
             id: MemberId::generate(),
@@ -349,8 +353,8 @@ impl AuthService {
         self.replace_password(credentials.user, new_password).await
     }
 
-    /// Enregistre le nouveau hash et ouvre une session à la nouvelle version : les sessions précédentes et tous
-    /// les jetons d'accès deviennent invalides.
+    /// Enregistre le nouveau hash et ouvre une session à la nouvelle version : les sessions précédentes, tous
+    /// les jetons d'accès et toutes les autorisations OAuth deviennent invalides.
     async fn replace_password(&self, user: User, new_password: &str) -> AppResult<Session> {
         let password_hash = self.hasher.hash(new_password).await?;
         let session_version = self
@@ -362,6 +366,8 @@ impl AuthService {
             user,
             password_hash,
             session_version,
+            // Seule la version de session sert à ouvrir la session.
+            password_version: 0,
         })
     }
 }

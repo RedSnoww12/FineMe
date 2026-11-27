@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import indexHtml from '../../index.html?raw'
 import vercelConfig from '../../vercel.json?raw'
+import viteConfig from '../../vite.config.ts?raw'
 
 type VercelConfig = { headers: { source: string; headers: { key: string; value: string }[] }[] }
 
@@ -37,5 +38,15 @@ describe('en-têtes de sécurité Vercel', () => {
     expect(header('X-Content-Type-Options')).toBe('nosniff')
     expect(header('Referrer-Policy')).toBe('strict-origin-when-cross-origin')
     expect(header('Permissions-Policy')).toContain('camera=()')
+  })
+
+  it('ne transmettent aucune adresse de provenance depuis l’écran de consentement OAuth', () => {
+    const config = JSON.parse(vercelConfig) as VercelConfig
+    const rules = config.headers.filter((rule) => rule.source === '/oauth/consent')
+    expect(rules.flatMap((rule) => rule.headers)).toEqual([{ key: 'Referrer-Policy', value: 'no-referrer' }])
+    // La règle particulière doit suivre la règle générale pour la remplacer.
+    expect(config.headers.at(-1)?.source).toBe('/oauth/consent')
+    // Le service worker servirait sinon la coquille précachée, avec les en-têtes généraux.
+    expect(viteConfig).toMatch(/navigateFallbackDenylist: \[[^\]]*\/\^\\\/oauth\\\/\//)
   })
 })

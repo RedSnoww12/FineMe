@@ -3,11 +3,12 @@
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use fineme_application::ports::{
-    AccountWrite, BenchmarkRepository, BudgetRepository, ConnectionRepository, Credentials,
-    FxRateRepository, GoalRepository, ImportBatch, ImportProfileRepository, ImportRepository,
-    LoginJournal, OperationChange, OperationRepository, PortfolioRepository, PositionUpdate,
-    PricePoint, RepoError, SecondFactorRecord, SecondFactorRepository, SnapshotRepository,
-    TransactionRepository, UserRepository,
+    AccountWrite, AuthorizationCode, BenchmarkRepository, BudgetRepository, CodeUse,
+    ConnectionRepository, Credentials, FxRateRepository, GoalRepository, ImportBatch,
+    ImportProfileRepository, ImportRepository, IssuedPair, LoginJournal, MAX_PENDING_REQUESTS,
+    OAuthRepository, OperationChange, OperationRepository, PendingRequest, PortfolioRepository,
+    PositionUpdate, PricePoint, RepoError, SecondFactorRecord, SecondFactorRepository,
+    SnapshotRepository, TransactionRepository, UserRepository,
 };
 use fineme_domain::access_token::{
     AccessToken, AccessTokenName, McpCall, SecretDigest, TokenScope,
@@ -24,6 +25,10 @@ use fineme_domain::import_profile::{ImportKind, ImportProfile};
 use fineme_domain::loan::{Loan, LoanTerms};
 use fineme_domain::login::{LoginAction, LoginEvent, LoginOrigin};
 use fineme_domain::member::{Member, User};
+use fineme_domain::oauth::{
+    AuthorizationRequest, ClientId, ClientName, ClientState, CodeChallenge, OAuthGrant,
+    ProtectedResource, RedirectUri,
+};
 use fineme_domain::operation::{Amount, Movement, MovementFields, Operation, OperationKind, Trade};
 use fineme_domain::ownership::Ownership;
 use fineme_domain::performance::Benchmark;
@@ -198,6 +203,7 @@ async fn first_user_is_created_once_with_its_primary_member() {
         },
         password_hash: "$argon2id$fictif".into(),
         session_version: 0,
+        password_version: 0,
     };
     assert!(
         db.store
@@ -215,6 +221,7 @@ async fn first_user_is_created_once_with_its_primary_member() {
         },
         password_hash: "x".into(),
         session_version: 0,
+        password_version: 0,
     };
     assert!(
         !db.store
@@ -290,6 +297,7 @@ async fn second_factor_lifecycle_is_atomic_and_refuses_replay() {
         },
         password_hash: "$argon2id$fictif".into(),
         session_version: 0,
+        password_version: 0,
     };
     let user = credentials.user.id;
     db.store
@@ -417,6 +425,7 @@ async fn password_update_replaces_hash_and_bumps_session_version() {
         },
         password_hash: "$argon2id$ancien".into(),
         session_version: 0,
+        password_version: 0,
     };
     db.store
         .create_first(&credentials, &member("Camille", true))
@@ -1788,6 +1797,7 @@ async fn access_tokens_are_found_by_digest_while_active_and_revoked_with_the_pas
         },
         password_hash: "$argon2id$ancien".into(),
         session_version: 0,
+        password_version: 0,
     };
     let user = credentials.user.id;
     db.store
@@ -1872,7 +1882,7 @@ async fn access_tokens_are_found_by_digest_while_active_and_revoked_with_the_pas
 async fn mcp_calls_are_listed_newest_first_and_pruned() {
     use fineme_application::ports::McpCallJournal;
     let db = test_db().await;
-    let token_id = AccessTokenId::generate();
+    let token_id = AccessTokenId::generate().as_uuid();
     for (day, tool, success) in [(1, "get_goals", true), (3, "get_overview", false)] {
         McpCallJournal::record(
             &db.store,
@@ -1904,4 +1914,203 @@ async fn mcp_calls_are_listed_newest_first_and_pruned() {
         McpCallJournal::recent(&db.store, 10).await.unwrap().len(),
         1
     );
+}
+
+// ---------------------------------------------------------------- serveur d'autorisation OAuth
+
+fn oauth_digest(n: u8) -> SecretDigest {
+    SecretDigest::from_bytes(&[n; 32])
+}
+
+fn authorization_request() -> AuthorizationRequest {
+    AuthorizationRequest {
+        client_id: ClientId::parse("https://claude.ai/oauth/client.json").unwrap(),
+        client_name: ClientName::parse("Claude").unwrap(),
+        redirect_uri: RedirectUri::parse("https://claude.ai/api/mcp/auth_callback").unwrap(),
+        code_challenge: CodeChallenge::from_digest(&[3; 32]),
+        state: ClientState::parse("xyz"),
+        scope: TokenScope::Read,
+        resource: ProtectedResource::parse("https://api.example.test/mcp").unwrap(),
+    }
+}
+
+fn oauth_grant(user: UserId, day: u32) -> OAuthGrant {
+    let request = authorization_request();
+    OAuthGrant {
+        id: OAuthGrantId::generate(),
+        user,
+        client_id: request.client_id,
+        client_name: request.client_name,
+        redirect_uri: request.redirect_uri,
+        scope: request.scope,
+        resource: request.resource,
+        password_version: 0,
+        created_at: at(day),
+        last_used_at: None,
+        revoked_at: None,
+    }
+}
+
+fn pair(first: u8) -> IssuedPair {
+    IssuedPair {
+        access: oauth_digest(first),
+        access_expires_at: at(2),
+        refresh: oauth_digest(first + 1),
+        refresh_expires_at: at(20),
+    }
+}
+
+async fn oauth_user(db: &TestDb) -> UserId {
+    let credentials = Credentials {
+        user: User {
+            id: UserId::generate(),
+            email: "a@b.test".into(),
+            name: "A".into(),
+        },
+        password_hash: "hash".into(),
+        session_version: 0,
+        password_version: 0,
+    };
+    assert!(
+        db.store
+            .create_first(&credentials, &member("A", true))
+            .await
+            .unwrap()
+    );
+    credentials.user.id
+}
+
+#[tokio::test]
+async fn oauth_requests_are_single_use_and_bounded() {
+    let db = test_db().await;
+    let pending = |day| PendingRequest {
+        request: authorization_request(),
+        expires_at: at(day),
+    };
+    let repo: &dyn OAuthRepository = &db.store;
+    repo.save_request(&oauth_digest(1), &pending(5), at(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.find_request(&oauth_digest(1)).await.unwrap(),
+        Some(pending(5))
+    );
+    assert!(repo.take_request(&oauth_digest(1)).await.unwrap());
+    assert!(!repo.take_request(&oauth_digest(1)).await.unwrap());
+    assert_eq!(repo.find_request(&oauth_digest(1)).await.unwrap(), None);
+
+    // Les demandes expirées disparaissent à la suivante, et le nombre en attente est borné.
+    repo.save_request(&oauth_digest(2), &pending(2), at(1))
+        .await
+        .unwrap();
+    repo.save_request(&oauth_digest(3), &pending(9), at(3))
+        .await
+        .unwrap();
+    assert_eq!(repo.find_request(&oauth_digest(2)).await.unwrap(), None);
+    for n in 0..MAX_PENDING_REQUESTS {
+        let digest = SecretDigest::from_bytes(&[u8::try_from(n).unwrap() + 100; 32]);
+        repo.save_request(&digest, &pending(9), at(3))
+            .await
+            .unwrap();
+    }
+    assert_eq!(repo.find_request(&oauth_digest(3)).await.unwrap(), None);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM oauth_requests")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(usize::try_from(count).unwrap(), MAX_PENDING_REQUESTS);
+}
+
+#[tokio::test]
+async fn oauth_codes_are_consumed_once_and_replays_name_the_grant() {
+    let db = test_db().await;
+    let user = oauth_user(&db).await;
+    let repo: &dyn OAuthRepository = &db.store;
+    let code = AuthorizationCode {
+        request: authorization_request(),
+        grant_id: OAuthGrantId::generate(),
+        user,
+        password_version: 0,
+        expires_at: at(2),
+    };
+    repo.save_code(&oauth_digest(1), &code).await.unwrap();
+    assert_eq!(
+        repo.consume_code(&oauth_digest(1), at(1)).await.unwrap(),
+        Some(CodeUse::First(Box::new(code.clone())))
+    );
+    assert_eq!(
+        repo.consume_code(&oauth_digest(1), at(1)).await.unwrap(),
+        Some(CodeUse::Replayed(Box::new(code.clone())))
+    );
+    assert_eq!(
+        repo.consume_code(&oauth_digest(9), at(1)).await.unwrap(),
+        None
+    );
+    // Rejoué avant la création : l'autorisation n'est pas créée.
+    let mut grant = oauth_grant(user, 1);
+    grant.id = code.grant_id;
+    assert!(!repo.create_grant(&grant, &pair(10)).await.unwrap());
+    assert!(repo.grants(user).await.unwrap().is_empty());
+    assert_eq!(repo.prune_expired(at(3)).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn oauth_grants_replace_rotate_revoke_and_follow_the_password() {
+    let db = test_db().await;
+    let user = oauth_user(&db).await;
+    let repo: &dyn OAuthRepository = &db.store;
+    let first = oauth_grant(user, 1);
+    assert!(repo.create_grant(&first, &pair(10)).await.unwrap());
+    let second = oauth_grant(user, 3);
+    assert!(repo.create_grant(&second, &pair(20)).await.unwrap());
+    let grants = repo.grants(user).await.unwrap();
+    assert_eq!(grants.len(), 2);
+    assert_eq!(grants[0], second);
+    assert_eq!(grants[1].revoked_at, Some(at(3)));
+
+    let access = repo.find_access(&oauth_digest(20)).await.unwrap().unwrap();
+    assert_eq!(access.grant, second);
+    assert_eq!(access.digest, oauth_digest(20));
+    assert_eq!(access.expires_at, at(2));
+    // Un jeton de renouvellement n'est pas un jeton d'accès, et inversement.
+    assert_eq!(repo.find_access(&oauth_digest(21)).await.unwrap(), None);
+    assert_eq!(repo.find_refresh(&oauth_digest(20)).await.unwrap(), None);
+
+    let old = oauth_digest(21);
+    assert!(!repo.find_refresh(&old).await.unwrap().unwrap().used);
+    assert!(!repo.rotate(&old, first.id, &pair(30)).await.unwrap());
+    assert!(repo.rotate(&old, second.id, &pair(30)).await.unwrap());
+    assert!(repo.find_refresh(&old).await.unwrap().unwrap().used);
+    assert!(!repo.rotate(&old, second.id, &pair(40)).await.unwrap());
+    assert_eq!(repo.find_access(&oauth_digest(40)).await.unwrap(), None);
+
+    repo.touch_grant(second.id, at(4)).await.unwrap();
+    assert_eq!(
+        repo.grants(user).await.unwrap()[0].last_used_at,
+        Some(at(4))
+    );
+    assert!(repo.revoke_grant(second.id, at(5)).await.unwrap());
+    assert!(!repo.revoke_grant(second.id, at(6)).await.unwrap());
+
+    let third = oauth_grant(user, 7);
+    assert!(repo.create_grant(&third, &pair(50)).await.unwrap());
+    db.store
+        .update_password(user, "nouveau", at(8))
+        .await
+        .unwrap();
+    assert_eq!(repo.grants(user).await.unwrap()[0].revoked_at, Some(at(8)));
+    assert!(db.store.owner().await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn consent_is_journaled() {
+    let db = test_db().await;
+    let consent = LoginEvent {
+        at: at(1),
+        action: LoginAction::Oauth,
+        success: true,
+        origin: LoginOrigin::new(Some("192.0.2.10"), None),
+    };
+    db.store.record(&consent).await.unwrap();
+    assert_eq!(db.store.recent(1).await.unwrap(), [consent]);
 }

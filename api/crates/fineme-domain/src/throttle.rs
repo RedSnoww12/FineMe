@@ -51,6 +51,17 @@ impl ThrottlePolicy {
         }
     }
 
+    /// Demandes d'autorisation OAuth par adresse IP : chacune compte (la route est publique, les demandes en
+    /// attente sont bornées et une source ne doit pas pouvoir évincer celles des autres).
+    pub fn authorization_per_ip() -> Self {
+        Self {
+            free_failures: 20,
+            base_delay: Duration::seconds(30),
+            max_delay: Duration::minutes(15),
+            forget_after: Duration::hours(1),
+        }
+    }
+
     /// Délai imposé après `failures` échecs consécutifs (aucun tant que le seuil n'est pas dépassé).
     pub fn delay_after(&self, failures: u32) -> Duration {
         if failures <= self.free_failures {

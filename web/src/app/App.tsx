@@ -7,6 +7,7 @@ import AuthPage from '@/features/auth/pages/AuthPage'
 import { useAuth } from '@/shared/state/auth'
 import { useDiscreet } from '@/shared/state/discreet'
 
+const OAuthConsentPage = lazy(() => import('@/features/auth/pages/OAuthConsentPage'))
 const OverviewPage = lazy(() => import('@/features/overview/pages/OverviewPage'))
 const AnalysisPage = lazy(() => import('@/features/analysis/pages/AnalysisPage'))
 const TimeTravelPage = lazy(() => import('@/features/analysis/pages/TimeTravelPage'))
@@ -50,6 +51,7 @@ export default function App() {
       <Suspense fallback={<div className="p-6"><LoadingBlock /></div>}>
         <Routes>
           <Route path="/connexion" element={<AuthPage />} />
+          <Route path="/oauth/consent" element={<OAuthConsentPage />} />
           <Route element={<Protected />}>
             <Route index element={<OverviewPage />} />
             <Route path="analyse" element={<AnalysisPage />} />
