@@ -106,6 +106,23 @@ Sécurité :
 - les libellés de transactions et les noms importés sont présentés à l'assistant comme des données, jamais comme
   des instructions.
 
+### claude.ai (web et mobile) : connecteur OAuth
+
+claude.ai se branche sur `/mcp` par OAuth, sans jeton à copier : FineMe est son propre serveur d'autorisation
+(section « Connecteur OAuth » de [docs/API.md](docs/API.md)).
+
+1. Sur Render, définir `PUBLIC_API_URL` (URL https de l'API, la même que `VITE_API_URL` du front) et `WEB_URL`
+   (URL du front), en minuscules, sans chemin ni `/` final,
+   ajouter l'hôte de l'API à `MCP_ALLOWED_HOSTS` et vérifier que `CORS_ORIGINS` contient le front.
+2. Réveiller l'API (ouvrir FineMe) : un démarrage à froid dépasse le délai accordé par claude.ai.
+3. Dans claude.ai, *Connecteurs > Ajouter un connecteur personnalisé*, saisir `PUBLIC_API_URL` suivi de `/mcp`
+   (l'adresse affichée dans *Paramètres > Accès IA*).
+4. Sur l'écran FineMe, vérifier l'adresse de retour, saisir le mot de passe (et le code du second facteur) puis
+   *Autoriser*.
+
+La connexion apparaît dans *Paramètres > Accès IA > Connexions OAuth*, où elle se révoque. Changer ou réinitialiser
+le mot de passe la révoque aussi.
+
 ## Rapport hebdomadaire par email
 
 Chaque lundi, le workflow `.github/workflows/weekly-report.yml` lance un agent
