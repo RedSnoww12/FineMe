@@ -30,8 +30,22 @@ const PASSWORD: &str = "mot-de-passe-de-test";
 struct Server {
     router: Router,
     session: String,
-    _metadata: MockServer,
+    pool: sqlx::PgPool,
+    metadata: MockServer,
     _container: ContainerAsync<Postgres>,
+}
+
+async fn router(pool: &sqlx::PgPool, metadata: &MockServer, settings: Settings) -> Router {
+    fineme_server::build_router_with_clients(
+        pool.clone(),
+        "secret-de-test-0123456789abcdef0123",
+        WEB,
+        settings,
+        vec!["api.example.test".into()],
+        Arc::new(HttpClientMetadata::served_by(&metadata.uri()).unwrap()),
+    )
+    .await
+    .unwrap()
 }
 
 fn settings(oauth: bool) -> Settings {
@@ -68,20 +82,12 @@ impl Server {
             })))
             .mount(&metadata)
             .await;
-        let router = fineme_server::build_router_with_clients(
-            pool,
-            "secret-de-test-0123456789abcdef0123",
-            WEB,
-            settings(oauth),
-            vec!["api.example.test".into()],
-            Arc::new(HttpClientMetadata::served_by(&metadata.uri()).unwrap()),
-        )
-        .await
-        .unwrap();
+        let router = router(&pool, &metadata, settings(oauth)).await;
         let mut server = Self {
             router,
             session: String::new(),
-            _metadata: metadata,
+            pool,
+            metadata,
             _container: container,
         };
         let setup = json!({ "email": "alice@exemple.test", "password": PASSWORD, "name": "Alice" });
@@ -154,6 +160,30 @@ impl Server {
             .next()
             .unwrap()
             .to_string()
+    }
+
+    /// Liste les tools de `/mcp` avec ce jeton, ou sans jeton.
+    async fn tools(&self, router: &Router, bearer: Option<&str>) -> (StatusCode, HeaderMap, Value) {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header(header::HOST, "api.example.test")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2025-06-18");
+        if let Some(bearer) = bearer {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        }
+        let message = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+        let response = router
+            .clone()
+            .oneshot(request.body(Body::from(message.to_string())).unwrap())
+            .await
+            .unwrap();
+        let (status, headers) = (response.status(), response.headers().clone());
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, headers, body)
     }
 
     async fn get_anonymous(&self, uri: &str) -> (StatusCode, HeaderMap, Value) {
@@ -371,9 +401,94 @@ async fn without_public_urls_the_connector_does_not_exist() {
     }
     let twice = format!("{}&state=encore", authorize_uri(CALLBACK));
     assert_eq!(server.get_anonymous(&twice).await.0, StatusCode::NOT_FOUND);
+    for uri in [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+    ] {
+        let status = server.get_anonymous(uri).await.0;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    let (status, headers, _) = server.tools(&server.router, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        headers[header::WWW_AUTHENTICATE],
+        "Bearer realm=\"fineme-mcp\""
+    );
     for body in [exchange("x"), "client_secret=s&a=1&a=2".to_string()] {
         assert_eq!(server.form(&body).await.0, StatusCode::NOT_FOUND, "{body}");
     }
     let (status, _, grants) = server.json("GET", "/api/oauth/grants", None).await;
     assert_eq!((status, grants), (StatusCode::OK, json!([])));
+}
+
+#[tokio::test]
+async fn an_unauthenticated_mcp_call_leads_to_the_authorization_server() {
+    let server = Server::start(true).await;
+
+    let (status, headers, _) = server.tools(&server.router, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        headers[header::WWW_AUTHENTICATE],
+        format!(
+            "Bearer realm=\"fineme-mcp\", \
+             resource_metadata=\"{ISSUER}/.well-known/oauth-protected-resource/mcp\", scope=\"read\""
+        )
+    );
+    for uri in [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+    ] {
+        let (status, _, resource) = server.get_anonymous(uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert_eq!(
+            resource,
+            json!({
+                "resource": format!("{ISSUER}/mcp"),
+                "authorization_servers": [ISSUER],
+                "scopes_supported": ["read"],
+                "bearer_methods_supported": ["header"],
+                "resource_name": "FineMe",
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_accepts_an_oauth_token_until_the_password_changes() {
+    let server = Server::start(true).await;
+    let code = server.code().await;
+    let (_, _, tokens) = server.form(&exchange(&code)).await;
+    let access = tokens["access_token"].as_str().unwrap();
+    let body = json!({ "name": "Claude Code", "password": PASSWORD });
+    let (_, _, created) = server.json("POST", "/api/access-tokens", Some(body)).await;
+    let personal = created["secret"].as_str().unwrap();
+
+    for bearer in [access, personal] {
+        let (status, _, body) = server.tools(&server.router, Some(bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!body["result"]["tools"].as_array().unwrap().is_empty());
+    }
+
+    // Le même jeton présenté à un serveur dont la ressource est autre : refusé.
+    let mut elsewhere = settings(true);
+    if let Some(oauth) = elsewhere.oauth.as_mut() {
+        oauth.issuer = PublicUrl::parse("https://autre.example.test").unwrap();
+    }
+    let other = router(&server.pool, &server.metadata, elsewhere).await;
+    let (status, _, _) = server.tools(&other, Some(access)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let change =
+        json!({ "current_password": PASSWORD, "new_password": "autre-mot-de-passe-de-test" });
+    let (status, _, _) = server.json("PUT", "/api/auth/password", Some(change)).await;
+    assert_eq!(status, StatusCode::OK);
+    for bearer in [access, personal] {
+        let (status, _, _) = server.tools(&server.router, Some(bearer)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, _, error) = server
+        .form(&refresh(tokens["refresh_token"].as_str().unwrap()))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"], "invalid_grant");
 }

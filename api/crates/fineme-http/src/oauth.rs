@@ -9,6 +9,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Router};
 use fineme_application::AppError;
 use fineme_application::oauth::{AuthorizeParams, TokenError, TokenRequest};
+use fineme_domain::access_token::TokenScope;
 use fineme_domain::ids::OAuthGrantId;
 use fineme_inbound::contract as output;
 use fineme_inbound::origin::ClientOrigin;
@@ -65,7 +66,7 @@ async fn server_metadata(State(app): State<AppState>) -> JsonResponse {
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
-        "scopes_supported": ["read"],
+        "scopes_supported": [TokenScope::Read.as_str()],
         "client_id_metadata_document_supported": true,
         "authorization_response_iss_parameter_supported": true,
     })))

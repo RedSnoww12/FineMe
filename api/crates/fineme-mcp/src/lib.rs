@@ -2,10 +2,12 @@
 //! consulte le patrimoine par des tools qui appellent les cas d'usage existants. Aucune règle métier ici.
 //!
 //! Transport Streamable HTTP sans session, réponses JSON, sur `/mcp`. Contrôles, dans l'ordre : limiteur des
-//! échecs par IP (429), jeton d'accès (401), hôte autorisé et absence d'en-tête `Origin` (403), corps ≤ 1 Mo.
+//! échecs par IP (429), jeton d'accès personnel ou OAuth (401), hôte autorisé et absence d'en-tête `Origin` (403),
+//! corps ≤ 1 Mo.
 
 mod auth;
 mod error;
+mod metadata;
 mod output;
 mod params;
 mod server;
@@ -37,7 +39,7 @@ pub struct McpSettings {
     pub trusted_proxy_hops: usize,
 }
 
-/// Routeur `/mcp`, à fusionner avec celui de l'API.
+/// Routeur `/mcp` et métadonnées de sa ressource protégée, à fusionner avec celui de l'API.
 pub fn router(app: Arc<App>, settings: McpSettings) -> Router {
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
@@ -53,15 +55,17 @@ pub fn router(app: Arc<App>, settings: McpSettings) -> Router {
         Arc::new(NeverSessionManager::default()),
         config,
     );
-    Router::new()
+    let protected = Router::new()
         .nest_service("/mcp", service)
         .layer(axum::middleware::from_fn_with_state(
-            app,
+            app.clone(),
             auth::require_access_token,
         ))
         .layer(axum::Extension(TrustedProxyHops(
             settings.trusted_proxy_hops,
-        )))
+        )));
+    protected
+        .merge(metadata::router(app))
         .layer(TraceLayer::new_for_http())
         // Le jeton d'accès n'apparaît jamais dans les traces.
         .layer(SetSensitiveRequestHeadersLayer::new([
