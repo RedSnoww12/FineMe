@@ -14,10 +14,10 @@ export type TotpStatus = { enabled: boolean; recovery_codes_remaining: number }
 export type TotpEnrollment = { secret: string; otpauth_uri: string; qr_svg: string }
 export type TotpActivation = AuthResult & { recovery_codes: string[] }
 export type TotpDisableInput = { password: string; code: string }
-/** Tentative de connexion (`login`), seconde étape (`totp`) ou réinitialisation (`reset`) ; `at` en RFC 3339. */
+/** Connexion (`login`), seconde étape (`totp`), réinitialisation (`reset`) ou consentement OAuth ; `at` en RFC 3339. */
 export type LoginEvent = {
   at: string
-  action: 'login' | 'totp' | 'reset'
+  action: 'login' | 'totp' | 'reset' | 'oauth'
   success: boolean
   ip: string | null
   user_agent: string | null
@@ -46,6 +46,17 @@ export type OAuthRequestView = {
   expires_in: number
 }
 export type OAuthRedirect = { redirect_to: string }
+/** Client autorisé par OAuth sur le serveur MCP. */
+export type OAuthGrant = {
+  id: string
+  client_id: string
+  client_name: string
+  redirect_host: string
+  scope: 'read'
+  created_at: string
+  last_used_at: string | null
+  revoked_at: string | null
+}
 /** Appel d'un tool MCP, journalisé sans ses paramètres ni son résultat. */
 export type McpCall = { at: string; token_id: string; token_name: string; tool: string; success: boolean }
 

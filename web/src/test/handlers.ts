@@ -11,6 +11,7 @@ export function mockShell() {
   // Panneau Accès IA (Paramètres) : aucun jeton, aucun appel.
   mockJson('get', '/api/access-tokens', [])
   mockJson('get', '/api/access-tokens/calls', [])
+  mockJson('get', '/api/oauth/grants', [])
 }
 
 /** Requêtes de la vue d'ensemble, sans historique. */

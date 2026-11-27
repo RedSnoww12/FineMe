@@ -48,6 +48,7 @@ import type {
   McpCall,
   Member,
   MemberInput,
+  OAuthGrant,
   OAuthRedirect,
   OAuthRequestView,
   Operation,
@@ -119,6 +120,9 @@ export const api = {
   revokeAccessToken: (id: string, body: AccessTokenRevokeInput) =>
     request<AccessToken>(`/api/access-tokens/${id}/revoke`, { method: 'POST', body }),
   mcpCalls: (limit?: number) => request<McpCall[]>('/api/access-tokens/calls', { query: { limit } }),
+  oauthGrants: () => request<OAuthGrant[]>('/api/oauth/grants'),
+  revokeOAuthGrant: (id: string, body: AccessTokenRevokeInput) =>
+    request<OAuthGrant>(`/api/oauth/grants/${id}/revoke`, { method: 'POST', body }),
 
   // Membres
   members: () => request<Member[]>('/api/members'),

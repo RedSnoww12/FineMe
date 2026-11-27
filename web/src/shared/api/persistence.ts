@@ -17,7 +17,7 @@ export const PERSISTED_CACHE_BUSTER = 'v1'
 /**
  * Ce qui entre dans la copie locale : jamais une mutation (ses variables peuvent porter un mot de passe ou un code de
  * second facteur, même en attente hors ligne), ni une requête marquée `meta: { persist: false }` (jetons d'accès IA,
- * journal des appels : inutiles hors ligne).
+ * connexions OAuth, journal des appels, demande de consentement : inutiles hors ligne).
  */
 export const PERSISTED_DEHYDRATE_OPTIONS = {
   shouldDehydrateMutation: () => false,

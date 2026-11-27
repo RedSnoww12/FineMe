@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/shared/api/endpoints'
 import { useApiMutation } from '@/shared/api/queries'
 import type { AuthResult, Bundle, ImportResult, MemberInput } from '@/shared/api/types'
@@ -28,5 +28,13 @@ export function useLoginHistory() {
 }
 
 export function useChangePassword(onSuccess: (result: AuthResult) => void) {
-  return useMutation({ mutationFn: api.changePassword, onSuccess })
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: api.changePassword,
+    onSuccess: (result) => {
+      onSuccess(result)
+      // Le serveur vient de révoquer tous les jetons et toutes les connexions OAuth.
+      for (const queryKey of [['access-tokens'], ['oauth-grants']]) void queryClient.invalidateQueries({ queryKey })
+    },
+  })
 }

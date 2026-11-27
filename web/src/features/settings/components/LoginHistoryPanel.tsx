@@ -3,7 +3,7 @@ import { describeAttempt, describeUserAgent, failureCount } from '../lib/loginHi
 import { dateTime } from '@/shared/lib/format'
 import { Badge, ErrorState, LoadingBlock, Panel } from '@/shared/ui/ui'
 
-/** Dernières tentatives de connexion et de réinitialisation (journal de l'API). */
+/** Dernières tentatives de connexion, de réinitialisation et d'autorisation OAuth (journal de l'API). */
 export function LoginHistoryPanel() {
   const history = useLoginHistory()
 
