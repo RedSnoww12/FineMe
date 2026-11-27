@@ -287,3 +287,22 @@ fn grant_is_usable_only_when_active_at_the_current_password_version() {
     };
     assert!(!revoked.is_active() && !revoked.is_usable(3));
 }
+
+#[test]
+fn client_hosts_are_exact_domain_names() {
+    let host = ClientHost::parse("Claude.AI").unwrap();
+    assert_eq!(host.as_str(), "claude.ai");
+    assert!(host.serves(&ClientId::parse("https://claude.ai/client.json").unwrap()));
+    assert!(!host.serves(&ClientId::parse("https://sub.claude.ai/client.json").unwrap()));
+    for refused in [
+        "",
+        "*.claude.ai",
+        "https://claude.ai",
+        "claude.ai/chemin",
+        "claude.ai:443",
+        "claude.ai.",
+        "127.0.0.1",
+    ] {
+        assert_eq!(ClientHost::parse(refused), None, "{refused}");
+    }
+}

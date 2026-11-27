@@ -11,6 +11,7 @@ use fineme_application::commands::{
 use fineme_application::daily::DailyReport;
 use fineme_application::goals::GoalView;
 use fineme_application::history::{HistoryReview, ReviewedPoint};
+use fineme_application::oauth::ConsentView;
 use fineme_application::operations::{ImportReport, OperationView};
 use fineme_application::overview::{HistoryComparison, SnapshotDate};
 use fineme_application::performance::{BenchmarkInfo, BenchmarkResult, PerformanceView};
@@ -26,6 +27,7 @@ use fineme_domain::import_profile::ImportProfile;
 use fineme_domain::loan::ScheduleRow;
 use fineme_domain::login::LoginEvent;
 use fineme_domain::member::{Member, User};
+use fineme_domain::oauth::OAuthGrant;
 use fineme_domain::operation::YearSummary;
 use fineme_domain::performance::PerformanceReport;
 use fineme_domain::portfolio::{
@@ -66,6 +68,28 @@ pub fn access_token(token: &AccessToken) -> Value {
 
 pub fn created_access_token(created: &CreatedAccessToken) -> Value {
     json!({ "token": access_token(&created.token), "secret": created.secret.as_str() })
+}
+
+pub fn oauth_grant(grant: &OAuthGrant) -> Value {
+    json!({
+        "id": grant.id.as_uuid(),
+        "client_id": grant.client_id.as_str(),
+        "client_name": grant.client_name.as_str(),
+        "redirect_host": grant.redirect_uri.host(),
+        "scope": grant.scope.as_str(),
+        "created_at": grant.created_at,
+        "last_used_at": grant.last_used_at,
+        "revoked_at": grant.revoked_at,
+    })
+}
+
+pub fn consent_view(view: &ConsentView) -> Value {
+    json!({
+        "client_name": view.client_name,
+        "redirect_host": view.redirect_host,
+        "scope": view.scope.as_str(),
+        "expires_in": view.expires_in,
+    })
 }
 
 pub fn mcp_call(call: &McpCall) -> Value {
@@ -841,7 +865,12 @@ pub fn performance(view: &PerformanceView) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use fineme_application::bundle::{BundleAccount, BundleMember, BundleOwner};
+    use fineme_domain::access_token::TokenScope;
+    use fineme_domain::ids::{OAuthGrantId, UserId};
+    use fineme_domain::oauth::{ClientId, ClientName, ProtectedResource, PublicUrl, RedirectUri};
+    use uuid::Uuid;
 
     #[test]
     fn compact_drops_nulls_from_absent_and_cleared_fields() {
@@ -913,5 +942,53 @@ mod tests {
             assert!(!allocation_label(*kind).is_empty());
         }
         assert_eq!(allocation_label(AccountKind::RealEstate), "Immobilier");
+    }
+
+    #[test]
+    fn oauth_json_matches_the_contract_shape() {
+        let id = Uuid::from_u128(7);
+        let at = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let issuer = PublicUrl::parse("https://api.example.test").unwrap();
+        let grant = OAuthGrant {
+            id: OAuthGrantId::from_uuid(id),
+            user: UserId::from_uuid(Uuid::from_u128(1)),
+            client_id: ClientId::parse("https://claude.ai/client.json").unwrap(),
+            client_name: ClientName::parse("Claude").unwrap(),
+            redirect_uri: RedirectUri::parse("https://claude.ai/callback").unwrap(),
+            scope: TokenScope::Read,
+            resource: ProtectedResource::mcp(&issuer),
+            password_version: 3,
+            created_at: at,
+            last_used_at: None,
+            revoked_at: Some(at),
+        };
+        assert_eq!(
+            oauth_grant(&grant),
+            json!({
+                "id": id,
+                "client_id": "https://claude.ai/client.json",
+                "client_name": "Claude",
+                "redirect_host": "claude.ai",
+                "scope": "read",
+                "created_at": "2026-01-02T03:04:05Z",
+                "last_used_at": null,
+                "revoked_at": "2026-01-02T03:04:05Z",
+            })
+        );
+        let view = ConsentView {
+            client_name: "Claude".into(),
+            redirect_host: "claude.ai".into(),
+            scope: TokenScope::Read,
+            expires_in: 540,
+        };
+        assert_eq!(
+            consent_view(&view),
+            json!({
+                "client_name": "Claude",
+                "redirect_host": "claude.ai",
+                "scope": "read",
+                "expires_in": 540,
+            })
+        );
     }
 }

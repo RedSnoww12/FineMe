@@ -21,7 +21,7 @@ Application personnelle de suivi de patrimoine (un seul login, plusieurs membres
 `MCP_ALLOWED_HOSTS` (optionnel : hôtes acceptés dans l'en-tête `Host` de `/mcp`, séparés par des virgules, par ex.
 `fineme-api.onrender.com` ; défaut `localhost,127.0.0.1,::1`, protection contre le DNS rebinding).
 `PUBLIC_API_URL` et `WEB_URL` (optionnels, ensemble : URL publiques de l'API et du front, sans chemin ni `/` final,
-`https` sauf `localhost` ; absents = connecteur OAuth désactivé, ses routes répondent 404 ; un seul des deux, ou une
+`https` sauf `localhost` ; absents = connecteur OAuth désactivé, ses routes répondent 404 — sauf `/api/oauth/grants*`, qui permet toujours de voir et révoquer les autorisations existantes ; un seul des deux, ou une
 URL invalide, et le serveur refuse de démarrer), `OAUTH_CLIENT_HOSTS` (optionnel : hôtes dont les documents de
 métadonnées client OAuth sont acceptés, séparés par des virgules ; défaut `claude.ai`).
 Les migrations sqlx s'exécutent au démarrage.
@@ -183,6 +183,9 @@ Hors `/api` (aucune authentification, aucun cookie) :
 | GET | `/oauth/authorize` | Demande d'autorisation (ci-dessous) |
 | POST | `/oauth/token` | Échange et renouvellement (ci-dessous) |
 
+Sur `authorize` et `token`, un paramètre vide vaut absent, et aucun paramètre ne peut être présent deux fois
+(`authorize` : 400 sans redirection ; `token` : `invalid_request`).
+
 **`GET /oauth/authorize`** : `response_type=code`, `client_id`, `redirect_uri`, `code_challenge`,
 `code_challenge_method=S256`, `state` (facultatif), `scope` (facultatif, seul `read`), `resource` (facultatif ; sinon
 la ressource de ce serveur).
@@ -209,6 +212,7 @@ passe et le second facteur, pas par la session web.
 | POST | `/api/oauth/requests/:id/approve` | `{ password, code? }` | `OAuthRedirect` : `redirect_uri?code=…&state=…&iss=…` — (403) mot de passe faux, ou code absent ou incorrect alors que le second facteur est activé ; (404) comme ci-dessus ; (409) déjà 10 autorisations actives |
 | POST | `/api/oauth/requests/:id/deny` | – | `OAuthRedirect` : `redirect_uri?error=access_denied&state=…&iss=…` — (404) |
 
+Corps limités à 16 Ko ; les réponses d'`approve` et `deny` portent `Cache-Control: no-store`.
 `approve` partage le limiteur de la connexion et chaque tentative qui atteint la vérification est journalisée
 (`LoginEvent.action = "oauth"`). Une demande ne sert qu'une fois (acceptée ou refusée).
 
@@ -219,7 +223,10 @@ passe et le second facteur, pas par la session web.
 
 Réponse 200 `{ access_token, token_type: "Bearer", expires_in: 3600, refresh_token, scope: "read" }`. Erreurs RFC 6749
 `{ "error": "invalid_request" | "invalid_grant" | "invalid_client" | "unsupported_grant_type" | "invalid_scope" |
-"invalid_target", "error_description" }` en 400 ; 429 + `Retry-After` après des refus répétés d'un secret **mal
+"invalid_target", "error_description" }` en 400. Seuls les clients publics sont acceptés : un `client_secret` ou une
+`client_assertion` donne `invalid_client` (400), un en-tête `Authorization` donne `invalid_client` en **401** avec
+`WWW-Authenticate: Basic realm="FineMe"`. Formulaire de plus de 16 Ko : `invalid_request`. Connecteur désactivé (404)
+et limite atteinte (429) portent `error: "invalid_request"`, une panne du serveur `error: "server_error"`. Puis 429 + `Retry-After` après des refus répétés d'un secret **mal
 formé** (par IP, compteur distinct ; un code ou un jeton bien formé, valide ou non, n'est jamais bloqué). Toutes les réponses portent `Cache-Control: no-store`.
 
 **Jetons** : opaques, 32 octets aléatoires, seule l'empreinte SHA-256 est conservée.

@@ -6,7 +6,7 @@ use fineme_domain::access_token::{SECRET_BYTES, SecretDigest, TokenScope};
 use fineme_domain::ids::{OAuthGrantId, UserId};
 use fineme_domain::login::{LoginAction, LoginOrigin};
 use fineme_domain::oauth::{
-    self, AuthorizationRequest, ClientId, ClientState, CodeChallenge, CodeVerifier,
+    self, AuthorizationRequest, ClientHost, ClientId, ClientState, CodeChallenge, CodeVerifier,
     MAX_ACTIVE_GRANTS, OAuthGrant, OAuthSecret, ProtectedResource, PublicUrl, RedirectUri,
     SecretKind, append_query,
 };
@@ -40,7 +40,7 @@ pub struct OAuthSettings {
     /// URL publique du front, qui porte l'écran de consentement.
     pub web: PublicUrl,
     /// Hôtes dont les documents de métadonnées client sont acceptés.
-    pub client_hosts: Vec<String>,
+    pub client_hosts: Vec<ClientHost>,
 }
 
 impl OAuthSettings {
@@ -220,12 +220,7 @@ impl AuthService {
             .client_id
             .as_deref()
             .and_then(ClientId::parse)
-            .filter(|id| {
-                settings
-                    .client_hosts
-                    .iter()
-                    .any(|host| host.eq_ignore_ascii_case(id.host()))
-            })
+            .filter(|id| settings.client_hosts.iter().any(|host| host.serves(id)))
             .ok_or_else(|| AppError::invalid(UNKNOWN_CLIENT))?;
         let redirect_uri = params
             .redirect_uri

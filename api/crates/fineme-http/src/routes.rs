@@ -20,14 +20,15 @@ use crate::AppState;
 use crate::auth::{AuthUser, bearer_token, require_auth};
 use crate::error::{ApiError, ApiResult, Json, Path, Query};
 use crate::input::{
-    AccessTokenCreateBody, AccessTokenRevokeBody, AccountBody, AlertPatchBody, AlertRuleBody,
-    AlertsQuery, BenchmarkBody, BudgetQuery, BudgetTargetBody, BundleBody, CompareQuery,
-    ConnectionBody, DateRangeQuery, GoalBody, HistoryCorrectionBody, HistoryQuery,
-    HistoryResetBody, HistoryReviewQuery, HoldingBody, HoldingsBulkBody, ImportProfileBody,
-    LimitQuery, LoginBody, LoginTotpBody, MemberBody, OperationBody, OperationsBulkBody, PageQuery,
+    AccessTokenCreateBody, AccountBody, AlertPatchBody, AlertRuleBody, AlertsQuery, BenchmarkBody,
+    BudgetQuery, BudgetTargetBody, BundleBody, CompareQuery, ConnectionBody, DateRangeQuery,
+    GoalBody, HistoryCorrectionBody, HistoryQuery, HistoryResetBody, HistoryReviewQuery,
+    HoldingBody, HoldingsBulkBody, IdentityConfirmationBody, ImportProfileBody, LimitQuery,
+    LoginBody, LoginTotpBody, MemberBody, OperationBody, OperationsBulkBody, PageQuery,
     PasswordChangeBody, PasswordResetBody, PerformanceQuery, RangeQuery, SetupBody, TotpCodeBody,
     TotpDisableBody, TransactionPatchBody, TransactionsBulkBody, ValuationBody, ViewQuery,
 };
+use crate::oauth;
 use fineme_inbound::contract as output;
 use fineme_inbound::origin::ClientOrigin;
 
@@ -51,7 +52,8 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/auth/login/totp", post(auth_login_totp))
         .route("/auth/reset", post(auth_reset))
         // Protégée par CRON_SECRET et non par le JWT : appelée par un planificateur, sans session.
-        .route("/jobs/daily", post(jobs_daily));
+        .route("/jobs/daily", post(jobs_daily))
+        .merge(oauth::consent());
 
     let protected = Router::new()
         .route("/auth/me", get(auth_me))
@@ -161,6 +163,7 @@ pub fn api(app: AppState) -> Router<AppState> {
         .route("/connections/{id}", delete(connections_delete))
         .route("/export", get(export))
         .route("/import", post(import))
+        .merge(oauth::grants())
         .route_layer(middleware::from_fn_with_state(app, require_auth));
 
     public.merge(protected)
@@ -349,7 +352,7 @@ async fn access_tokens_revoke(
     Extension(AuthUser(user)): Extension<AuthUser>,
     ClientOrigin(origin): ClientOrigin,
     Path(id): Path<Uuid>,
-    Json(body): Json<AccessTokenRevokeBody>,
+    Json(body): Json<IdentityConfirmationBody>,
 ) -> JsonResponse {
     let token = app
         .auth

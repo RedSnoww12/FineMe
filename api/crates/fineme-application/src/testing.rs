@@ -1610,7 +1610,9 @@ pub fn oauth_settings() -> OAuthSettings {
     OAuthSettings {
         issuer: PublicUrl::parse("https://api.example.test").unwrap(),
         web: PublicUrl::parse("https://web.example.test").unwrap(),
-        client_hosts: vec!["claude.ai".to_string()],
+        client_hosts: fineme_domain::oauth::ClientHost::parse("claude.ai")
+            .into_iter()
+            .collect(),
     }
 }
 

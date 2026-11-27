@@ -214,6 +214,28 @@ impl ClientId {
     }
 }
 
+/// Hôte de `OAUTH_CLIENT_HOSTS` : un nom de domaine exact, sans joker, schéma ni port, en minuscules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientHost(String);
+
+impl ClientHost {
+    pub fn parse(value: &str) -> Option<Self> {
+        let host = value.to_ascii_lowercase();
+        ClientId::parse(&format!("https://{host}/client"))
+            .filter(|id| id.host() == host)
+            .map(|_| Self(host))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Vrai si le document de ce client est servi par cet hôte exactement (jamais un sous-domaine).
+    pub fn serves(&self, client: &ClientId) -> bool {
+        self.0 == client.host()
+    }
+}
+
 /// URI de redirection : `https`, ou `http` sur la machine locale. Comparée à l'identique.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedirectUri {
