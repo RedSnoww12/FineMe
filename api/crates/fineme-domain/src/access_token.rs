@@ -22,7 +22,7 @@ const HINT_CHARS: usize = 4;
 const BASE64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// Encodage base64url sans remplissage (RFC 4648 §5).
-fn base64url(bytes: &[u8]) -> String {
+pub(crate) fn base64url(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b = [
@@ -38,6 +38,13 @@ fn base64url(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Vrai si tous les caractères appartiennent à l'alphabet base64url.
+pub(crate) fn is_base64url(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Portée d'un jeton : uniquement la lecture.
@@ -100,10 +107,7 @@ impl AccessTokenSecret {
     /// Secret reçu d'un client : `None` si la forme ne peut pas être celle d'un jeton d'accès.
     pub fn parse(value: &str) -> Option<Self> {
         let encoded = value.strip_prefix(SECRET_PREFIX)?;
-        let well_formed = encoded.len() == ENCODED_LEN
-            && encoded
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        let well_formed = encoded.len() == ENCODED_LEN && is_base64url(encoded);
         well_formed.then(|| Self(value.to_string()))
     }
 

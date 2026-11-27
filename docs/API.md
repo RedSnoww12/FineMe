@@ -186,7 +186,9 @@ Hors `/api` (aucune authentification, aucun cookie) :
 **`GET /oauth/authorize`** : `response_type=code`, `client_id`, `redirect_uri`, `code_challenge`,
 `code_challenge_method=S256`, `state` (facultatif), `scope` (facultatif, seul `read`), `resource` (facultatif ; sinon
 la ressource de ce serveur).
-- `client_id` : URL `https` avec un chemin, sans fragment ni identifiants, dont l'hôte est dans `OAUTH_CLIENT_HOSTS`.
+- `client_id` : URL `https` d'un nom de domaine (pas d'adresse IP) présent dans `OAUTH_CLIENT_HOSTS`, sans port,
+  identifiants, requête ni fragment, avec un chemin simple (lettres, chiffres, `. _ ~ - /` ; ni `%`, ni `//`, ni `..`).
+  La `redirect_uri` doit être sur **le même hôte** que le `client_id`, ou sur la machine locale.
   Le document est lu sans suivre de redirection, en moins de 5 s et 16 Ko ; son `client_id` doit être exactement
   cette URL, `redirect_uris` doit contenir **exactement** la `redirect_uri` demandée, et
   `token_endpoint_auth_method` doit être `none` (ou absent).

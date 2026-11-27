@@ -16,6 +16,7 @@ pub mod import_profile;
 pub mod loan;
 pub mod login;
 pub mod member;
+pub mod oauth;
 pub mod operation;
 pub mod ownership;
 pub mod performance;
