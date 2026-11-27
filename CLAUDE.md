@@ -119,12 +119,18 @@ Un bug corrigé = un test au niveau le plus bas capable de le reproduire.
 - Données financières réelles : rien de personnel dans Git (ni fichiers de seed, ni captures, ni fixtures). Les fixtures de test sont fictives.
 - Secrets uniquement via variables d'environnement (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `CRON_SECRET`,
   `EODHD_API_KEY`) ; `.env.example` sans valeur réelle.
-- Mots de passe hashés en argon2id ; toute route hors `/api/health` et `/api/auth/{status,setup,login,reset}` exige le JWT,
+- Mots de passe hashés en argon2id ; toute route hors `/api/health`, `/api/auth/{status,setup,login,reset}` et `/api/oauth/requests/*` exige le JWT,
   sauf `/api/jobs/daily` (tâche planifiée) qui exige `CRON_SECRET` et refuse le JWT.
 - Serveur MCP `/mcp` (lecture seule) : exige un **jeton d'accès personnel** (`fm_pat_`, 256 bits, stocké en
-  SHA-256, créé et révoqué avec le mot de passe, plus un code TOTP ou de secours si le second facteur est activé) et
-  refuse le JWT ; ce jeton est refusé sur tout `/api/*`. Changer ou réinitialiser le mot de passe révoque tous les
-  jetons ; activer ou désactiver le TOTP ne les révoque pas. Hôtes acceptés : `MCP_ALLOWED_HOSTS` ; tout
+  SHA-256, créé et révoqué avec le mot de passe, plus un code TOTP ou de secours si le second facteur est activé) ou un
+  **jeton d'accès OAuth** (`fm_oat_`, 1 h, audience = `/mcp`) et refuse le JWT ; ces jetons sont refusés sur tout
+  `/api/*`. Changer ou réinitialiser le mot de passe révoque tous les jetons et autorisations OAuth ; activer ou
+  désactiver le TOTP ne les révoque pas.
+- Connecteur OAuth (claude.ai) : FineMe est son serveur d'autorisation. Client identifié par Client ID Metadata
+  Document sur les seuls hôtes de `OAUTH_CLIENT_HOSTS` (pas d'enregistrement dynamique, pas de SSRF), PKCE S256,
+  consentement confirmé par mot de passe et second facteur, redirect_uri en égalité exacte, jetons opaques stockés
+  en SHA-256, jeton de renouvellement tournant dont le rejeu révoque l'autorisation. Désactivé sans `PUBLIC_API_URL`
+  et `WEB_URL`. Hôtes acceptés : `MCP_ALLOWED_HOSTS` ; tout
   en-tête `Origin` est refusé. Aucun tool n'écrit (ni instantané, ni cours) ; chaque appel est journalisé.
 - Le JWT porte la version de session de l'utilisateur : changer ou réinitialiser le mot de passe l'incrémente et
   invalide tous les jetons antérieurs. La réinitialisation exige `RECOVERY_TOKEN` (code de secours côté serveur).
