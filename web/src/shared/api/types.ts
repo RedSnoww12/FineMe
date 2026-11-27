@@ -37,6 +37,15 @@ export type AccessToken = {
 export type CreatedAccessToken = { token: AccessToken; secret: string }
 export type AccessTokenInput = { name: string; password: string; code?: string }
 export type AccessTokenRevokeInput = { password: string; code?: string }
+/** Demande d'autorisation d'un client OAuth, telle que la montre l'écran de consentement. */
+export type OAuthRequestView = {
+  client_name: string
+  redirect_host: string
+  scope: 'read'
+  /** Secondes restantes. */
+  expires_in: number
+}
+export type OAuthRedirect = { redirect_to: string }
 /** Appel d'un tool MCP, journalisé sans ses paramètres ni son résultat. */
 export type McpCall = { at: string; token_id: string; token_name: string; tool: string; success: boolean }
 

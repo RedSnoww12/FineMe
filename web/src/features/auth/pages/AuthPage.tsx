@@ -1,40 +1,14 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router'
+import { ThrottledSubmit } from '../components/ThrottledSubmit'
 import { useAuthStatus, useLogin, useLoginTotp, useResetPassword, useSetup } from '../hooks/useAuthApi'
-import { useCooldown } from '../hooks/useCooldown'
-import { formatWait } from '../lib/cooldown'
 import { cleanCode, isTotpChallenge } from '../lib/loginStep'
-import { retryAfterOf } from '@/shared/api/client'
 import { MIN_PASSWORD_LENGTH, newPasswordErrors } from '@/shared/lib/password'
 import { Logo } from '@/shared/ui/Icon'
 import { Button, ErrorState, FormError, Skeleton, TextField } from '@/shared/ui/ui'
 import { useAuth } from '@/shared/state/auth'
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-/** Erreur et bouton d'envoi ; après un 429, le bouton reste désactivé et affiche le temps d'attente. */
-function ThrottledSubmit({
-  error,
-  submittedAt,
-  busy,
-  children,
-}: {
-  error: unknown
-  submittedAt: number
-  busy: boolean
-  children: string
-}) {
-  const wait = useCooldown(error, submittedAt)
-  const throttledAndOver = retryAfterOf(error) !== null && wait === 0
-  return (
-    <>
-      {throttledAndOver ? null : <FormError error={error} />}
-      <Button type="submit" variant="primary" busy={busy} disabled={wait > 0}>
-        {wait > 0 ? `Réessayer dans ${formatWait(wait)}` : children}
-      </Button>
-    </>
-  )
-}
 
 function SetupForm({ tokenRequired }: { tokenRequired: boolean }) {
   const { signIn } = useAuth()

@@ -48,6 +48,8 @@ import type {
   McpCall,
   Member,
   MemberInput,
+  OAuthRedirect,
+  OAuthRequestView,
   Operation,
   OperationImportInput,
   OperationInput,
@@ -104,6 +106,12 @@ export const api = {
   totpRecoveryCodes: (code: string) =>
     request<{ recovery_codes: string[] }>('/api/auth/totp/recovery-codes', { method: 'POST', body: { code } }),
 
+  // Consentement OAuth (routes publiques)
+  oauthRequest: (id: string) => request<OAuthRequestView>(`/api/oauth/requests/${encodeURIComponent(id)}`),
+  approveOAuthRequest: (id: string, body: { password: string; code?: string }) =>
+    request<OAuthRedirect>(`/api/oauth/requests/${encodeURIComponent(id)}/approve`, { method: 'POST', body }),
+  denyOAuthRequest: (id: string) =>
+    request<OAuthRedirect>(`/api/oauth/requests/${encodeURIComponent(id)}/deny`, { method: 'POST' }),
   // Accès IA (jetons d'accès du serveur MCP)
   accessTokens: () => request<AccessToken[]>('/api/access-tokens'),
   createAccessToken: (body: AccessTokenInput) =>
